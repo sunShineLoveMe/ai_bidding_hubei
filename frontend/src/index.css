@@ -1,0 +1,191 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  min-width: 1280px;
+  overflow: hidden;
+  background: #f5f7fb;
+  color: #111a33;
+}
+
+button,
+input,
+textarea {
+  letter-spacing: 0;
+}
+
+.home-shell {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  gap: 16px;
+  padding-bottom: 88px;
+}
+
+.module-shell {
+  display: grid;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: 96px 96px 1fr;
+  gap: 14px;
+}
+
+.panel-card {
+  min-height: 0;
+  overflow: visible;
+  border: 1px solid #e6ebf5;
+  border-radius: 16px;
+  background: #fff;
+  padding: 14px;
+  box-shadow: 0 6px 18px rgba(23, 42, 88, 0.06);
+}
+
+.panel-title {
+  margin: 0 0 12px;
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1.2;
+  color: #111a33;
+}
+
+.compact-table .ant-table-thead > tr > th {
+  padding: 8px 10px;
+  background: #f8faff;
+  color: #7a8598;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.compact-table .ant-table-tbody > tr > td {
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.compact-table .ant-table {
+  line-height: 1.25;
+}
+
+.compact-uploader .ant-upload-drag {
+  border-color: #9ab7ff;
+  background: #f7faff;
+}
+
+.compact-uploader .ant-upload {
+  padding: 8px;
+}
+
+.compact-steps .ant-steps-item {
+  padding-bottom: 4px;
+}
+
+.compact-steps .ant-steps-item-title {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.compact-steps .ant-steps-item-description {
+  padding-top: 3px;
+}
+
+.result-box {
+  height: 360px;
+  min-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid #e6ebf5;
+  border-radius: 12px;
+  background: #fbfcff;
+  padding: 12px;
+  color: #35425d;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.ant-btn {
+  font-weight: 700;
+}
+
+.compact-form .ant-form-item {
+  margin-bottom: 12px;
+}
+
+.settings-tabs {
+  height: 100%;
+  min-height: 0;
+}
+
+.settings-tabs .ant-tabs-content-holder,
+.settings-tabs .ant-tabs-content,
+.settings-tabs .ant-tabs-tabpane {
+  height: 100%;
+  min-height: 0;
+}
+
+.settings-grid {
+  display: grid;
+  height: calc(100% - 4px);
+  min-height: 0;
+  grid-template-columns: minmax(420px, 0.9fr) minmax(340px, 1fr);
+  gap: 18px;
+  overflow: hidden;
+}
+
+.settings-note {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  overflow: hidden;
+  border-radius: 16px;
+  background: #f8faff;
+  padding: 20px;
+  color: #475569;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.7;
+}
+
+.settings-note strong {
+  color: #111a33;
+  font-size: 18px;
+}
+
+.settings-note p {
+  margin: 0;
+}
+
+@media (max-height: 860px) {
+  .home-shell {
+    gap: 14px;
+  }
+
+  .panel-card {
+    padding: 12px;
+  }
+
+  .panel-title {
+    margin-bottom: 8px;
+    font-size: 16px;
+  }
+
+  .module-shell {
+    gap: 10px;
+    grid-template-rows: 86px 86px 1fr;
+  }
+
+  .compact-form .ant-form-item {
+    margin-bottom: 8px;
+  }
+}

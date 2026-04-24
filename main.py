@@ -70,10 +70,23 @@ def output_file(filename):
     print(f"输出文件访问: {file_path}, Exists: {os.path.exists(file_path)}")
     return send_from_directory(app.config['GENERATED_FOLDER'], filename)
 
+@app.route('/assets/<path:filename>')
+def asset_file(filename):
+    dist_assets = os.path.join('frontend', 'dist', 'assets')
+    dist_asset_path = os.path.join(dist_assets, filename)
+    if os.path.exists(dist_asset_path):
+        return send_from_directory(dist_assets, filename)
+    return send_from_directory('assets', filename)
+
 @app.route('/')
 @app.route('/bidding')
 def bidding_workbench():
-    return send_from_directory('.', 'bidding_workbench.html')
+    dist_index = os.path.join('frontend', 'dist', 'index.html')
+    if os.path.exists(dist_index):
+        return send_from_directory(os.path.join('frontend', 'dist'), 'index.html')
+    return jsonify({
+        'error': '前端 Vite 构建产物不存在。请进入 frontend 执行 npm install && npm run build，或开发时运行 npm run dev。'
+    }), 503
 
 @app.route('/api/health')
 def health():
