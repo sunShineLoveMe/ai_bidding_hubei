@@ -6,6 +6,16 @@ import hashlib
 from pathlib import Path
 
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
+
+
+class EmptyDocumentContentError(Exception):
+    """Raised when a document parser extracts no usable text.
+
+    This is common for scanned/image-only PDFs and should be routed to OCR
+    instead of treated as a fatal upload error.
+    """
+
+
 # 初始化阿里云百炼客户端
 def init_ali_client():
     """初始化阿里云百炼OpenAI兼容客户端"""
@@ -123,7 +133,7 @@ def file_to_chroma(file_path, collection=None):
     # 长文本分片
     chunks = split_text(content)
     if not chunks:
-        raise Exception("文件内容为空或无法分割")
+        raise EmptyDocumentContentError("文件内容为空或无法分割，可能是扫描版 PDF，需要 OCR/MinerU 解析")
     
     # 批量生成向量
     embeddings = get_embeddings(ali_client, chunks)

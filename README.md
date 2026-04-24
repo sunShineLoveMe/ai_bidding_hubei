@@ -345,6 +345,7 @@ http://<服务器地址>:3012/bidding
 * 已实现固定 Header、固定左侧菜单、固定 Footer；主页中间内容区支持滚动，保证信息完整展示且不折叠遮挡。
 * 已实现首页 Banner、智能标书入口、基础工具、最近任务、知识库状态和 AI 助手浮窗。
 * 已将上传、AI 预分析、章节格式提取、章节设计、Word 生成流程接入现有 Flask API。
+* 已清理首页最近任务、知识库状态和 AI 助手示例对话中的 mock 数据，真实任务会在上传招标文件后写入当前会话状态。
 * 已完成 `npm install` 和 `npm run build`，生成 `frontend/dist/` 构建产物。
 
 ### 管理模块页面
@@ -355,6 +356,7 @@ http://<服务器地址>:3012/bidding
 * 已实现 **系统设置** 页面：模型配置、存储路径、文档与模板、备份恢复四类配置页签。
 * 已接入前端路由：`/knowledge`、`/qualification`、`/products`、`/settings`。
 * 四个模块均复用固定 Header、固定左侧菜单、固定 Footer，并采用一屏化布局避免页面级滚动。
+* 已清理企业知识库、企业资信库、企业产品库中的演示文件和演示统计，默认展示空状态，等待真实数据接入。
 
 ### 后端托管调整
 
@@ -373,6 +375,8 @@ http://<服务器地址>:3012/bidding
 * 已新增 `db_supabase.py`：封装招标项目创建、招标文件上传到 `tender-files`、写入 `bid_projects` 和 `bid_files`。
 * 已改造 `/api/bidding/upload`：保留本地文件、SQLite、ChromaDB 旧流程，其中 ChromaDB 向量化改为后台线程执行；接口同步写入 Supabase，并在响应中返回 `projectId`、`fileId`、`supabaseSynced`。
 * 已完成 Supabase 写入烟测：临时文件成功上传 Storage，成功写入 `bid_projects` / `bid_files`，并完成测试数据清理。
+* 已处理 Supabase Storage object key 限制：Storage 路径使用 UUID + ASCII 扩展名，中文原始文件名保存在 `bid_files.file_name`。
+* 已处理扫描版/图片型 PDF 的空文本场景：ChromaDB 后台向量化遇到空文本时不再输出错误堆栈，改为 warning，并将 Supabase `bid_files.parse_status` 标记为 `ocr_required`，等待后续 MinerU/OCR 解析。
 
 本地 Docker 部署 OnlyOffice 时，建议 `.env` 保持以下配置：
 

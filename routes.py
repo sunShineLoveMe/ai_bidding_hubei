@@ -16,14 +16,14 @@ import codecs
 import PyPDF2
 from qwen_client import call_dashscope_api, generate_bid_section
 from md_to_word import convert_md_to_word
-from db_supabase import sync_uploaded_tender_to_supabase
+from db_supabase import sync_uploaded_tender_to_supabase, update_bid_file_parse_status
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import shutil
 from datetime import timedelta
 
 # 操作向量数据库的函数
-from file_to_chroma import file_to_chroma, query_chroma
+from file_to_chroma import EmptyDocumentContentError, file_to_chroma, query_chroma
 # 创建蓝图
 bp = Blueprint('bidding', __name__)
 
@@ -132,11 +132,25 @@ def merge_sections(output_dir, tender_name, sections):
             logging.error(f"保存合并文件时出错: {e}")
             return None    
 
-def vectorize_file_in_background(file_path):
+def vectorize_file_in_background(file_path, supabase_file_id=None):
     try:
         file_to_chroma(file_path)
+        if supabase_file_id:
+            update_bid_file_parse_status(supabase_file_id, "indexed")
+    except EmptyDocumentContentError as e:
+        logging.warning("文件待 OCR/MinerU 解析，跳过 Chroma 向量化: %s, reason=%s", file_path, e)
+        if supabase_file_id:
+            try:
+                update_bid_file_parse_status(supabase_file_id, "ocr_required")
+            except Exception:
+                logging.exception("更新 Supabase parse_status=ocr_required 失败: %s", supabase_file_id)
     except Exception:
         logging.exception("企业知识库向量化处理失败: %s", file_path)
+        if supabase_file_id:
+            try:
+                update_bid_file_parse_status(supabase_file_id, "index_failed")
+            except Exception:
+                logging.exception("更新 Supabase parse_status=index_failed 失败: %s", supabase_file_id)
 
 @bp.route('/upload', methods=['POST'])
 def upload_bidding():
@@ -171,7 +185,8 @@ def upload_bidding():
             logging.exception("Supabase 招标文件同步失败: %s", file_path)
 
         # 保持现有向量化能力，但放到后台执行，避免上传接口被 embedding 网络调用阻塞。
-        threading.Thread(target=vectorize_file_in_background, args=(file_path,), daemon=True).start()
+        supabase_file_id = supabase_sync.get('file', {}).get('id') if supabase_sync else None
+        threading.Thread(target=vectorize_file_in_background, args=(file_path, supabase_file_id), daemon=True).start()
 
         # 生成 document_key 并写入 DB
         document_key = str(uuid.uuid4())
