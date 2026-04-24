@@ -1,4 +1,4 @@
-import { Button, Progress, Space, Table, Tag, Upload } from 'antd';
+import { Button, Empty, Progress, Space, Table, Tag, Upload } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { BookOpen, Database, FileText, RefreshCw, UploadCloud } from 'lucide-react';
 import { useState } from 'react';
@@ -17,22 +17,16 @@ interface KnowledgeFile {
 }
 
 const categories = [
-  { name: '全部资料', count: 128 },
-  { name: '企业介绍', count: 12 },
-  { name: '历史标书', count: 38 },
-  { name: '项目案例', count: 24 },
-  { name: '标准话术', count: 18 },
-  { name: '行业资料', count: 28 },
-  { name: '其他资料', count: 8 },
+  { name: '全部资料', count: 0 },
+  { name: '企业介绍', count: 0 },
+  { name: '历史标书', count: 0 },
+  { name: '项目案例', count: 0 },
+  { name: '标准话术', count: 0 },
+  { name: '行业资料', count: 0 },
+  { name: '其他资料', count: 0 },
 ];
 
-const files: KnowledgeFile[] = [
-  { id: 'k1', name: '清江峡能企业能力介绍.docx', category: '企业介绍', type: 'Word', chunks: 18, status: '已索引', updatedAt: '2026-04-22 10:30' },
-  { id: 'k2', name: '三峡供应链历史投标技术响应.md', category: '历史标书', type: 'Markdown', chunks: 42, status: '已索引', updatedAt: '2026-04-21 16:18' },
-  { id: 'k3', name: '水电装备交付保障案例.pdf', category: '项目案例', type: 'PDF', chunks: 31, status: '解析中', updatedAt: '2026-04-20 09:42' },
-  { id: 'k4', name: '质量管理体系标准话术.txt', category: '标准话术', type: 'TXT', chunks: 12, status: '已索引', updatedAt: '2026-04-19 14:05' },
-  { id: 'k5', name: '水利水电设备采购规范摘录.pdf', category: '行业资料', type: 'PDF', chunks: 35, status: '待解析', updatedAt: '2026-04-18 11:20' },
-];
+const files: KnowledgeFile[] = [];
 
 const statusColor: Record<KnowledgeFile['status'], string> = {
   已索引: 'green',
@@ -79,24 +73,32 @@ export function KnowledgeBasePage(): JSX.Element {
       />
       <MetricCards
         items={[
-          { title: '资料总数', value: 128, desc: '已纳入知识库', icon: BookOpen, colorClass: 'bg-blue-50 text-blue-600' },
-          { title: '已索引文件', value: 112, desc: '可用于检索生成', icon: Database, colorClass: 'bg-emerald-50 text-emerald-600' },
-          { title: '文本分片', value: 2840, desc: 'ChromaDB chunks', icon: FileText, colorClass: 'bg-violet-50 text-violet-600' },
-          { title: '索引完成度', value: '87%', desc: '待解析 16 份', icon: RefreshCw, colorClass: 'bg-orange-50 text-orange-500' },
+          { title: '资料总数', value: 0, desc: '等待上传资料', icon: BookOpen, colorClass: 'bg-blue-50 text-blue-600' },
+          { title: '已索引文件', value: 0, desc: '暂无可检索文件', icon: Database, colorClass: 'bg-emerald-50 text-emerald-600' },
+          { title: '文本分片', value: 0, desc: '等待解析入库', icon: FileText, colorClass: 'bg-violet-50 text-violet-600' },
+          { title: '索引完成度', value: '0%', desc: '暂无解析任务', icon: RefreshCw, colorClass: 'bg-orange-50 text-orange-500' },
         ]}
       />
       <div className="grid min-h-0 grid-cols-[260px_1fr_310px] gap-4">
         <CategoryList title="资料分类" items={categories} activeName={activeCategory} onChange={setActiveCategory} />
         <section className="panel-card h-full">
           <h2 className="panel-title">文件列表</h2>
-          <Table rowKey="id" size="small" pagination={false} columns={columns} dataSource={dataSource} className="compact-table" />
+          <Table
+            rowKey="id"
+            size="small"
+            pagination={false}
+            columns={columns}
+            dataSource={dataSource}
+            className="compact-table"
+            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无知识库资料，请上传真实企业资料" /> }}
+          />
         </section>
         <section className="panel-card h-full">
           <h2 className="panel-title">索引策略</h2>
           <div className="space-y-4 text-sm font-semibold text-slate-600">
             <div>
-              <div className="mb-2 flex justify-between"><span>知识库索引完成度</span><span>87%</span></div>
-              <Progress percent={87} showInfo={false} />
+              <div className="mb-2 flex justify-between"><span>知识库索引完成度</span><span>0%</span></div>
+              <Progress percent={0} showInfo={false} />
             </div>
             <div className="rounded-xl bg-slate-50 p-3 leading-6">
               当前采用本地 ChromaDB 持久化存储，上传文件会抽取文本、自动分片、生成 embedding，并写入 `document_embeddings` 集合。

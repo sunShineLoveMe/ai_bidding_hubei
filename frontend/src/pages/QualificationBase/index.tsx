@@ -1,4 +1,4 @@
-import { Button, DatePicker, Form, Input, Select, Space, Table, Tag, Upload } from 'antd';
+import { Button, DatePicker, Empty, Form, Input, Select, Space, Table, Tag, Upload } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { AlertTriangle, BadgeCheck, CalendarClock, FileBadge, UploadCloud } from 'lucide-react';
 import { useState } from 'react';
@@ -17,22 +17,16 @@ interface QualificationFile {
 }
 
 const categories = [
-  { name: '全部资信', count: 46 },
-  { name: '基础证照', count: 8 },
-  { name: '资质证书', count: 12 },
-  { name: '人员证书', count: 9 },
-  { name: '财务资料', count: 6 },
-  { name: '项目业绩', count: 7 },
-  { name: '授权模板', count: 4 },
+  { name: '全部资信', count: 0 },
+  { name: '基础证照', count: 0 },
+  { name: '资质证书', count: 0 },
+  { name: '人员证书', count: 0 },
+  { name: '财务资料', count: 0 },
+  { name: '项目业绩', count: 0 },
+  { name: '授权模板', count: 0 },
 ];
 
-const files: QualificationFile[] = [
-  { id: 'q1', name: '营业执照副本扫描件.pdf', category: '基础证照', issuer: '市场监督管理局', certNo: '91422800MA****', expireAt: '长期', status: '有效' },
-  { id: 'q2', name: 'ISO9001质量管理体系证书.pdf', category: '资质证书', issuer: '认证机构', certNo: 'QMS-2026-018', expireAt: '2027-08-18', status: '有效' },
-  { id: 'q3', name: '安全生产责任人员证书.pdf', category: '人员证书', issuer: '主管部门', certNo: 'AQ-2025-329', expireAt: '2026-06-30', status: '临期' },
-  { id: 'q4', name: '近三年财务审计报告.pdf', category: '财务资料', issuer: '会计师事务所', certNo: 'FIN-2025-03', expireAt: '2026-12-31', status: '有效' },
-  { id: 'q5', name: '水电装备供货业绩证明.pdf', category: '项目业绩', issuer: '项目业主', certNo: 'PERF-2024-11', expireAt: '待核验', status: '待核验' },
-];
+const files: QualificationFile[] = [];
 
 const statusColor: Record<QualificationFile['status'], string> = {
   有效: 'green',
@@ -76,17 +70,25 @@ export function QualificationBasePage(): JSX.Element {
       />
       <MetricCards
         items={[
-          { title: '资信文件数', value: 46, desc: '已归档材料', icon: FileBadge, colorClass: 'bg-blue-50 text-blue-600' },
-          { title: '有效证照', value: 38, desc: '可直接用于投标', icon: BadgeCheck, colorClass: 'bg-emerald-50 text-emerald-600' },
-          { title: '临期提醒', value: 5, desc: '90 天内到期', icon: CalendarClock, colorClass: 'bg-orange-50 text-orange-500' },
-          { title: '待核验资料', value: 3, desc: '需人工确认', icon: AlertTriangle, colorClass: 'bg-red-50 text-red-500' },
+          { title: '资信文件数', value: 0, desc: '等待上传材料', icon: FileBadge, colorClass: 'bg-blue-50 text-blue-600' },
+          { title: '有效证照', value: 0, desc: '暂无可用证照', icon: BadgeCheck, colorClass: 'bg-emerald-50 text-emerald-600' },
+          { title: '临期提醒', value: 0, desc: '暂无到期提醒', icon: CalendarClock, colorClass: 'bg-orange-50 text-orange-500' },
+          { title: '待核验资料', value: 0, desc: '暂无待核验资料', icon: AlertTriangle, colorClass: 'bg-red-50 text-red-500' },
         ]}
       />
       <div className="grid min-h-0 grid-cols-[250px_1fr_340px] gap-4">
         <CategoryList title="资信分类" items={categories} activeName={activeCategory} onChange={setActiveCategory} />
         <section className="panel-card h-full">
           <h2 className="panel-title">资信文件列表</h2>
-          <Table rowKey="id" size="small" pagination={false} columns={columns} dataSource={dataSource} className="compact-table" />
+          <Table
+            rowKey="id"
+            size="small"
+            pagination={false}
+            columns={columns}
+            dataSource={dataSource}
+            className="compact-table"
+            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无资信文件，请上传真实证照材料" /> }}
+          />
         </section>
         <section className="panel-card h-full">
           <h2 className="panel-title">证照信息维护</h2>

@@ -1,4 +1,4 @@
-import { Button, Table, Tag } from 'antd';
+import { Button, Empty, Table, Tag } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useBidProjectStore } from '../../stores/bidProjectStore';
 import type { RecentTask } from '../../types/bid';
@@ -45,6 +45,7 @@ export function RecentTasks(): JSX.Element {
         columns={columns}
         dataSource={recentTasks}
         className="compact-table"
+        locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无真实任务，上传招标文件后会显示在这里" /> }}
       />
     </section>
   );

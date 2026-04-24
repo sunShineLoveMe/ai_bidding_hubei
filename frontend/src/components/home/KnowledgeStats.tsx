@@ -1,10 +1,10 @@
 import { BookOpen, Box, Clock3, ShieldCheck } from 'lucide-react';
 
 const stats = [
-  { title: '企业知识库文件数', value: 128, desc: '文档、模板、制度等资料', icon: BookOpen, color: 'bg-blue-50 text-blue-600' },
-  { title: '企业资信库文件数', value: 46, desc: '资质证书、荣誉、业绩等', icon: ShieldCheck, color: 'bg-emerald-50 text-emerald-600' },
-  { title: '企业产品库资料数', value: 32, desc: '产品介绍、参数、案例等', icon: Box, color: 'bg-orange-50 text-orange-500' },
-  { title: '历史任务数', value: 18, desc: '已完成的标书任务总数', icon: Clock3, color: 'bg-violet-50 text-violet-600' },
+  { title: '企业知识库文件数', value: 0, desc: '等待真实资料入库', icon: BookOpen, color: 'bg-blue-50 text-blue-600' },
+  { title: '企业资信库文件数', value: 0, desc: '等待上传资信文件', icon: ShieldCheck, color: 'bg-emerald-50 text-emerald-600' },
+  { title: '企业产品库资料数', value: 0, desc: '等待维护产品资料', icon: Box, color: 'bg-orange-50 text-orange-500' },
+  { title: '历史任务数', value: 0, desc: '上传后自动记录', icon: Clock3, color: 'bg-violet-50 text-violet-600' },
 ] as const;
 
 export function KnowledgeStats(): JSX.Element {

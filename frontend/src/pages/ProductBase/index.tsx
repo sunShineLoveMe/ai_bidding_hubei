@@ -1,4 +1,4 @@
-import { Button, Form, Input, Select, Space, Table, Tag, Upload } from 'antd';
+import { Button, Empty, Form, Input, Select, Space, Table, Tag, Upload } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { Box, Cpu, FileStack, Tags, UploadCloud } from 'lucide-react';
 import { useState } from 'react';
@@ -17,22 +17,16 @@ interface ProductRecord {
 }
 
 const categories = [
-  { name: '全部产品', count: 32 },
-  { name: '水轮机叶片', count: 6 },
-  { name: '专用螺母', count: 8 },
-  { name: '紧固件', count: 7 },
-  { name: '金属结构件', count: 5 },
-  { name: '设备配套加工', count: 4 },
-  { name: '现场服务', count: 2 },
+  { name: '全部产品', count: 0 },
+  { name: '水轮机叶片', count: 0 },
+  { name: '专用螺母', count: 0 },
+  { name: '紧固件', count: 0 },
+  { name: '金属结构件', count: 0 },
+  { name: '设备配套加工', count: 0 },
+  { name: '现场服务', count: 0 },
 ];
 
-const products: ProductRecord[] = [
-  { id: 'p1', name: '水轮机叶片精密加工件', type: '水轮机叶片', version: 'V2.1', scenario: '水电站检修与复建', tags: ['精密制造', '动平衡', '耐磨'], docs: 8 },
-  { id: 'p2', name: '高强度专用螺母组件', type: '专用螺母', version: 'V1.8', scenario: '水利机电设备安装', tags: ['高强度', '防松', '可追溯'], docs: 6 },
-  { id: 'p3', name: '水电装备紧固件套件', type: '紧固件', version: 'V3.0', scenario: '设备供货与维保', tags: ['标准化', '备品备件'], docs: 5 },
-  { id: 'p4', name: '金属结构件加工服务', type: '金属结构件', version: '定制', scenario: 'PC/EPC 项目', tags: ['焊接', '检测', '交付'], docs: 7 },
-  { id: 'p5', name: '现场安装配合与维保服务', type: '现场服务', version: 'S1', scenario: '售后与驻场服务', tags: ['响应时效', '驻场', '闭环'], docs: 4 },
-];
+const products: ProductRecord[] = [];
 
 export function ProductBasePage(): JSX.Element {
   const [activeCategory, setActiveCategory] = useState('全部产品');
@@ -82,17 +76,25 @@ export function ProductBasePage(): JSX.Element {
       />
       <MetricCards
         items={[
-          { title: '产品资料数', value: 32, desc: '产品与服务条目', icon: Box, colorClass: 'bg-blue-50 text-blue-600' },
-          { title: '能力标签', value: 86, desc: '用于章节匹配', icon: Tags, colorClass: 'bg-emerald-50 text-emerald-600' },
-          { title: '技术参数表', value: 18, desc: '可引用参数', icon: Cpu, colorClass: 'bg-violet-50 text-violet-600' },
-          { title: '案例附件', value: 52, desc: '图纸/手册/业绩', icon: FileStack, colorClass: 'bg-orange-50 text-orange-500' },
+          { title: '产品资料数', value: 0, desc: '等待维护产品', icon: Box, colorClass: 'bg-blue-50 text-blue-600' },
+          { title: '能力标签', value: 0, desc: '暂无标签', icon: Tags, colorClass: 'bg-emerald-50 text-emerald-600' },
+          { title: '技术参数表', value: 0, desc: '暂无参数资料', icon: Cpu, colorClass: 'bg-violet-50 text-violet-600' },
+          { title: '案例附件', value: 0, desc: '暂无附件', icon: FileStack, colorClass: 'bg-orange-50 text-orange-500' },
         ]}
       />
       <div className="grid min-h-0 grid-cols-[250px_1fr_350px] gap-4">
         <CategoryList title="产品分类" items={categories} activeName={activeCategory} onChange={setActiveCategory} />
         <section className="panel-card h-full">
           <h2 className="panel-title">产品与服务列表</h2>
-          <Table rowKey="id" size="small" pagination={false} columns={columns} dataSource={dataSource} className="compact-table" />
+          <Table
+            rowKey="id"
+            size="small"
+            pagination={false}
+            columns={columns}
+            dataSource={dataSource}
+            className="compact-table"
+            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无产品资料，请维护真实产品信息" /> }}
+          />
         </section>
         <section className="panel-card h-full">
           <h2 className="panel-title">产品能力维护</h2>
