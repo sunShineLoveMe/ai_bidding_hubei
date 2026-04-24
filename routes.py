@@ -16,6 +16,7 @@ import codecs
 import PyPDF2
 from qwen_client import call_dashscope_api, generate_bid_section
 from md_to_word import convert_md_to_word
+from db_supabase import sync_uploaded_tender_to_supabase
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import shutil
@@ -131,6 +132,12 @@ def merge_sections(output_dir, tender_name, sections):
             logging.error(f"保存合并文件时出错: {e}")
             return None    
 
+def vectorize_file_in_background(file_path):
+    try:
+        file_to_chroma(file_path)
+    except Exception:
+        logging.exception("企业知识库向量化处理失败: %s", file_path)
+
 @bp.route('/upload', methods=['POST'])
 def upload_bidding():
     """上传招标文件 —— 仅保存文件并写入 DB，不生成 OnlyOffice 配置"""
@@ -154,11 +161,17 @@ def upload_bidding():
         # 保存文件到 uploads 目录
         file.save(file_path)
 
-        # 保持现有的向量化流程（同步或可改为异步）
+        # 同步到 Supabase 在线项目库与私有 Storage。失败不阻断本地 MVP 主流程。
+        supabase_sync = None
+        supabase_sync_error = None
         try:
-            file_to_chroma(file_path)
-        except Exception:
-            logging.exception("企业知识库向量化处理失败: %s", file_path)
+            supabase_sync = sync_uploaded_tender_to_supabase(file_path, original_filename)
+        except Exception as e:
+            supabase_sync_error = str(e)
+            logging.exception("Supabase 招标文件同步失败: %s", file_path)
+
+        # 保持现有向量化能力，但放到后台执行，避免上传接口被 embedding 网络调用阻塞。
+        threading.Thread(target=vectorize_file_in_background, args=(file_path,), daemon=True).start()
 
         # 生成 document_key 并写入 DB
         document_key = str(uuid.uuid4())
@@ -187,7 +200,11 @@ def upload_bidding():
         return jsonify({
             'message': '招标文件已上传并纳入企业知识库处理流程。',
             'biddingId': bidding_id,
-            'originalFilename': original_filename
+            'originalFilename': original_filename,
+            'projectId': supabase_sync.get('project', {}).get('id') if supabase_sync else None,
+            'fileId': supabase_sync.get('file', {}).get('id') if supabase_sync else None,
+            'supabaseSynced': supabase_sync is not None,
+            'supabaseSyncError': supabase_sync_error
         }), 201
 
     except Exception as e:

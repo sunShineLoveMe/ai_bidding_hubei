@@ -21,8 +21,10 @@
 * **前端资源管理:** `frontend/public/assets/` 与 Vite 构建资源，生产环境由 Flask `/assets/<filename>` 路由托管
 * **在线文档编辑前端集成:** 现阶段 Word 生成和下载已接入；OnlyOffice 在线编辑配置仍由后端生成，后续放入 React 编辑器页
 * **大语言模型:** 通义千问 (Qwen)
-* **向量数据库:** ChromaDB (本地化运行)
-* **关系型数据库:** SQLite
+* **在线数据库:** Supabase PostgreSQL，作为后续招标解析、文件元数据、结构化结果、任务记录的主数据库
+* **向量能力:** Supabase PostgreSQL + pgvector；当前 ChromaDB 仍作为本地向量库兼容保留
+* **对象存储:** Supabase Storage，用于招标文件、生成 Word、知识库文件、资信文件和产品资料
+* **本地兼容数据库:** SQLite，现有 MVP 接口仍保留，后续逐步迁移到 Supabase
 * **文档处理:** `python-docx` / Markdown 解析库
 
 ### 前端技术框架说明
@@ -172,6 +174,141 @@ ONLYOFFICE_JWT_SECRET=fsdftertrt34768586sfhjsdhfjhhjfsuhaiubue
 # 宿主机与 Docker 容器间的通信地址配置
 BACKEND_URL_FOR_DOCKER=host.docker.internal:3012
 APP_HOST=<服务器地址>:3012
+
+# Supabase 在线数据库与对象存储配置
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_ANON_KEY=your_supabase_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
+SUPABASE_DB_URL=postgresql://...
+
+SUPABASE_STORAGE_TENDER_BUCKET=tender-files
+SUPABASE_STORAGE_GENERATED_BUCKET=generated-docx
+SUPABASE_STORAGE_KNOWLEDGE_BUCKET=knowledge-files
+SUPABASE_STORAGE_QUALIFICATION_BUCKET=qualification-files
+SUPABASE_STORAGE_PRODUCT_BUCKET=product-files
+```
+
+安全要求：
+
+* `SUPABASE_SERVICE_ROLE_KEY` 只能在后端使用，禁止暴露给前端。
+* `.env` 不得提交到 Git。
+* 招标文件、资信文件、报价文件等敏感资料对应的 Storage bucket 应保持 private。
+
+## 🗄️ Supabase 数据库设计
+
+当前在线 Supabase 已完成连接测试，以下 Storage bucket 和数据库表均可访问：
+
+```text
+Storage buckets:
+├── tender-files
+├── generated-docx
+├── knowledge-files
+├── qualification-files
+└── product-files
+
+Core tables:
+├── bid_projects
+├── bid_files
+├── bid_analysis
+├── bid_requirements
+├── bid_scoring_items
+├── bid_risks
+├── bid_chapter_suggestions
+├── knowledge_documents
+├── document_chunks
+└── generation_records
+```
+
+### 表关系概览
+
+```mermaid
+erDiagram
+    BID_PROJECTS ||--o{ BID_FILES : owns
+    BID_PROJECTS ||--o| BID_ANALYSIS : has
+    BID_PROJECTS ||--o{ BID_REQUIREMENTS : extracts
+    BID_PROJECTS ||--o{ BID_SCORING_ITEMS : extracts
+    BID_PROJECTS ||--o{ BID_RISKS : detects
+    BID_PROJECTS ||--o{ BID_CHAPTER_SUGGESTIONS : suggests
+    BID_PROJECTS ||--o{ DOCUMENT_CHUNKS : indexes
+    BID_PROJECTS ||--o{ GENERATION_RECORDS : generates
+    KNOWLEDGE_DOCUMENTS ||--o{ DOCUMENT_CHUNKS : splits
+
+    BID_PROJECTS {
+        uuid id PK
+        text project_name
+        text tender_unit
+        text project_type
+        text status
+        timestamptz created_at
+    }
+
+    BID_FILES {
+        uuid id PK
+        uuid project_id FK
+        text file_name
+        text bucket
+        text object_path
+        text parse_status
+    }
+
+    BID_ANALYSIS {
+        uuid id PK
+        uuid project_id FK
+        jsonb project_meta
+        jsonb qualification_requirements
+        jsonb document_checklist
+        jsonb scoring_items
+        jsonb risk_items
+        jsonb chapter_suggestions
+    }
+
+    DOCUMENT_CHUNKS {
+        uuid id PK
+        uuid document_id FK
+        uuid project_id FK
+        int chunk_index
+        text content
+        vector embedding
+    }
+```
+
+### 核心表含义
+
+| 表名 | 作用 | 主要关系 |
+| --- | --- | --- |
+| `bid_projects` | 标书/招标项目主表，记录项目名称、招标单位、项目类型、状态等。 | 一条项目记录关联多个文件、解析结果、风险项、评分项和生成记录。 |
+| `bid_files` | 招标文件元数据表，记录文件名、类型、Storage bucket、object path、hash、解析状态等。 | 多条文件记录归属于一个 `bid_projects`。 |
+| `bid_analysis` | 招标文件综合解析结果表，保存项目概况、资格条件、材料清单、评分项、风险项、章节建议等 JSONB 汇总。 | 通常一个项目对应一条综合解析记录。 |
+| `bid_requirements` | 招标要求明细表，用于拆解资格、技术、商务、交付、售后等要求。 | 多条要求明细归属于一个项目，并可回溯原文章节、页码和片段。 |
+| `bid_scoring_items` | 评分项明细表，记录评分分类、评分点、分值、响应建议、建议章节。 | 多条评分项归属于一个项目，是后续评分覆盖检查的基础。 |
+| `bid_risks` | 废标项、强制项、风险项表，记录风险级别、风险类型、原文依据和处理动作。 | 多条风险项归属于一个项目，是投标校核和风险提示的基础。 |
+| `bid_chapter_suggestions` | 标书章节建议表，把招标要求、评分项、风险项映射到建议章节。 | 多条章节建议归属于一个项目，是后续目录生成的输入。 |
+| `knowledge_documents` | 企业知识库文档主表，记录企业资料、历史标书、行业资料等文档元数据。 | 一份知识文档可拆成多条 `document_chunks`。 |
+| `document_chunks` | 文档分片与向量表，保存文本 chunk、页码、章节、metadata 和 pgvector embedding。 | 可关联企业知识文档，也可关联招标项目文件。 |
+| `generation_records` | AI 生成记录表，记录生成类型、输入 JSON、输出路径、Markdown、生成状态。 | 多条生成记录归属于一个项目，用于留痕和追溯。 |
+
+### Storage bucket 含义
+
+| Bucket | 用途 | 建议权限 |
+| --- | --- | --- |
+| `tender-files` | 原始招标文件、补遗文件、答疑文件。 | private |
+| `generated-docx` | AI 生成的 Word、Markdown、导出归档文件。 | private |
+| `knowledge-files` | 企业知识库资料、历史标书、行业资料。 | private |
+| `qualification-files` | 营业执照、资质证书、人员证书、财务资料、授权模板。 | private |
+| `product-files` | 产品手册、技术参数、图纸、案例材料。 | private |
+
+### 数据流向
+
+```text
+上传招标文件
+→ Supabase Storage: tender-files
+→ bid_projects / bid_files
+→ 文档解析与 OCR / MinerU
+→ bid_analysis / bid_requirements / bid_scoring_items / bid_risks
+→ document_chunks + pgvector embedding
+→ bid_chapter_suggestions
+→ generation_records
+→ Supabase Storage: generated-docx
 ```
 
 ### 4. 启动后端服务
@@ -205,7 +342,7 @@ http://<服务器地址>:3012/bidding
 * 已新增 `frontend/` Vite + React 18 + TypeScript 工程。
 * 已接入 Ant Design 5、Tailwind CSS、React Router、TanStack Query、Zustand、TipTap、lucide-react。
 * 已将首页按组件拆分为 `HeroBanner`、`SmartBidCard`、`BasicTools`、`RecentTasks`、`KnowledgeStats`、`BidWorkflow`、`AIAssistantWidget`。
-* 已实现固定 Header、固定左侧菜单、固定 Footer，中间工作区采用一屏化网格布局并避免页面级滚动。
+* 已实现固定 Header、固定左侧菜单、固定 Footer；主页中间内容区支持滚动，保证信息完整展示且不折叠遮挡。
 * 已实现首页 Banner、智能标书入口、基础工具、最近任务、知识库状态和 AI 助手浮窗。
 * 已将上传、AI 预分析、章节格式提取、章节设计、Word 生成流程接入现有 Flask API。
 * 已完成 `npm install` 和 `npm run build`，生成 `frontend/dist/` 构建产物。
@@ -224,6 +361,18 @@ http://<服务器地址>:3012/bidding
 * `main.py` 已调整为优先托管 `frontend/dist/index.html`。
 * `/assets/<filename>` 已支持优先读取 Vite 构建资源，再回退到后端 `assets/` 目录。
 * 保留原有 `/api/users/*`、`/api/bidding/*`、`/api/outputs/*` 接口不变。
+
+### Supabase 在线数据库
+
+* 已确定 Supabase PostgreSQL + Supabase Storage 作为下一阶段在线数据库与对象存储方案。
+* 已完成 Python `supabase` 包连接测试。
+* 已验证 Storage buckets 可访问：`tender-files`、`generated-docx`、`knowledge-files`、`qualification-files`、`product-files`。
+* 已验证核心数据表可查询：`bid_projects`、`bid_files`、`bid_analysis`、`bid_requirements`、`bid_scoring_items`、`bid_risks`、`bid_chapter_suggestions`、`knowledge_documents`、`document_chunks`、`generation_records`。
+* 已在 README 中补充 Supabase 表关系、表含义、Storage bucket 含义和数据流向。
+* 已新增 `supabase_client.py`：统一读取 Supabase 环境变量、初始化后端 client、封装私有 Storage 文件上传。
+* 已新增 `db_supabase.py`：封装招标项目创建、招标文件上传到 `tender-files`、写入 `bid_projects` 和 `bid_files`。
+* 已改造 `/api/bidding/upload`：保留本地文件、SQLite、ChromaDB 旧流程，其中 ChromaDB 向量化改为后台线程执行；接口同步写入 Supabase，并在响应中返回 `projectId`、`fileId`、`supabaseSynced`。
+* 已完成 Supabase 写入烟测：临时文件成功上传 Storage，成功写入 `bid_projects` / `bid_files`，并完成测试数据清理。
 
 本地 Docker 部署 OnlyOffice 时，建议 `.env` 保持以下配置：
 
