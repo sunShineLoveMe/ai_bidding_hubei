@@ -16,6 +16,7 @@
 * **前端路由:** React Router
 * **前端服务端状态:** TanStack Query
 * **前端全局状态:** Zustand
+* **前端请求体验:** Axios 拦截器 + Zustand 全局请求计数 + Ant Design Spin，所有通过统一 API 客户端发起的请求都会展示全局 Loading
 * **前端编辑器预留:** TipTap，用于后续章节正文编辑器能力
 * **前端接口调用:** Axios + FormData，直接调用 `/api/users/*`、`/api/bidding/*`、`/api/outputs/*`
 * **前端资源管理:** `frontend/public/assets/` 与 Vite 构建资源，生产环境由 Flask `/assets/<filename>` 路由托管
@@ -39,8 +40,8 @@ frontend/
 → Tailwind CSS 负责固定布局、工作台卡片、首页视觉样式
 → React Router 保留后续多页面扩展能力
 → TanStack Query 作为服务端状态基础设施
-→ Zustand 管理 AI 助手和最近任务等轻量状态
-→ Axios 封装后端 API 调用
+→ Zustand 管理 AI 助手、最近任务和全局请求 Loading 等轻量状态
+→ Axios 封装后端 API 调用，并通过请求/响应拦截器统一控制 Loading
 ```
 
 当前采用的前端技术框架如下：
@@ -59,6 +60,14 @@ lucide-react
 ```
 
 前端构建产物输出到 `frontend/dist/`。后端 `main.py` 会优先托管该目录下的 `index.html` 和 Vite 静态资源；未构建时，访问 `/bidding` 会提示先执行前端构建。
+
+### 已完成前端任务
+
+* 已完成 Vite + React + TypeScript 前端工程迁移。
+* 已完成首页工作台、左侧菜单、顶部 Header、底部 Footer 固定布局。
+* 已完成企业知识库、企业资信库、企业产品库、系统设置页面。
+* 已清理前端演示 Mock 数据，支持进入真实上传与解析测试。
+* 已新增全局请求 Loading：所有通过 `frontend/src/api/client.ts` 发起的请求均会自动显示处理中状态，避免上传、解析、生成等长耗时操作无反馈。
 
 ## 📁 核心目录结构
 
