@@ -1,6 +1,12 @@
 import axios from 'axios';
 import { useLoadingStore } from '../stores/loadingStore';
 
+declare module 'axios' {
+  export interface AxiosRequestConfig {
+    skipGlobalLoading?: boolean;
+  }
+}
+
 export const apiClient = axios.create({
   baseURL: '/',
   timeout: 120000,
@@ -8,22 +14,30 @@ export const apiClient = axios.create({
 
 apiClient.interceptors.request.use(
   config => {
-    useLoadingStore.getState().start();
+    if (!config.skipGlobalLoading) {
+      useLoadingStore.getState().start();
+    }
     return config;
   },
   error => {
-    useLoadingStore.getState().finish();
+    if (!error.config?.skipGlobalLoading) {
+      useLoadingStore.getState().finish();
+    }
     return Promise.reject(error);
   },
 );
 
 apiClient.interceptors.response.use(
   response => {
-    useLoadingStore.getState().finish();
+    if (!response.config.skipGlobalLoading) {
+      useLoadingStore.getState().finish();
+    }
     return response;
   },
   error => {
-    useLoadingStore.getState().finish();
+    if (!error.config?.skipGlobalLoading) {
+      useLoadingStore.getState().finish();
+    }
     const message = error.response?.data?.error || error.message || '请求失败';
     return Promise.reject(new Error(message));
   },

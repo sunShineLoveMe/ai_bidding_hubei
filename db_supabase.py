@@ -89,3 +89,8 @@ def sync_uploaded_tender_to_supabase(local_file_path: str | Path, original_filen
 
 def update_bid_file_parse_status(file_id: str, parse_status: str) -> None:
     get_supabase_client().table("bid_files").update({"parse_status": parse_status}).eq("id", file_id).execute()
+
+
+def get_bid_file(file_id: str) -> dict[str, Any] | None:
+    response = get_supabase_client().table("bid_files").select("*").eq("id", file_id).limit(1).execute()
+    return response.data[0] if response.data else None

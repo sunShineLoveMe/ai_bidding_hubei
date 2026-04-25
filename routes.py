@@ -16,14 +16,15 @@ import codecs
 import PyPDF2
 from qwen_client import call_dashscope_api, generate_bid_section
 from md_to_word import convert_md_to_word
-from db_supabase import sync_uploaded_tender_to_supabase, update_bid_file_parse_status
+from db_supabase import get_bid_file, sync_uploaded_tender_to_supabase
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import shutil
 from datetime import timedelta
 
 # 操作向量数据库的函数
-from file_to_chroma import EmptyDocumentContentError, file_to_chroma, query_chroma
+from document_parser import import_mineru_result_zip, parse_and_index_tender_file, read_parse_status, retry_mineru_result_download, write_parse_status
+from file_to_chroma import query_chroma
 # 创建蓝图
 bp = Blueprint('bidding', __name__)
 
@@ -132,25 +133,36 @@ def merge_sections(output_dir, tender_name, sections):
             logging.error(f"保存合并文件时出错: {e}")
             return None    
 
-def vectorize_file_in_background(file_path, supabase_file_id=None):
+def sync_and_parse_tender_in_background(file_path, original_filename, parse_id):
+    supabase_file_id = None
+    supabase_sync = None
     try:
-        file_to_chroma(file_path)
-        if supabase_file_id:
-            update_bid_file_parse_status(supabase_file_id, "indexed")
-    except EmptyDocumentContentError as e:
-        logging.warning("文件待 OCR/MinerU 解析，跳过 Chroma 向量化: %s, reason=%s", file_path, e)
-        if supabase_file_id:
-            try:
-                update_bid_file_parse_status(supabase_file_id, "ocr_required")
-            except Exception:
-                logging.exception("更新 Supabase parse_status=ocr_required 失败: %s", supabase_file_id)
-    except Exception:
-        logging.exception("企业知识库向量化处理失败: %s", file_path)
-        if supabase_file_id:
-            try:
-                update_bid_file_parse_status(supabase_file_id, "index_failed")
-            except Exception:
-                logging.exception("更新 Supabase parse_status=index_failed 失败: %s", supabase_file_id)
+        write_parse_status(parse_id, {
+            "parse_status": "syncing_supabase",
+            "parser": "mineru",
+            "source_file": file_path,
+            "file_name": original_filename,
+        })
+        supabase_sync = sync_uploaded_tender_to_supabase(file_path, original_filename)
+        supabase_file_id = supabase_sync.get('file', {}).get('id') if supabase_sync else None
+        write_parse_status(parse_id, {
+            "parse_status": "supabase_synced",
+            "project_id": supabase_sync.get('project', {}).get('id') if supabase_sync else None,
+            "supabase_file_id": supabase_file_id,
+        })
+    except Exception as e:
+        logging.exception("Supabase 招标文件后台同步失败，继续走本地 MinerU 解析: %s", file_path)
+        write_parse_status(parse_id, {
+            "parse_status": "supabase_sync_failed",
+            "supabase_sync_error": str(e),
+        })
+
+    parse_and_index_tender_file(
+        file_path=file_path,
+        original_filename=original_filename,
+        parse_id=parse_id,
+        supabase_file_id=supabase_file_id,
+    )
 
 @bp.route('/upload', methods=['POST'])
 def upload_bidding():
@@ -175,18 +187,13 @@ def upload_bidding():
         # 保存文件到 uploads 目录
         file.save(file_path)
 
-        # 同步到 Supabase 在线项目库与私有 Storage。失败不阻断本地 MVP 主流程。
-        supabase_sync = None
-        supabase_sync_error = None
-        try:
-            supabase_sync = sync_uploaded_tender_to_supabase(file_path, original_filename)
-        except Exception as e:
-            supabase_sync_error = str(e)
-            logging.exception("Supabase 招标文件同步失败: %s", file_path)
-
-        # 保持现有向量化能力，但放到后台执行，避免上传接口被 embedding 网络调用阻塞。
-        supabase_file_id = supabase_sync.get('file', {}).get('id') if supabase_sync else None
-        threading.Thread(target=vectorize_file_in_background, args=(file_path, supabase_file_id), daemon=True).start()
+        parse_id = str(uuid.uuid4())
+        write_parse_status(parse_id, {
+            "parse_status": "uploaded",
+            "parser": "mineru",
+            "source_file": file_path,
+            "file_name": original_filename,
+        })
 
         # 生成 document_key 并写入 DB
         document_key = str(uuid.uuid4())
@@ -211,20 +218,96 @@ def upload_bidding():
         except Exception:
             logging.exception('初始化 temp_analysis_store 失败')
 
+        # Supabase 同步和 MinerU 解析都放入后台，避免上传接口被外部网络超时拖住。
+        threading.Thread(
+            target=sync_and_parse_tender_in_background,
+            args=(file_path, original_filename, parse_id),
+            daemon=True,
+        ).start()
+
         # 返回 minimal 信息（前端随后调用 /generate-bid-document）
         return jsonify({
-            'message': '招标文件已上传并纳入企业知识库处理流程。',
+            'message': '招标文件已上传，正在后台同步 Supabase 并解析。',
             'biddingId': bidding_id,
             'originalFilename': original_filename,
-            'projectId': supabase_sync.get('project', {}).get('id') if supabase_sync else None,
-            'fileId': supabase_sync.get('file', {}).get('id') if supabase_sync else None,
-            'supabaseSynced': supabase_sync is not None,
-            'supabaseSyncError': supabase_sync_error
+            'projectId': None,
+            'fileId': parse_id,
+            'supabaseSynced': False,
+            'supabaseSyncError': None
         }), 201
 
     except Exception as e:
         logging.exception("招标文件上传处理失败")
         return jsonify({'error': f'招标文件上传处理失败: {str(e)}'}), 500
+
+@bp.route('/parse-status/<file_id>', methods=['GET'])
+def get_parse_status(file_id):
+    """查询招标文件解析状态，合并 Supabase 当前状态与本地 MinerU 产物状态。"""
+    try:
+        local_status = read_parse_status(file_id) or {}
+        download_retry_count = int(local_status.get("download_retry_count") or 0)
+        max_download_retries = int(os.getenv("MINERU_DOWNLOAD_AUTO_RETRIES", "3"))
+        if (
+            local_status.get("parse_status") in {"mineru_failed", "mineru_download_failed", "mineru_download_retrying"}
+            and local_status.get("batch_id")
+            and local_status.get("mineru_state") == "done"
+            and not local_status.get("artifacts")
+            and download_retry_count < max_download_retries
+            and (
+                local_status.get("parse_status") != "mineru_download_retrying"
+                or not local_status.get("download_retry_started_at")
+            )
+        ):
+            write_parse_status(file_id, {"parse_status": "mineru_download_retrying"})
+            threading.Thread(target=retry_mineru_result_download, args=(file_id,), daemon=True).start()
+            local_status = read_parse_status(file_id) or local_status
+
+        supabase_file = None
+        supabase_lookup_id = local_status.get("supabase_file_id") or file_id
+        try:
+            uuid.UUID(supabase_lookup_id)
+            if local_status.get("supabase_file_id") or not local_status:
+                supabase_file = get_bid_file(supabase_lookup_id)
+        except ValueError:
+            logging.warning("跳过 Supabase 查询，file_id 不是合法 UUID: %s", supabase_lookup_id)
+        except Exception:
+            logging.exception("查询 Supabase bid_files 失败: %s", supabase_lookup_id)
+
+        return jsonify({
+            'fileId': file_id,
+            'parseStatus': local_status.get('parse_status') or (supabase_file or {}).get('parse_status'),
+            'supabaseFile': supabase_file,
+            'mineru': local_status,
+        })
+    except Exception as e:
+        logging.exception("查询解析状态失败: %s", file_id)
+        return jsonify({'error': f'查询解析状态失败: {str(e)}'}), 500
+
+@bp.route('/parse-status/<file_id>/result-zip', methods=['POST'])
+def upload_mineru_result_zip(file_id):
+    """手动上传 MinerU 结果 zip，用于本机无法访问 MinerU CDN 的场景。"""
+    if 'file' not in request.files:
+        return jsonify({'error': '未接收到 MinerU 结果 zip 文件。'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': '未选择 MinerU 结果 zip 文件。'}), 400
+
+    try:
+        output_dir = Path("parsed_outputs") / file_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+        zip_path = output_dir / "manual_mineru_result.zip"
+        file.save(zip_path)
+        artifacts = import_mineru_result_zip(file_id, zip_path)
+        return jsonify({
+            'message': 'MinerU 结果 zip 已导入并完成解析产物处理。',
+            'fileId': file_id,
+            'artifacts': artifacts,
+        })
+    except Exception as e:
+        logging.exception("导入 MinerU 结果 zip 失败: %s", file_id)
+        write_parse_status(file_id, {"parse_status": "mineru_import_failed", "error": str(e)})
+        return jsonify({'error': f'导入 MinerU 结果 zip 失败: {str(e)}'}), 500
     
 @bp.route('/save-callback', methods=['POST'])
 def save_callback():

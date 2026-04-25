@@ -44,6 +44,7 @@ chroma_db/
 
 # Project specific local directories (Large files, user uploads, generative outputs)
 outputs/
+parsed_outputs/
 uploads/
 tender_references/
 

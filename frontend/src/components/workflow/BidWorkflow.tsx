@@ -6,6 +6,7 @@ import {
   analyzeChapters,
   designChapters,
   generateBidDocument,
+  getParseStatus,
   identifyUser,
   preAnalyzeBid,
   uploadTenderFile,
@@ -34,6 +35,8 @@ export function BidWorkflow({ onReady }: BidWorkflowProps): JSX.Element {
   const [log, setLog] = useState('请选择招标文件，并按左侧步骤生成标书。');
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const parseTimerRef = useRef<number | null>(null);
+  const parsePollCountRef = useRef(0);
   const addTask = useBidProjectStore(state => state.addTask);
 
   const openFilePicker = useCallback(() => inputRef.current?.click(), []);
@@ -41,6 +44,45 @@ export function BidWorkflow({ onReady }: BidWorkflowProps): JSX.Element {
   useEffect(() => {
     onReady?.(openFilePicker);
   }, [onReady, openFilePicker]);
+
+  useEffect(() => {
+    return () => {
+      if (parseTimerRef.current) {
+        window.clearInterval(parseTimerRef.current);
+      }
+    };
+  }, []);
+
+  function stopParsePolling(): void {
+    if (parseTimerRef.current) {
+      window.clearInterval(parseTimerRef.current);
+      parseTimerRef.current = null;
+    }
+  }
+
+  function startParsePolling(nextFileId: string): void {
+    stopParsePolling();
+    parsePollCountRef.current = 0;
+
+    const poll = async (): Promise<void> => {
+      parsePollCountRef.current += 1;
+      try {
+        const data = await getParseStatus(nextFileId);
+        const status = data.parseStatus || 'pending';
+        setLog(formatJson({ ...data, tip: '后台正在解析招标文件，完成 indexed 后可继续做招标解读。' }));
+        if (['indexed', 'mineru_failed', 'index_failed'].includes(status) || parsePollCountRef.current >= 90) {
+          stopParsePolling();
+        }
+      } catch (error) {
+        if (parsePollCountRef.current >= 3) {
+          stopParsePolling();
+        }
+      }
+    };
+
+    void poll();
+    parseTimerRef.current = window.setInterval(() => void poll(), 5000);
+  }
 
   const uploadProps: UploadProps = {
     showUploadList: false,
@@ -74,6 +116,9 @@ export function BidWorkflow({ onReady }: BidWorkflowProps): JSX.Element {
         setBiddingId(data.biddingId);
         setCurrent(1);
         setLog(formatJson(data));
+        if (data.fileId) {
+          startParsePolling(data.fileId);
+        }
         addTask({
           projectName: file.name.replace(/\.[^.]+$/, ''),
           tenderUnit: '本地上传',

@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import type { GenerateBidDocumentResponse, UploadResponse } from '../types/bid';
+import type { GenerateBidDocumentResponse, ParseStatusResponse, UploadResponse } from '../types/bid';
 
 export async function identifyUser(fingerprintId: string): Promise<{ userId: number; isNew: boolean }> {
   const response = await apiClient.post('/api/users/identify', { fingerprintId });
@@ -11,6 +11,11 @@ export async function uploadTenderFile(file: File, userId: number): Promise<Uplo
   form.append('file', file);
   form.append('userId', String(userId));
   const response = await apiClient.post('/api/bidding/upload', form);
+  return response.data;
+}
+
+export async function getParseStatus(fileId: string): Promise<ParseStatusResponse> {
+  const response = await apiClient.get(`/api/bidding/parse-status/${fileId}`, { skipGlobalLoading: true });
   return response.data;
 }
 

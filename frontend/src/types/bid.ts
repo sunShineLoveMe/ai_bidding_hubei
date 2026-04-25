@@ -2,6 +2,17 @@ export interface UploadResponse {
   message: string;
   biddingId: number;
   originalFilename: string;
+  projectId?: string | null;
+  fileId?: string | null;
+  supabaseSynced?: boolean;
+  supabaseSyncError?: string | null;
+}
+
+export interface ParseStatusResponse {
+  fileId: string;
+  parseStatus?: string | null;
+  supabaseFile?: Record<string, unknown> | null;
+  mineru?: Record<string, unknown>;
 }
 
 export interface GenerateBidDocumentResponse {

@@ -195,6 +195,14 @@ SUPABASE_STORAGE_GENERATED_BUCKET=generated-docx
 SUPABASE_STORAGE_KNOWLEDGE_BUCKET=knowledge-files
 SUPABASE_STORAGE_QUALIFICATION_BUCKET=qualification-files
 SUPABASE_STORAGE_PRODUCT_BUCKET=product-files
+
+# MinerU 精准解析 API，用于扫描版 PDF、复杂表格和图片型招标文件 OCR 解析
+MINERU_API_TOKEN=your_mineru_api_token
+MINERU_API_BASE_URL=https://mineru.net
+MINERU_PARSE_PDF_FIRST=true
+MINERU_DOWNLOAD_AUTO_RETRIES=3
+MINERU_DOWNLOAD_USE_CURL_FALLBACK=true
+MAX_UPLOAD_MB=200
 ```
 
 安全要求：
@@ -312,7 +320,8 @@ erDiagram
 上传招标文件
 → Supabase Storage: tender-files
 → bid_projects / bid_files
-→ 文档解析与 OCR / MinerU
+→ PDF 默认优先走 MinerU 精准解析；非 PDF 或未配置 Token 时走原生文本抽取
+→ MinerU 返回 Markdown、content_list.json、model/middle JSON 等解析产物
 → bid_analysis / bid_requirements / bid_scoring_items / bid_risks
 → document_chunks + pgvector embedding
 → bid_chapter_suggestions
@@ -355,6 +364,7 @@ http://<服务器地址>:3012/bidding
 * 已实现首页 Banner、智能标书入口、基础工具、最近任务、知识库状态和 AI 助手浮窗。
 * 已将上传、AI 预分析、章节格式提取、章节设计、Word 生成流程接入现有 Flask API。
 * 已清理首页最近任务、知识库状态和 AI 助手示例对话中的 mock 数据，真实任务会在上传招标文件后写入当前会话状态。
+* 已接入上传后的解析状态轮询：前端通过 `/api/bidding/parse-status/<fileId>` 展示 MinerU/OCR/索引进度，轮询请求不会触发全屏 Loading 闪烁。
 * 已完成 `npm install` 和 `npm run build`，生成 `frontend/dist/` 构建产物。
 
 ### 管理模块页面
@@ -386,6 +396,17 @@ http://<服务器地址>:3012/bidding
 * 已完成 Supabase 写入烟测：临时文件成功上传 Storage，成功写入 `bid_projects` / `bid_files`，并完成测试数据清理。
 * 已处理 Supabase Storage object key 限制：Storage 路径使用 UUID + ASCII 扩展名，中文原始文件名保存在 `bid_files.file_name`。
 * 已处理扫描版/图片型 PDF 的空文本场景：ChromaDB 后台向量化遇到空文本时不再输出错误堆栈，改为 warning，并将 Supabase `bid_files.parse_status` 标记为 `ocr_required`，等待后续 MinerU/OCR 解析。
+
+### MinerU 文档解析
+
+* 已新增 `mineru_client.py`：封装 MinerU 精准解析 API 的本地文件签名上传、批量任务查询、结果 zip 下载和解析产物定位。
+* 已新增 `document_parser.py`：统一招标文件解析入口；PDF 在配置 MinerU Token 后默认优先走 MinerU，以保留表格、图片和复杂版式信息；未配置 Token 或非 PDF 时走原生文本向量化，扫描版空文本再标记为 `ocr_required`。
+* 已改造 `/api/bidding/upload` 后台任务：上传接口只保存本地文件并立即返回本地解析任务 `fileId`；Supabase 同步、MinerU OCR、Markdown 向量化均在后台执行，避免 Supabase 或 MinerU 网络耗时导致前端长时间 Loading。
+* 已新增 `/api/bidding/parse-status/<file_id>`：用于查询 Supabase `parse_status` 与本地 MinerU 解析进度、产物路径。
+* MinerU 解析产物默认保存到 `parsed_outputs/<fileId>/`，其中 `fileId` 为本地解析任务 ID；`mineru_status.json` 记录 `batch_id`、解析状态、Supabase 同步结果、`full_zip_url`、`full.md`、`*_content_list.json` 等路径。
+* 已增强 MinerU 结果 zip 下载稳定性：下载使用重试、临时文件、坏 zip 校验和 curl 兜底；若 CDN 连接中断导致下载失败，会标记为 `mineru_download_failed` 并保留 `full_zip_url`/`batch_id`，后续状态轮询会自动后台重试下载，不重新提交 MinerU 解析任务。
+* 已新增 `POST /api/bidding/parse-status/<file_id>/result-zip`：当本机无法访问 MinerU CDN 时，可从 MinerU 后台手动下载结果 zip 后上传给系统，系统会继续解压 `full.md` / `*_content_list.json` 并进入向量化。
+* 当前 Supabase 表结构无需新增字段即可联调；MinerU 任务元数据先落本地状态文件，Supabase 继续通过 `bid_files.parse_status` 记录 `ocr_required`、`mineru_submitted`、`mineru_running`、`mineru_done`、`mineru_failed`、`indexed` 等状态。
 
 本地 Docker 部署 OnlyOffice 时，建议 `.env` 保持以下配置：
 
