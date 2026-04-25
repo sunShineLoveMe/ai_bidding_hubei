@@ -1,7 +1,9 @@
 import json
 import os
+import socket
 import subprocess
 import time
+from urllib.parse import urlparse
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -192,34 +194,88 @@ def _download_session() -> requests.Session:
 
 def _download_with_curl(zip_url: str, tmp_zip_path: Path, timeout: int, verify_ssl: bool) -> None:
     curl_path = os.getenv("MINERU_CURL_PATH", "/usr/bin/curl")
-    command = [
-        curl_path,
-        "-L",
-        "--fail",
-        "--silent",
-        "--show-error",
-        "--retry",
-        os.getenv("MINERU_CURL_RETRIES", "5"),
-        "--retry-delay",
-        os.getenv("MINERU_CURL_RETRY_DELAY", "2"),
-        "--connect-timeout",
-        os.getenv("MINERU_CURL_CONNECT_TIMEOUT", "30"),
-        "--max-time",
-        str(timeout),
-        "-A",
-        "Mozilla/5.0 ai-bidding-mineru-downloader",
-        "-o",
-        str(tmp_zip_path),
-        zip_url,
-    ]
-    if not verify_ssl:
-        command.insert(1, "-k")
+    parsed_url = urlparse(zip_url)
+    host = parsed_url.hostname
+    resolve_ips = _resolve_download_host(host) if host else []
 
-    result = subprocess.run(command, check=False, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise MinerUDownloadError(
-            f"curl fallback failed: code={result.returncode}, stderr={result.stderr.strip()}"
+    errors: list[str] = []
+    resolve_attempts: list[str | None] = [None, *resolve_ips]
+    for resolve_ip in resolve_attempts:
+        if tmp_zip_path.exists():
+            tmp_zip_path.unlink()
+        command = [
+            curl_path,
+            "-L",
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--retry",
+            os.getenv("MINERU_CURL_RETRIES", "5"),
+            "--retry-delay",
+            os.getenv("MINERU_CURL_RETRY_DELAY", "2"),
+            "--connect-timeout",
+            os.getenv("MINERU_CURL_CONNECT_TIMEOUT", "30"),
+            "--max-time",
+            str(timeout),
+            "-A",
+            "Mozilla/5.0 ai-bidding-mineru-downloader",
+            "-o",
+            str(tmp_zip_path),
+        ]
+        if resolve_ip and host:
+            command.extend(["--resolve", f"{host}:443:{resolve_ip}"])
+        command.append(zip_url)
+        if not verify_ssl:
+            command.insert(1, "-k")
+
+        result = subprocess.run(command, check=False, capture_output=True, text=True)
+        if result.returncode == 0:
+            return
+        mode = f"resolve={resolve_ip}" if resolve_ip else "system-dns"
+        errors.append(f"{mode}: code={result.returncode}, stderr={result.stderr.strip()}")
+
+    raise MinerUDownloadError("curl fallback failed: " + " | ".join(errors))
+
+
+def _resolve_download_host(host: str | None) -> list[str]:
+    if not host:
+        return []
+    env_ips = os.getenv("MINERU_CDN_RESOLVE_IPS")
+    if env_ips:
+        return [ip.strip() for ip in env_ips.split(",") if ip.strip()]
+
+    if os.getenv("MINERU_DOWNLOAD_DOH_RESOLVE", "true").lower() in {"false", "0", "no"}:
+        return []
+
+    try:
+        response = requests.get(
+            "https://dns.google/resolve",
+            params={"name": host, "type": "A"},
+            timeout=10,
         )
+        response.raise_for_status()
+        payload = response.json()
+        ips: list[str] = []
+        for answer in payload.get("Answer") or []:
+            if answer.get("type") == 1 and answer.get("data"):
+                ips.append(answer["data"])
+        return ips
+    except Exception:
+        return []
+
+
+def _host_uses_fake_ip(host: str | None) -> bool:
+    if not host:
+        return False
+    try:
+        addresses = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
+    except Exception:
+        return False
+    for item in addresses:
+        ip = item[4][0]
+        if ip.startswith("198.18.") or ip.startswith("198.19."):
+            return True
+    return False
 
 
 def extract_zip_artifacts(zip_path: str | Path, output_dir: str | Path) -> dict[str, str | None]:
@@ -258,23 +314,28 @@ def download_and_extract_zip(zip_url: str, output_dir: str | Path, timeout: int 
     zip_path = output_path / "mineru_result.zip"
     tmp_zip_path = output_path / "mineru_result.zip.part"
     verify_ssl = os.getenv("MINERU_DOWNLOAD_VERIFY_SSL", "true").lower() not in {"false", "0", "no"}
+    parsed_url = urlparse(zip_url)
+    skip_requests = _host_uses_fake_ip(parsed_url.hostname)
 
     try:
         if tmp_zip_path.exists():
             tmp_zip_path.unlink()
         try:
-            response = _download_session().get(
-                zip_url,
-                stream=True,
-                timeout=timeout,
-                verify=verify_ssl,
-                headers={"User-Agent": "Mozilla/5.0 ai-bidding-mineru-downloader"},
-            )
-            response.raise_for_status()
-            with open(tmp_zip_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        f.write(chunk)
+            if skip_requests:
+                raise MinerUDownloadError("System DNS resolved MinerU CDN to fake-ip; using curl --resolve")
+            else:
+                response = _download_session().get(
+                    zip_url,
+                    stream=True,
+                    timeout=timeout,
+                    verify=verify_ssl,
+                    headers={"User-Agent": "Mozilla/5.0 ai-bidding-mineru-downloader"},
+                )
+                response.raise_for_status()
+                with open(tmp_zip_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            f.write(chunk)
         except Exception as requests_error:
             if tmp_zip_path.exists():
                 tmp_zip_path.unlink()

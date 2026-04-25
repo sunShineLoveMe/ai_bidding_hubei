@@ -16,14 +16,14 @@ import codecs
 import PyPDF2
 from qwen_client import call_dashscope_api, generate_bid_section
 from md_to_word import convert_md_to_word
-from db_supabase import get_bid_file, sync_uploaded_tender_to_supabase
+from db_supabase import get_bid_file, get_project_interpretation, list_recent_bid_projects, sync_uploaded_tender_to_supabase
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import shutil
 from datetime import timedelta
 
 # 操作向量数据库的函数
-from document_parser import import_mineru_result_zip, parse_and_index_tender_file, read_parse_status, retry_mineru_result_download, write_parse_status
+from document_parser import ingest_artifacts as ingest_mineru_artifacts_to_supabase, import_mineru_result_zip, parse_and_index_tender_file, read_parse_status, retry_mineru_result_download, write_parse_status
 from file_to_chroma import query_chroma
 # 创建蓝图
 bp = Blueprint('bidding', __name__)
@@ -246,7 +246,17 @@ def get_parse_status(file_id):
     try:
         local_status = read_parse_status(file_id) or {}
         download_retry_count = int(local_status.get("download_retry_count") or 0)
-        max_download_retries = int(os.getenv("MINERU_DOWNLOAD_AUTO_RETRIES", "3"))
+        max_download_retries = int(os.getenv("MINERU_DOWNLOAD_AUTO_RETRIES", "6"))
+        retry_started_at = local_status.get("download_retry_started_at")
+        retry_is_stale = True
+        if retry_started_at:
+            try:
+                started_at = datetime.fromisoformat(str(retry_started_at).replace("Z", ""))
+                retry_is_stale = (datetime.utcnow() - started_at).total_seconds() > int(
+                    os.getenv("MINERU_DOWNLOAD_RETRY_STALE_SECONDS", "120")
+                )
+            except Exception:
+                retry_is_stale = True
         if (
             local_status.get("parse_status") in {"mineru_failed", "mineru_download_failed", "mineru_download_retrying"}
             and local_status.get("batch_id")
@@ -255,7 +265,7 @@ def get_parse_status(file_id):
             and download_retry_count < max_download_retries
             and (
                 local_status.get("parse_status") != "mineru_download_retrying"
-                or not local_status.get("download_retry_started_at")
+                or retry_is_stale
             )
         ):
             write_parse_status(file_id, {"parse_status": "mineru_download_retrying"})
@@ -308,7 +318,59 @@ def upload_mineru_result_zip(file_id):
         logging.exception("导入 MinerU 结果 zip 失败: %s", file_id)
         write_parse_status(file_id, {"parse_status": "mineru_import_failed", "error": str(e)})
         return jsonify({'error': f'导入 MinerU 结果 zip 失败: {str(e)}'}), 500
-    
+
+@bp.route('/parse-status/<file_id>/ingest', methods=['POST'])
+def ingest_mineru_artifacts(file_id):
+    """将已完成的 MinerU 解析产物写入 Supabase 业务表。"""
+    try:
+        local_status = read_parse_status(file_id) or {}
+        artifacts = local_status.get("artifacts")
+        if not artifacts:
+            return jsonify({'error': '当前任务尚无 MinerU 解析产物，请等待 mineru_done。'}), 400
+
+        threading.Thread(target=ingest_mineru_artifacts_to_supabase, args=(file_id, artifacts), daemon=True).start()
+        return jsonify({
+            'message': 'MinerU 解析产物已进入 Supabase 落库任务。',
+            'fileId': file_id,
+        })
+    except Exception as e:
+        logging.exception("触发 MinerU 产物落库失败: %s", file_id)
+        return jsonify({'error': f'触发 MinerU 产物落库失败: {str(e)}'}), 500
+
+@bp.route('/interpretations/latest', methods=['GET'])
+def get_latest_interpretation():
+    """获取最近一个已有结构化解读的招标项目。"""
+    try:
+        projects = list_recent_bid_projects(limit=20)
+        for project in projects:
+            payload = get_project_interpretation(project["id"])
+            if payload.get("analysis"):
+                return jsonify(payload)
+        return jsonify({
+            'project': projects[0] if projects else None,
+            'analysis': None,
+            'requirements': [],
+            'risks': [],
+            'scoringItems': [],
+            'chapterSuggestions': [],
+            'documentChunks': [],
+        })
+    except Exception as e:
+        logging.exception("查询最新招标解读失败")
+        return jsonify({'error': f'查询最新招标解读失败: {str(e)}'}), 500
+
+@bp.route('/interpretations/<project_id>', methods=['GET'])
+def get_interpretation(project_id):
+    """按项目获取招标文件结构化解读结果。"""
+    try:
+        uuid.UUID(project_id)
+        return jsonify(get_project_interpretation(project_id))
+    except ValueError:
+        return jsonify({'error': 'project_id 不是合法 UUID。'}), 400
+    except Exception as e:
+        logging.exception("查询招标解读失败: %s", project_id)
+        return jsonify({'error': f'查询招标解读失败: {str(e)}'}), 500
+     
 @bp.route('/save-callback', methods=['POST'])
 def save_callback():
     """OnlyOffice 保存回调"""

@@ -200,8 +200,11 @@ SUPABASE_STORAGE_PRODUCT_BUCKET=product-files
 MINERU_API_TOKEN=your_mineru_api_token
 MINERU_API_BASE_URL=https://mineru.net
 MINERU_PARSE_PDF_FIRST=true
-MINERU_DOWNLOAD_AUTO_RETRIES=3
+MINERU_DOWNLOAD_AUTO_RETRIES=6
 MINERU_DOWNLOAD_USE_CURL_FALLBACK=true
+MINERU_DOWNLOAD_DOH_RESOLVE=true
+# 可选：如果本地 DNS/代理 fake-ip 导致 MinerU CDN TLS 失败，可手动指定真实 CDN IP
+# MINERU_CDN_RESOLVE_IPS=8.222.80.133,8.222.82.255
 MAX_UPLOAD_MB=200
 ```
 
@@ -322,9 +325,8 @@ erDiagram
 → bid_projects / bid_files
 → PDF 默认优先走 MinerU 精准解析；非 PDF 或未配置 Token 时走原生文本抽取
 → MinerU 返回 Markdown、content_list.json、model/middle JSON 等解析产物
-→ bid_analysis / bid_requirements / bid_scoring_items / bid_risks
-→ document_chunks + pgvector embedding
-→ bid_chapter_suggestions
+→ MinerU 产物落库：bid_analysis / bid_requirements / bid_scoring_items / bid_risks / bid_chapter_suggestions / document_chunks
+→ document_chunks 后续生成 embedding / pgvector 索引
 → generation_records
 → Supabase Storage: generated-docx
 ```
@@ -365,6 +367,9 @@ http://<服务器地址>:3012/bidding
 * 已将上传、AI 预分析、章节格式提取、章节设计、Word 生成流程接入现有 Flask API。
 * 已清理首页最近任务、知识库状态和 AI 助手示例对话中的 mock 数据，真实任务会在上传招标文件后写入当前会话状态。
 * 已接入上传后的解析状态轮询：前端通过 `/api/bidding/parse-status/<fileId>` 展示 MinerU/OCR/索引进度，轮询请求不会触发全屏 Loading 闪烁。
+* 已优化请求 Loading 体验：全局 API 请求不再遮挡整个浏览器页面，Loading 仅覆盖右侧主内容区，顶部 Header、左侧菜单和底部 Footer 保持可见可操作。
+* 已新增 **招标文件解读** 页面 `/interpretation`：展示 Supabase 中已落库的项目概况、要求条款、风险项、评分项、建议章节和原文分片。
+* 已在左侧菜单新增“招标解读”入口，默认加载最新一条已完成结构化落库的招标项目。
 * 已完成 `npm install` 和 `npm run build`，生成 `frontend/dist/` 构建产物。
 
 ### 管理模块页面
@@ -404,9 +409,94 @@ http://<服务器地址>:3012/bidding
 * 已改造 `/api/bidding/upload` 后台任务：上传接口只保存本地文件并立即返回本地解析任务 `fileId`；Supabase 同步、MinerU OCR、Markdown 向量化均在后台执行，避免 Supabase 或 MinerU 网络耗时导致前端长时间 Loading。
 * 已新增 `/api/bidding/parse-status/<file_id>`：用于查询 Supabase `parse_status` 与本地 MinerU 解析进度、产物路径。
 * MinerU 解析产物默认保存到 `parsed_outputs/<fileId>/`，其中 `fileId` 为本地解析任务 ID；`mineru_status.json` 记录 `batch_id`、解析状态、Supabase 同步结果、`full_zip_url`、`full.md`、`*_content_list.json` 等路径。
-* 已增强 MinerU 结果 zip 下载稳定性：下载使用重试、临时文件、坏 zip 校验和 curl 兜底；若 CDN 连接中断导致下载失败，会标记为 `mineru_download_failed` 并保留 `full_zip_url`/`batch_id`，后续状态轮询会自动后台重试下载，不重新提交 MinerU 解析任务。
+* 已增强 MinerU 结果 zip 下载稳定性：下载使用重试、临时文件、坏 zip 校验、curl 兜底和公共 DNS 真实 IP 解析；若本地代理/TUN fake-ip 导致 CDN TLS 失败，会自动用 `curl --resolve` 绕过本机 fake-ip 下载。
 * 已新增 `POST /api/bidding/parse-status/<file_id>/result-zip`：当本机无法访问 MinerU CDN 时，可从 MinerU 后台手动下载结果 zip 后上传给系统，系统会继续解压 `full.md` / `*_content_list.json` 并进入向量化。
 * 当前 Supabase 表结构无需新增字段即可联调；MinerU 任务元数据先落本地状态文件，Supabase 继续通过 `bid_files.parse_status` 记录 `ocr_required`、`mineru_submitted`、`mineru_running`、`mineru_done`、`mineru_failed`、`indexed` 等状态。
+
+### 招标文件解读与结构化落库
+
+* 已新增 `bid_interpreter.py`：负责读取 MinerU 产物中的 `full.md` 与 `*_content_list.json`，抽取项目概况、资格/商务/技术/文件要求、评分项、风险项和建议章节。
+* 已新增 Supabase 落库封装：`replace_bid_analysis` 与 `replace_project_rows`，支持按 `project_id` 重建当前项目的解读结果，避免重复导入产生脏数据。
+* 已改造 MinerU 解析完成链路：zip 下载并解压成功后，会优先写入 Supabase 业务表，再进入 ChromaDB 向量化，避免 embedding 网络慢导致解析产物无法被业务使用。
+* 已新增 `POST /api/bidding/parse-status/<file_id>/ingest`：用于对已完成 MinerU 解析的历史任务手动触发 Supabase 落库。
+* 已新增 `GET /api/bidding/interpretations/latest`：返回最近一条已完成结构化落库的招标解读数据。
+* 已新增 `GET /api/bidding/interpretations/<project_id>`：按项目返回招标解读数据，供前端详情页展示。
+* 当前落库目标表：
+  * `bid_analysis`：保存项目概况、资格要求、文件清单、评分项、风险项、章节建议等 JSONB 汇总。
+  * `bid_requirements`：保存资格、商务、技术、文件要求等明细。
+  * `bid_scoring_items`：保存评分办法和评分点初步抽取结果。
+  * `bid_risks`：保存否决、无效、逾期、不予受理等风险条款。
+  * `bid_chapter_suggestions`：保存建议响应章节。
+  * `document_chunks`：保存 MinerU 内容块分片，包含页码、章节、parse_id、bid_file_id 等元数据。
+* 当前版本采用规则抽取作为第一版业务解读能力，优先保证数据链路、可追溯来源和页面展示基础；后续可在此基础上接入大模型做更精确的条款分类、评分项拆解和风险等级判断。
+* 已用真实 MinerU 解析任务完成落库验证：`bid_analysis` 1 条、`bid_requirements` 80 条、`bid_risks` 60 条、`bid_scoring_items` 35 条、`bid_chapter_suggestions` 30 条、`document_chunks` 19 条。
+
+#### MinerU 结果 zip 下载失败排查记录
+
+本次联调中出现的问题是：MinerU 后台显示 PDF 已解析完成，但系统无法下载 MinerU 返回的结果 zip，日志中出现：
+
+```text
+HTTPSConnectionPool(host='cdn-mineru.openxlab.org.cn', port=443)
+SSLError: UNEXPECTED_EOF_WHILE_READING
+curl: (35) LibreSSL SSL_connect: SSL_ERROR_SYSCALL
+```
+
+结论：该问题不是 Supabase 私有 bucket 权限导致的。Supabase 只负责保存用户上传的原始招标文件和项目元数据；MinerU 解析完成后的 `full_zip_url` 指向的是 MinerU 自己的 CDN：
+
+```text
+https://cdn-mineru.openxlab.org.cn/pdf/...
+```
+
+实际根因是本机 DNS/代理环境把 `cdn-mineru.openxlab.org.cn` 解析到了 `198.18.0.37`。`198.18.0.0/15` 常见于 Clash、TUN、fake-ip 代理模式，不是真实公网 CDN 地址；当 Python `requests` 或系统 `curl` 直接连接该 fake-ip 且代理未正确接管时，TLS 握手会被中断，所以表现为 SSL EOF，而不是 HTTP 403/404 权限错误。
+
+排查证据：
+
+```text
+本机 socket 解析:
+cdn-mineru.openxlab.org.cn -> 198.18.0.37
+
+公共 DNS 解析:
+cdn-mineru.openxlab.org.cn -> ga-bp1a3sxwjs1940uyjxuil.aliyunga0019.com
+ga-bp1a3sxwjs1940uyjxuil.aliyunga0019.com -> 8.222.80.133 / 8.222.82.255
+
+使用 curl --resolve 指定真实 IP:
+HTTP/2 200
+content-type: application/zip
+content-length: 16976399
+```
+
+修复方案：
+
+* `mineru_client.py` 会检测 MinerU CDN 是否被解析到 `198.18.*` 或 `198.19.*` fake-ip。
+* 如果命中 fake-ip，下载器会跳过 Python `requests` 的系统 DNS 连接，改用公共 DNS 获取真实 IP。
+* 系统随后通过 `curl --resolve cdn-mineru.openxlab.org.cn:443:<真实IP>` 下载 zip，绕过本机 fake-ip 解析。
+* 下载成功后会校验 zip、解压 `full.md`、`*_content_list.json`、`*_model.json`、`layout.json`，并继续后续向量化。
+* 如果现场网络仍无法访问 MinerU CDN，可使用 `/api/bidding/parse-status/<file_id>/result-zip` 手动导入 MinerU 后台下载的 zip。
+
+建议现场代理配置：
+
+```text
+cdn-mineru.openxlab.org.cn 走 DIRECT 或正确代理
+避免该域名落入 fake-ip 后未被代理接管
+必要时关闭 fake-ip，改用 redir-host 或增强模式的正确路由规则
+```
+
+可选环境变量：
+
+```ini
+MINERU_DOWNLOAD_DOH_RESOLVE=true
+MINERU_DOWNLOAD_USE_CURL_FALLBACK=true
+MINERU_CDN_RESOLVE_IPS=8.222.80.133,8.222.82.255
+```
+
+本次真实任务已验证结果 zip 成功下载并解压，产物位于：
+
+```text
+parsed_outputs/ae376381-e61b-40fc-a2b7-c1b50faa82a8/mineru_result.zip
+parsed_outputs/ae376381-e61b-40fc-a2b7-c1b50faa82a8/extract/full.md
+parsed_outputs/ae376381-e61b-40fc-a2b7-c1b50faa82a8/extract/*_content_list.json
+parsed_outputs/ae376381-e61b-40fc-a2b7-c1b50faa82a8/extract/layout.json
+```
 
 本地 Docker 部署 OnlyOffice 时，建议 `.env` 保持以下配置：
 
