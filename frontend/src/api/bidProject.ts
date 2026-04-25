@@ -30,6 +30,11 @@ export async function getInterpretation(projectId: string): Promise<Interpretati
   return response.data;
 }
 
+export async function generateAIInterpretation(projectId: string): Promise<unknown> {
+  const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/ai-report`);
+  return response.data;
+}
+
 export async function preAnalyzeBid(biddingId: number): Promise<unknown> {
   const response = await apiClient.post('/api/bidding/pre-analysis_bid', { biddingId });
   return response.data;

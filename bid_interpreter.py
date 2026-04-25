@@ -74,6 +74,141 @@ def extract_project_meta(markdown: str) -> dict[str, Any]:
     }
 
 
+def build_interpretation_report(
+    *,
+    project_meta: dict[str, Any],
+    requirements: list[dict[str, Any]],
+    scoring_items: list[dict[str, Any]],
+    risks: list[dict[str, Any]],
+    chapter_suggestions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    requirement_counts = Counter(item["requirement_type"] for item in requirements)
+    high_risks = [item for item in risks if item.get("risk_level") == "high"]
+    top_scoring = [item for item in scoring_items if item.get("score")][:8]
+    if not top_scoring:
+        top_scoring = scoring_items[:8]
+
+    return {
+        "title": project_meta.get("project_name") or "招标文件解读报告",
+        "executive_summary": [
+            f"本文件已完成 MinerU OCR/版面解析，并形成 {sum(requirement_counts.values())} 条要求、{len(scoring_items)} 条评分项、{len(risks)} 条风险提示。",
+            "当前报告为规则抽取生成的第一版业务解读，重点用于帮助标书人员快速识别门槛条件、评分方向、否决风险和投标响应章节。",
+            "后续可接入大模型，对条款进行更精细的语义归类、冲突检查和投标策略生成。",
+        ],
+        "qualification_focus": [
+            item["content"] for item in requirements if item["requirement_type"] == "资格要求"
+        ][:8],
+        "business_focus": [
+            item["content"] for item in requirements if item["requirement_type"] == "商务要求"
+        ][:8],
+        "technical_focus": [
+            item["content"] for item in requirements if item["requirement_type"] == "技术要求"
+        ][:8],
+        "scoring_strategy": [
+            item.get("requirement") or item.get("item") for item in top_scoring
+        ],
+        "risk_focus": [
+            item["content"] for item in high_risks[:10]
+        ] or [item["content"] for item in risks[:10]],
+        "chapter_plan": [
+            item["chapter_title"] for item in chapter_suggestions[:12]
+        ],
+        "next_actions": [
+            "逐条核对资格、业绩、人员、财务和信誉要求，确认企业资信库资料是否齐备。",
+            "围绕评分办法建立响应矩阵，确保每个评分点都有章节、证明材料和页码索引。",
+            "对高风险条款建立投标前检查清单，避免签章、格式、递交、保证金等低级失误。",
+            "将企业知识库、资信库和产品库材料映射到建议章节，为后续自动生成标书正文做准备。",
+        ],
+    }
+
+
+def build_mineru_quality_report(
+    *,
+    markdown: str,
+    content_list: list[dict[str, Any]],
+    artifacts: dict[str, Any],
+) -> dict[str, Any]:
+    type_counter = Counter(str(item.get("type") or "unknown") for item in content_list)
+    page_counter = Counter(
+        int(item["page_idx"]) + 1
+        for item in content_list
+        if isinstance(item.get("page_idx"), int)
+    )
+    text_items = [str(item.get("text") or "") for item in content_list if item.get("text")]
+    suspicious = []
+    for item in content_list:
+        text = _normalize_text(str(item.get("text") or ""))
+        if not text:
+            suspicious.append({
+                "type": item.get("type"),
+                "page": int(item["page_idx"]) + 1 if isinstance(item.get("page_idx"), int) else None,
+                "reason": "空文本块",
+                "text": "",
+            })
+            continue
+        if len(text) <= 2 and str(item.get("type")) == "text":
+            suspicious.append({
+                "type": item.get("type"),
+                "page": int(item["page_idx"]) + 1 if isinstance(item.get("page_idx"), int) else None,
+                "reason": "过短文本块",
+                "text": text,
+            })
+        if re.search(r"[�□]{2,}", text):
+            suspicious.append({
+                "type": item.get("type"),
+                "page": int(item["page_idx"]) + 1 if isinstance(item.get("page_idx"), int) else None,
+                "reason": "疑似乱码",
+                "text": text[:120],
+            })
+        if len(suspicious) >= 50:
+            break
+
+    pages = sorted(page_counter)
+    missing_pages = []
+    if pages:
+        missing_pages = [page for page in range(pages[0], pages[-1] + 1) if page not in page_counter]
+
+    avg_text_len = int(sum(len(item) for item in text_items) / len(text_items)) if text_items else 0
+    score = 100
+    if not markdown.strip():
+        score -= 50
+    if len(content_list) < 20:
+        score -= 20
+    if suspicious:
+        score -= min(25, len(suspicious))
+    if missing_pages:
+        score -= min(15, len(missing_pages))
+
+    return {
+        "quality_score": max(0, score),
+        "markdown_chars": len(markdown),
+        "content_blocks": len(content_list),
+        "page_count": len(page_counter),
+        "block_type_counts": dict(type_counter),
+        "avg_text_block_length": avg_text_len,
+        "pages": [
+            {"page": page, "blocks": page_counter[page]}
+            for page in pages[:300]
+        ],
+        "missing_pages": missing_pages[:50],
+        "suspicious_blocks": suspicious,
+        "artifacts": {
+            "markdown_path": artifacts.get("markdown_path"),
+            "content_list_path": artifacts.get("content_list_path"),
+            "model_path": artifacts.get("model_path"),
+            "middle_path": artifacts.get("middle_path"),
+            "zip_path": artifacts.get("zip_path"),
+        },
+        "checklist": [
+            {"label": "Markdown 正文已生成", "ok": bool(markdown.strip())},
+            {"label": "内容块已识别", "ok": len(content_list) > 0},
+            {"label": "表格/图片结构已保留", "ok": any(k in type_counter for k in ["table", "image", "table_body"])},
+            {"label": "页码连续性正常", "ok": not missing_pages},
+            {"label": "未发现明显乱码/空块", "ok": not suspicious},
+        ],
+    }
+
+
 def extract_requirements(markdown: str, content_list: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -258,8 +393,25 @@ def build_analysis_summary(
     chapter_suggestions: list[dict[str, Any]],
 ) -> dict[str, Any]:
     type_counter = Counter(str(item.get("type") or "unknown") for item in content_list)
+    project_meta = extract_project_meta(markdown)
+    interpretation_report = build_interpretation_report(
+        project_meta=project_meta,
+        requirements=requirements,
+        scoring_items=scoring_items,
+        risks=risks,
+        chapter_suggestions=chapter_suggestions,
+    )
+    mineru_quality = build_mineru_quality_report(
+        markdown=markdown,
+        content_list=content_list,
+        artifacts=artifacts,
+    )
     return {
-        "project_meta": extract_project_meta(markdown),
+        "project_meta": {
+            **project_meta,
+            "interpretation_report": interpretation_report,
+            "mineru_quality": mineru_quality,
+        },
         "qualification_requirements": [item for item in requirements if item["requirement_type"] == "资格要求"][:30],
         "document_checklist": [item for item in requirements if item["requirement_type"] == "文件要求"][:30],
         "scoring_items": scoring_items[:40],

@@ -370,6 +370,8 @@ http://<服务器地址>:3012/bidding
 * 已优化请求 Loading 体验：全局 API 请求不再遮挡整个浏览器页面，Loading 仅覆盖右侧主内容区，顶部 Header、左侧菜单和底部 Footer 保持可见可操作。
 * 已新增 **招标文件解读** 页面 `/interpretation`：展示 Supabase 中已落库的项目概况、要求条款、风险项、评分项、建议章节和原文分片。
 * 已在左侧菜单新增“招标解读”入口，默认加载最新一条已完成结构化落库的招标项目。
+* 已在招标解读页新增 **AI解读报告** 与 **MinerU校验** 视图：业务人员优先阅读连贯报告，实施/标书人员可检查 Markdown、内容块、页码、类型统计和可疑 OCR 片段。
+* 已在招标解读页接入“生成AI深度解读”按钮：调用后端 Qwen 接口生成业务顾问式报告，成功后自动刷新并优先展示大模型报告。
 * 已完成 `npm install` 和 `npm run build`，生成 `frontend/dist/` 构建产物。
 
 ### 管理模块页面
@@ -421,6 +423,11 @@ http://<服务器地址>:3012/bidding
 * 已新增 `POST /api/bidding/parse-status/<file_id>/ingest`：用于对已完成 MinerU 解析的历史任务手动触发 Supabase 落库。
 * 已新增 `GET /api/bidding/interpretations/latest`：返回最近一条已完成结构化落库的招标解读数据。
 * 已新增 `GET /api/bidding/interpretations/<project_id>`：按项目返回招标解读数据，供前端详情页展示。
+* 已新增 `POST /api/bidding/interpretations/<project_id>/ai-report`：读取已落库的项目概况、要求条款、风险项、评分项和建议章节，调用 Qwen 生成深度招标解读报告，并写回 `bid_analysis.project_meta.ai_report`。
+* 已新增规则版 `interpretation_report`：生成一页式摘要、资格核查重点、商务/技术响应重点、评分响应策略、重点风险提示、建议章节和下一步动作，写入 `bid_analysis.project_meta`。
+* 已新增 `ai_interpreter.py`：封装大模型深度解读提示词、固定 JSON 输出解析和 Supabase 写回逻辑；输入采用结构化条款数据，不直接把整份 `full.md` 送入模型，以降低成本并提升稳定性。
+* 已新增 `mineru_quality`：记录解析质量分、Markdown 字符数、内容块数量、页数、块类型统计、检查清单、可疑解析片段和解析产物路径，供非技术人员判断 MinerU 分片和 OCR 是否合适。
+* 已用真实项目完成 Qwen 深度解读接口验证，成功生成 `executive_summary`、`project_brief`、`qualification_review`、`scoring_strategy`、`risk_warnings`、`document_plan`、`material_checklist`、`next_actions` 等结构化报告字段。
 * 当前落库目标表：
   * `bid_analysis`：保存项目概况、资格要求、文件清单、评分项、风险项、章节建议等 JSONB 汇总。
   * `bid_requirements`：保存资格、商务、技术、文件要求等明细。

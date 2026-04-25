@@ -21,6 +21,78 @@ export interface BidAnalysis {
   summary?: string | null;
 }
 
+export interface InterpretationReport {
+  title?: string;
+  executive_summary?: string[];
+  qualification_focus?: string[];
+  business_focus?: string[];
+  technical_focus?: string[];
+  scoring_strategy?: string[];
+  risk_focus?: string[];
+  chapter_plan?: string[];
+  next_actions?: string[];
+}
+
+export interface AIInterpretationReport {
+  executive_summary?: string[];
+  project_brief?: {
+    project_name?: string;
+    tender_no?: string;
+    procurement_scope?: string;
+    key_deadlines?: string[];
+    core_conclusion?: string;
+  };
+  qualification_review?: Array<{
+    requirement?: string;
+    judgement?: string;
+    evidence?: string;
+    source_page?: number | null;
+    action?: string;
+  }>;
+  scoring_strategy?: Array<{
+    scoring_point?: string;
+    score?: number | null;
+    strategy?: string;
+    supporting_materials?: string[];
+    source_page?: number | null;
+  }>;
+  risk_warnings?: Array<{
+    risk_level?: string;
+    risk?: string;
+    impact?: string;
+    source_page?: number | null;
+    mitigation?: string;
+  }>;
+  document_plan?: Array<{
+    chapter?: string;
+    purpose?: string;
+    key_points?: string[];
+    related_requirements?: string[];
+  }>;
+  material_checklist?: Array<{
+    material?: string;
+    category?: string;
+    required?: boolean;
+    owner?: string;
+    note?: string;
+  }>;
+  next_actions?: string[];
+}
+
+export interface MinerUQuality {
+  quality_score?: number;
+  markdown_chars?: number;
+  content_blocks?: number;
+  page_count?: number;
+  block_type_counts?: Record<string, number>;
+  avg_text_block_length?: number;
+  pages?: Array<{ page: number; blocks: number }>;
+  missing_pages?: number[];
+  suspicious_blocks?: Array<{ type?: string; page?: number | null; reason?: string; text?: string }>;
+  checklist?: Array<{ label: string; ok: boolean }>;
+  artifacts?: Record<string, string | null>;
+}
+
 export interface RequirementItem {
   id: string;
   requirement_type?: string | null;
