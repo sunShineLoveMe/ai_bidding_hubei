@@ -166,10 +166,33 @@ textarea {
   margin: 0;
 }
 
+.interpretation-shell {
+  display: grid;
+  min-height: 100%;
+  grid-template-rows: 96px 96px auto auto 1fr;
+  gap: 14px;
+  padding-bottom: 20px;
+}
+
+.interpretation-main {
+  overflow: visible;
+}
+
+.interpretation-main .ant-tabs-content-holder {
+  min-height: 0;
+}
+
+.interpretation-note {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: #475569;
+}
+
 .global-loading {
-  position: fixed;
+  position: absolute;
   inset: 0;
-  z-index: 9999;
+  z-index: 20;
   display: grid;
   place-items: center;
   background: rgba(245, 247, 251, 0.58);

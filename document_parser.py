@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from bid_interpreter import ingest_mineru_artifacts_to_supabase
 from db_supabase import update_bid_file_parse_status
 from file_to_chroma import EmptyDocumentContentError, file_to_chroma
 from mineru_client import (
@@ -61,6 +62,37 @@ def _vectorize_markdown(markdown_path: str | None, parse_id: str, supabase_file_
     file_to_chroma(markdown_path)
     _update_supabase_status(supabase_file_id, "indexed")
     write_parse_status(parse_id, {"parse_status": "indexed", "indexed_source": markdown_path})
+
+
+def ingest_artifacts(parse_id: str, artifacts: dict[str, Any]) -> None:
+    status = read_parse_status(parse_id) or {}
+    project_id = status.get("project_id")
+    bid_file_id = status.get("supabase_file_id")
+    if not project_id:
+        write_parse_status(parse_id, {
+            "supabase_ingest_status": "skipped",
+            "supabase_ingest_reason": "project_id is missing",
+        })
+        return
+
+    write_parse_status(parse_id, {"supabase_ingest_status": "running"})
+    try:
+        result = ingest_mineru_artifacts_to_supabase(
+            parse_id=parse_id,
+            project_id=project_id,
+            bid_file_id=bid_file_id,
+            artifacts=artifacts,
+        )
+        write_parse_status(parse_id, {
+            "supabase_ingest_status": "done",
+            "supabase_ingest_result": result,
+        })
+    except Exception as e:
+        logging.exception("MinerU 解析产物写入 Supabase 失败: %s", parse_id)
+        write_parse_status(parse_id, {
+            "supabase_ingest_status": "failed",
+            "supabase_ingest_error": str(e),
+        })
 
 
 def _extract_done_result(batch_data: dict[str, Any], parse_id: str) -> dict[str, Any] | None:
@@ -137,6 +169,7 @@ def _run_mineru_parse_and_index(
     )
     artifacts = download_and_extract_zip(full_zip_url, output_dir)
     write_parse_status(parse_id, {"parse_status": "mineru_done", "artifacts": artifacts})
+    ingest_artifacts(parse_id, artifacts)
     _vectorize_markdown(artifacts.get("markdown_path"), parse_id, supabase_file_id)
 
 
@@ -170,6 +203,7 @@ def retry_mineru_result_download(parse_id: str) -> None:
 
         artifacts = download_and_extract_zip(full_zip_url, PARSED_OUTPUT_ROOT / parse_id)
         write_parse_status(parse_id, {"parse_status": "mineru_done", "artifacts": artifacts})
+        ingest_artifacts(parse_id, artifacts)
         _vectorize_markdown(artifacts.get("markdown_path"), parse_id, supabase_file_id)
     except Exception as e:
         logging.exception("MinerU 结果下载重试失败: %s", parse_id)
@@ -184,6 +218,7 @@ def import_mineru_result_zip(parse_id: str, zip_file_path: str | Path) -> dict[s
     write_parse_status(parse_id, {"parse_status": "mineru_importing_zip"})
     artifacts = extract_zip_artifacts(zip_file_path, output_dir)
     write_parse_status(parse_id, {"parse_status": "mineru_done", "artifacts": artifacts})
+    ingest_artifacts(parse_id, artifacts)
     _vectorize_markdown(artifacts.get("markdown_path"), parse_id, supabase_file_id)
     return artifacts
 

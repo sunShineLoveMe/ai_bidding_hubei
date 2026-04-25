@@ -1,5 +1,6 @@
 import { apiClient } from './client';
 import type { GenerateBidDocumentResponse, ParseStatusResponse, UploadResponse } from '../types/bid';
+import type { InterpretationResponse } from '../types/interpretation';
 
 export async function identifyUser(fingerprintId: string): Promise<{ userId: number; isNew: boolean }> {
   const response = await apiClient.post('/api/users/identify', { fingerprintId });
@@ -16,6 +17,16 @@ export async function uploadTenderFile(file: File, userId: number): Promise<Uplo
 
 export async function getParseStatus(fileId: string): Promise<ParseStatusResponse> {
   const response = await apiClient.get(`/api/bidding/parse-status/${fileId}`, { skipGlobalLoading: true });
+  return response.data;
+}
+
+export async function getLatestInterpretation(): Promise<InterpretationResponse> {
+  const response = await apiClient.get('/api/bidding/interpretations/latest');
+  return response.data;
+}
+
+export async function getInterpretation(projectId: string): Promise<InterpretationResponse> {
+  const response = await apiClient.get(`/api/bidding/interpretations/${projectId}`);
   return response.data;
 }
 

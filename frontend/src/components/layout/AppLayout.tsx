@@ -1,10 +1,12 @@
 import type { PropsWithChildren } from 'react';
-import { BookOpen, Box, FileClock, Home, Settings, ShieldCheck } from 'lucide-react';
+import { BookOpen, Box, FileClock, FileSearch, Home, Settings, ShieldCheck } from 'lucide-react';
 import { Button, Tag } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { GlobalLoading } from '../common/GlobalLoading';
 
 const navItems = [
   { path: '/', label: '主页', icon: Home },
+  { path: '/interpretation', label: '招标解读', icon: FileSearch },
   { path: '/knowledge', label: '企业知识库', icon: BookOpen },
   { path: '/qualification', label: '企业资信库', icon: ShieldCheck },
   { path: '/products', label: '企业产品库', icon: Box },
@@ -54,7 +56,10 @@ export function AppLayout({ children }: PropsWithChildren): JSX.Element {
         </nav>
       </aside>
 
-      <main className="fixed bottom-12 left-60 right-0 top-16 overflow-y-auto overflow-x-hidden p-5">{children}</main>
+      <main className="fixed bottom-12 left-60 right-0 top-16 overflow-y-auto overflow-x-hidden p-5">
+        {children}
+        <GlobalLoading />
+      </main>
 
       <footer className="fixed bottom-0 left-0 right-0 z-30 flex h-12 items-center justify-between border-t border-slate-200 bg-white px-7 text-sm font-semibold text-slate-500">
         <span>企业单机部署版 · 本地知识库驱动 · Word 导出</span>

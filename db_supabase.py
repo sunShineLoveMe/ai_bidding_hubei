@@ -94,3 +94,61 @@ def update_bid_file_parse_status(file_id: str, parse_status: str) -> None:
 def get_bid_file(file_id: str) -> dict[str, Any] | None:
     response = get_supabase_client().table("bid_files").select("*").eq("id", file_id).limit(1).execute()
     return response.data[0] if response.data else None
+
+
+def replace_project_rows(table: str, project_id: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    client = get_supabase_client()
+    client.table(table).delete().eq("project_id", project_id).execute()
+    if not rows:
+        return []
+    response = client.table(table).insert(rows).execute()
+    return response.data or []
+
+
+def replace_bid_analysis(project_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    rows = replace_project_rows("bid_analysis", project_id, [payload])
+    return rows[0] if rows else None
+
+
+def list_recent_bid_projects(limit: int = 20) -> list[dict[str, Any]]:
+    response = (
+        get_supabase_client()
+        .table("bid_projects")
+        .select("*")
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return response.data or []
+
+
+def get_project_interpretation(project_id: str) -> dict[str, Any]:
+    client = get_supabase_client()
+
+    project_response = client.table("bid_projects").select("*").eq("id", project_id).limit(1).execute()
+    project = project_response.data[0] if project_response.data else None
+
+    analysis_response = client.table("bid_analysis").select("*").eq("project_id", project_id).limit(1).execute()
+    analysis = analysis_response.data[0] if analysis_response.data else None
+
+    def select_many(table: str, order_column: str = "created_at", limit: int = 200) -> list[dict[str, Any]]:
+        return (
+            client.table(table)
+            .select("*")
+            .eq("project_id", project_id)
+            .order(order_column)
+            .limit(limit)
+            .execute()
+            .data
+            or []
+        )
+
+    return {
+        "project": project,
+        "analysis": analysis,
+        "requirements": select_many("bid_requirements"),
+        "risks": select_many("bid_risks"),
+        "scoringItems": select_many("bid_scoring_items"),
+        "chapterSuggestions": select_many("bid_chapter_suggestions"),
+        "documentChunks": select_many("document_chunks", "chunk_index", 80),
+    }
