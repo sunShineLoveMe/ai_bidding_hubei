@@ -229,6 +229,10 @@ textarea {
   padding: 14px;
 }
 
+.report-wide {
+  grid-column: 1 / -1;
+}
+
 .report-section h3,
 .quality-card h3 {
   margin: 0 0 10px;
@@ -242,6 +246,256 @@ textarea {
   padding-left: 18px;
   color: #334155;
   font-size: 13px;
+  font-weight: 650;
+  line-height: 1.65;
+}
+
+.brief-list {
+  display: grid;
+  gap: 10px;
+}
+
+.brief-list div {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 10px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.55;
+}
+
+.brief-list strong {
+  color: #111a33;
+}
+
+.ai-card-list {
+  display: grid;
+  gap: 10px;
+}
+
+.ai-evidence-card {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #e9eef8;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.ai-evidence-card > div,
+.ai-evidence-card footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ai-evidence-card strong {
+  min-width: 0;
+  flex: 1;
+  color: #111a33;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.ai-evidence-card p,
+.ai-evidence-card small,
+.muted-text {
+  margin: 0;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.65;
+}
+
+.ai-evidence-card footer span {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.source-drawer {
+  display: grid;
+  gap: 18px;
+}
+
+.source-drawer h3 {
+  margin: 0;
+  color: #111a33;
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1.45;
+}
+
+.source-drawer h4 {
+  margin: 0 0 8px;
+  color: #111a33;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.source-drawer section {
+  border: 1px solid #e8edf7;
+  border-radius: 12px;
+  background: #fbfcff;
+  padding: 14px;
+}
+
+.source-drawer section > p,
+.chunk-preview p {
+  margin: 0;
+  white-space: pre-wrap;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.75;
+}
+
+.chunk-preview {
+  display: grid;
+  width: 100%;
+  gap: 8px;
+}
+
+.chunk-preview div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.chunk-preview strong {
+  color: #2563eb;
+}
+
+.outline-empty {
+  display: grid;
+  min-height: 260px;
+  place-items: center;
+  gap: 14px;
+}
+
+.outline-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.outline-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  border-radius: 14px;
+  background: linear-gradient(110deg, #f1f8ff 0%, #fbfdff 100%);
+  padding: 16px;
+}
+
+.outline-summary span {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.outline-summary h3 {
+  margin: 5px 0;
+  color: #111a33;
+  font-size: 20px;
+  font-weight: 900;
+}
+
+.outline-summary p {
+  margin: 0;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.65;
+}
+
+.outline-chapters {
+  display: grid;
+  gap: 12px;
+}
+
+.outline-chapter-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid #e8edf7;
+  border-radius: 14px;
+  background: #fbfcff;
+  padding: 14px;
+}
+
+.outline-chapter-card header,
+.outline-chapter-card footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.outline-chapter-card header > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.outline-chapter-card header span {
+  display: inline-grid;
+  height: 30px;
+  min-width: 30px;
+  place-items: center;
+  border-radius: 8px;
+  background: #eaf2ff;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.outline-chapter-card h3 {
+  margin: 0;
+  color: #111a33;
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.outline-chapter-card > p {
+  margin: 0;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.7;
+}
+
+.outline-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.outline-detail-grid section {
+  min-height: 118px;
+  border: 1px solid #edf1f8;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.outline-detail-grid h4 {
+  margin: 0 0 8px;
+  color: #111a33;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.outline-detail-grid ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #334155;
+  font-size: 12px;
   font-weight: 650;
   line-height: 1.65;
 }

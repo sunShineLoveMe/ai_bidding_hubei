@@ -16,6 +16,7 @@ import codecs
 import PyPDF2
 from qwen_client import call_dashscope_api, generate_bid_section
 from md_to_word import convert_md_to_word
+from ai_chapter_planner import generate_bid_outline
 from ai_interpreter import generate_ai_interpretation_report
 from db_supabase import get_bid_file, get_project_interpretation, list_recent_bid_projects, sync_uploaded_tender_to_supabase
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -388,6 +389,23 @@ def generate_interpretation_ai_report(project_id):
     except Exception as e:
         logging.exception("生成 AI 深度解读报告失败: %s", project_id)
         return jsonify({'error': f'生成 AI 深度解读报告失败: {str(e)}'}), 500
+
+@bp.route('/interpretations/<project_id>/bid-outline', methods=['POST'])
+def generate_interpretation_bid_outline(project_id):
+    """生成并保存标书章节目录与章节大纲。"""
+    try:
+        uuid.UUID(project_id)
+        outline = generate_bid_outline(project_id)
+        return jsonify({
+            'message': '标书章节大纲已生成。',
+            'projectId': project_id,
+            'bidOutline': outline,
+        })
+    except ValueError:
+        return jsonify({'error': 'project_id 不是合法 UUID。'}), 400
+    except Exception as e:
+        logging.exception("生成标书章节大纲失败: %s", project_id)
+        return jsonify({'error': f'生成标书章节大纲失败: {str(e)}'}), 500
      
 @bp.route('/save-callback', methods=['POST'])
 def save_callback():

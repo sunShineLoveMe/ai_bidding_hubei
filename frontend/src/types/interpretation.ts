@@ -33,6 +33,31 @@ export interface InterpretationReport {
   next_actions?: string[];
 }
 
+export interface BidOutlineChapter {
+  order?: number;
+  title?: string;
+  priority?: 'high' | 'medium' | 'low' | string;
+  purpose?: string;
+  response_points?: string[];
+  mapped_requirements?: string[];
+  mapped_scoring_items?: string[];
+  mapped_risks?: string[];
+  source_pages?: number[];
+  required_materials?: string[];
+  writing_notes?: string[];
+}
+
+export interface BidOutline {
+  version?: string;
+  generated_at?: string;
+  model?: string;
+  project_name?: string;
+  tender_no?: string;
+  summary?: string;
+  chapters?: BidOutlineChapter[];
+  next_steps?: string[];
+}
+
 export interface AIInterpretationReport {
   executive_summary?: string[];
   project_brief?: {
@@ -55,12 +80,14 @@ export interface AIInterpretationReport {
     strategy?: string;
     supporting_materials?: string[];
     source_page?: number | null;
+    evidence?: string;
   }>;
   risk_warnings?: Array<{
     risk_level?: string;
     risk?: string;
     impact?: string;
     source_page?: number | null;
+    evidence?: string;
     mitigation?: string;
   }>;
   document_plan?: Array<{
@@ -101,6 +128,7 @@ export interface RequirementItem {
   priority?: string | null;
   source_section?: string | null;
   source_page?: number | null;
+  source_text?: string | null;
 }
 
 export interface RiskItem {
@@ -111,6 +139,7 @@ export interface RiskItem {
   action?: string | null;
   source_section?: string | null;
   source_page?: number | null;
+  source_text?: string | null;
 }
 
 export interface ScoringItem {
@@ -123,6 +152,7 @@ export interface ScoringItem {
   target_chapter?: string | null;
   source_section?: string | null;
   source_page?: number | null;
+  source_text?: string | null;
 }
 
 export interface ChapterSuggestion {
@@ -138,6 +168,7 @@ export interface DocumentChunk {
   content: string;
   source_page?: number | null;
   source_section?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface InterpretationResponse {

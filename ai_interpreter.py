@@ -41,17 +41,17 @@ def _build_prompt(payload: dict[str, Any]) -> str:
         },
         "requirements": _compact_items(
             payload.get("requirements") or [],
-            ["requirement_type", "priority", "content", "source_section", "source_page"],
+            ["requirement_type", "priority", "content", "source_section", "source_page", "source_text"],
             70,
         ),
         "risks": _compact_items(
             payload.get("risks") or [],
-            ["risk_level", "risk_type", "content", "action", "source_section", "source_page"],
+            ["risk_level", "risk_type", "content", "action", "source_section", "source_page", "source_text"],
             50,
         ),
         "scoring_items": _compact_items(
             payload.get("scoringItems") or [],
-            ["category", "item", "score", "requirement", "response_suggestion", "source_page"],
+            ["category", "item", "score", "requirement", "response_suggestion", "source_page", "source_text"],
             40,
         ),
         "chapter_suggestions": _compact_items(
@@ -69,7 +69,7 @@ def _build_prompt(payload: dict[str, Any]) -> str:
 要求：
 1. 不要复述系统处理过程，不要提 MinerU、OCR、分片。
 2. 不要编造原文没有的信息；不确定的地方明确写“需人工复核”。
-3. 每个重点建议尽量带来源页码或来源章节。
+3. 每个重点建议尽量带来源页码，并在 evidence 字段引用压缩后的原文依据，不要只给结论。
 4. 输出必须是严格 JSON，不要 Markdown，不要代码块。
 5. JSON 字段必须与下面格式一致。
 
@@ -84,13 +84,13 @@ def _build_prompt(payload: dict[str, Any]) -> str:
     "core_conclusion": "..."
   }},
   "qualification_review": [
-    {{"requirement": "...", "judgement": "需准备/需复核/风险较高", "evidence": "...", "source_page": 1, "action": "..."}}
+    {{"requirement": "...", "judgement": "需准备/需复核/风险较高", "evidence": "对应原文依据或来源章节", "source_page": 1, "action": "..."}}
   ],
   "scoring_strategy": [
-    {{"scoring_point": "...", "score": null, "strategy": "...", "supporting_materials": ["..."], "source_page": 1}}
+    {{"scoring_point": "...", "score": null, "strategy": "...", "supporting_materials": ["..."], "source_page": 1, "evidence": "对应原文依据或来源章节"}}
   ],
   "risk_warnings": [
-    {{"risk_level": "high/medium/low", "risk": "...", "impact": "...", "source_page": 1, "mitigation": "..."}}
+    {{"risk_level": "high/medium/low", "risk": "...", "impact": "...", "source_page": 1, "evidence": "对应原文依据或来源章节", "mitigation": "..."}}
   ],
   "document_plan": [
     {{"chapter": "...", "purpose": "...", "key_points": ["..."], "related_requirements": ["..."]}}

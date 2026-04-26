@@ -16,7 +16,7 @@
 * **前端路由:** React Router
 * **前端服务端状态:** TanStack Query
 * **前端全局状态:** Zustand
-* **前端请求体验:** Axios 拦截器 + Zustand 全局请求计数 + Ant Design Spin，所有通过统一 API 客户端发起的请求都会展示全局 Loading
+* **前端请求体验:** Axios 拦截器 + Zustand 请求计数 + Ant Design Spin，统一 API 请求会在当前内容区域展示 Loading，不遮挡固定 Header、侧边栏和 Footer
 * **前端编辑器预留:** TipTap，用于后续章节正文编辑器能力
 * **前端接口调用:** Axios + FormData，直接调用 `/api/users/*`、`/api/bidding/*`、`/api/outputs/*`
 * **前端资源管理:** `frontend/public/assets/` 与 Vite 构建资源，生产环境由 Flask `/assets/<filename>` 路由托管
@@ -67,7 +67,10 @@ lucide-react
 * 已完成首页工作台、左侧菜单、顶部 Header、底部 Footer 固定布局。
 * 已完成企业知识库、企业资信库、企业产品库、系统设置页面。
 * 已清理前端演示 Mock 数据，支持进入真实上传与解析测试。
-* 已新增全局请求 Loading：所有通过 `frontend/src/api/client.ts` 发起的请求均会自动显示处理中状态，避免上传、解析、生成等长耗时操作无反馈。
+* 已新增内容区请求 Loading：所有通过 `frontend/src/api/client.ts` 发起的请求均会自动显示处理中状态，避免上传、解析、生成等长耗时操作无反馈，同时不遮挡固定 Header、侧边栏和 Footer。
+* 已新增招标解读页原文溯源：要求条款、风险项、评分项、原文分片和 AI 报告重点项均可查看页码、章节、直接依据和同页 MinerU 分片。
+* 已优化 AI 深度解读展示结构：按一页式摘要、项目关键信息、关键节点、资格核查、评分策略、废标风险、编制建议、材料清单和下一步动作分区展示。
+* 已新增标书章节大纲生成：基于招标解读结果生成投标文件章节目录、章节目标、响应要点、关联要求、评分/风险映射、准备资料和写作注意事项。
 
 ## 📁 核心目录结构
 
@@ -372,6 +375,9 @@ http://<服务器地址>:3012/bidding
 * 已在左侧菜单新增“招标解读”入口，默认加载最新一条已完成结构化落库的招标项目。
 * 已在招标解读页新增 **AI解读报告** 与 **MinerU校验** 视图：业务人员优先阅读连贯报告，实施/标书人员可检查 Markdown、内容块、页码、类型统计和可疑 OCR 片段。
 * 已在招标解读页接入“生成AI深度解读”按钮：调用后端 Qwen 接口生成业务顾问式报告，成功后自动刷新并优先展示大模型报告。
+* 已增强招标解读页原文溯源：结构化条款表格和 AI 报告卡片均支持打开“原文依据”抽屉，展示来源页码、章节、保存的 `source_text` 以及同页 MinerU 分片，方便非技术人员核对 AI 结论是否可信。
+* 已优化 AI 深度解读阅读结构：从普通列表升级为业务分区和证据卡片，重点突出资格符合性、评分高分策略、废标/否决风险、材料准备和下一步动作。
+* 已新增“生成章节大纲”按钮与“标书章节”Tab：章节大纲生成后写入 `bid_analysis.project_meta.bid_outline`，前端展示章节目录、响应要点、关联要求、评分/风险、准备资料、来源页码和后续动作。
 * 已完成 `npm install` 和 `npm run build`，生成 `frontend/dist/` 构建产物。
 
 ### 管理模块页面
@@ -424,6 +430,9 @@ http://<服务器地址>:3012/bidding
 * 已新增 `GET /api/bidding/interpretations/latest`：返回最近一条已完成结构化落库的招标解读数据。
 * 已新增 `GET /api/bidding/interpretations/<project_id>`：按项目返回招标解读数据，供前端详情页展示。
 * 已新增 `POST /api/bidding/interpretations/<project_id>/ai-report`：读取已落库的项目概况、要求条款、风险项、评分项和建议章节，调用 Qwen 生成深度招标解读报告，并写回 `bid_analysis.project_meta.ai_report`。
+* 已调整 AI 解读提示词：将 `source_text` 原文依据纳入大模型上下文，要求资格核查、评分策略和风险提示尽量输出来源页码与 evidence 字段，降低只给结论但无法复核的问题。
+* 已新增 `ai_chapter_planner.py`：基于已落库的要求条款、评分项、风险项、章节建议和 AI 解读结果生成标书章节大纲，并写回 Supabase `bid_analysis.project_meta.bid_outline`。
+* 已新增 `POST /api/bidding/interpretations/<project_id>/bid-outline`：用于触发标书章节大纲生成，作为后续单章节正文生成和 Word 导出的输入。
 * 已新增规则版 `interpretation_report`：生成一页式摘要、资格核查重点、商务/技术响应重点、评分响应策略、重点风险提示、建议章节和下一步动作，写入 `bid_analysis.project_meta`。
 * 已新增 `ai_interpreter.py`：封装大模型深度解读提示词、固定 JSON 输出解析和 Supabase 写回逻辑；输入采用结构化条款数据，不直接把整份 `full.md` 送入模型，以降低成本并提升稳定性。
 * 已新增 `mineru_quality`：记录解析质量分、Markdown 字符数、内容块数量、页数、块类型统计、检查清单、可疑解析片段和解析产物路径，供非技术人员判断 MinerU 分片和 OCR 是否合适。

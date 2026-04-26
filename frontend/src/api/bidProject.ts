@@ -35,6 +35,11 @@ export async function generateAIInterpretation(projectId: string): Promise<unkno
   return response.data;
 }
 
+export async function generateBidOutline(projectId: string): Promise<unknown> {
+  const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/bid-outline`);
+  return response.data;
+}
+
 export async function preAnalyzeBid(biddingId: number): Promise<unknown> {
   const response = await apiClient.post('/api/bidding/pre-analysis_bid', { biddingId });
   return response.data;
