@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Descriptions, Drawer, Empty, List, Progress, Space, Table, Tabs, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { AlertTriangle, BrainCircuit, CheckCircle2, ClipboardCheck, Eye, FileSearch, FileText, ListChecks, RefreshCw, ShieldAlert, XCircle } from 'lucide-react';
-import { generateAIInterpretation, generateBidOutline, getLatestInterpretation } from '../../api/bidProject';
+import { useNavigate } from 'react-router-dom';
+import { generateAIInterpretation, getLatestInterpretation } from '../../api/bidProject';
 import { MetricCards } from '../../components/common/MetricCards';
 import { ModuleHeader } from '../../components/common/ModuleHeader';
 import type {
@@ -89,6 +90,7 @@ function SourceButton({ onClick }: { onClick: () => void }): JSX.Element {
 }
 
 export function InterpretationPage(): JSX.Element {
+  const navigate = useNavigate();
   const [data, setData] = useState<InterpretationResponse | null>(null);
   const [generatingAI, setGeneratingAI] = useState(false);
   const [generatingOutline, setGeneratingOutline] = useState(false);
@@ -262,12 +264,7 @@ export function InterpretationPage(): JSX.Element {
     }
     setGeneratingOutline(true);
     try {
-      await generateBidOutline(data.project.id);
-      message.success('标书章节大纲已生成');
-      await load();
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      message.error(reason);
+      navigate(`/bid-editor?projectId=${data.project.id}&autoGenerate=outline`);
     } finally {
       setGeneratingOutline(false);
     }

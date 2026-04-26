@@ -6,6 +6,7 @@ from datetime import datetime
 from unidecode import unidecode
 from werkzeug.utils import secure_filename
 import logging
+import json
 
 # 通义千问API配置
 DASHSCOPE_API_KEY = os.getenv('DASHSCOPE_API_KEY')
@@ -40,6 +41,60 @@ def call_dashscope_api(messages, model=None, json_mode=True):
         print(error_message)
     response.raise_for_status()
     return response.json()
+
+
+def stream_dashscope_api(messages, model=None):
+    """Stream DashScope text generation chunks.
+
+    DashScope's SSE response usually emits lines prefixed with "data:".
+    The parser is intentionally tolerant so local deployments can fall back
+    cleanly if the provider response shape changes.
+    """
+    if not DASHSCOPE_API_KEY:
+        raise Exception("DASHSCOPE_API_KEY is not set")
+
+    url = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation'
+    headers = {
+        'Authorization': f'Bearer {DASHSCOPE_API_KEY}',
+        'Content-Type': 'application/json',
+        'X-DashScope-SSE': 'enable',
+    }
+    data = {
+        'model': model or DASHSCOPE_MODEL,
+        'input': {
+            'messages': messages
+        },
+        'parameters': {
+            'result_format': 'message',
+            'incremental_output': True,
+        },
+    }
+
+    with requests.post(url, headers=headers, json=data, stream=True, timeout=(15, 180)) as response:
+        if response.status_code != 200:
+            error_message = f"Dashscope Stream API Error: Status Code: {response.status_code}, Response Body: {response.text}"
+            logging.error(error_message)
+        response.raise_for_status()
+        for raw_line in response.iter_lines(decode_unicode=True):
+            if not raw_line:
+                continue
+            line = raw_line.strip()
+            if line.startswith("data:"):
+                line = line[5:].strip()
+            if not line or line == "[DONE]":
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            message = (
+                payload.get("output", {})
+                .get("choices", [{}])[0]
+                .get("message", {})
+            )
+            content = message.get("content")
+            if content:
+                yield content
 
 def generate_bid_section(section_title, section_content, tender_content):
     """按小节生成投标文件内容"""

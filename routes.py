@@ -1,5 +1,5 @@
 import logging
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, Response, stream_with_context
 import os
 import sqlite3
 import uuid
@@ -16,9 +16,10 @@ import codecs
 import PyPDF2
 from qwen_client import call_dashscope_api, generate_bid_section
 from md_to_word import convert_md_to_word
-from ai_chapter_planner import generate_bid_outline
+from ai_chapter_planner import generate_bid_outline, stream_bid_outline
+from ai_section_writer import stream_bid_section
 from ai_interpreter import generate_ai_interpretation_report
-from db_supabase import get_bid_file, get_project_interpretation, list_recent_bid_projects, sync_uploaded_tender_to_supabase
+from db_supabase import delete_bid_section, get_bid_file, get_project_interpretation, list_bid_sections, list_recent_bid_projects, sync_uploaded_tender_to_supabase, update_bid_section_content, upsert_bid_section
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import shutil
@@ -406,6 +407,111 @@ def generate_interpretation_bid_outline(project_id):
     except Exception as e:
         logging.exception("生成标书章节大纲失败: %s", project_id)
         return jsonify({'error': f'生成标书章节大纲失败: {str(e)}'}), 500
+
+@bp.route('/interpretations/<project_id>/bid-outline/stream', methods=['GET'])
+def stream_interpretation_bid_outline(project_id):
+    """以 SSE 方式逐章生成并保存标书章节大纲。"""
+    try:
+        uuid.UUID(project_id)
+    except ValueError:
+        return jsonify({'error': 'project_id 不是合法 UUID。'}), 400
+
+    def event_stream():
+        try:
+            for event in stream_bid_outline(project_id):
+                event_type = event.pop("type", "message")
+                yield f"event: {event_type}\n"
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            logging.exception("流式生成标书章节大纲失败: %s", project_id)
+            yield "event: error\n"
+            yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+
+    return Response(
+        stream_with_context(event_stream()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        },
+    )
+
+@bp.route('/interpretations/<project_id>/sections/stream', methods=['POST'])
+def stream_interpretation_bid_section(project_id):
+    """以 SSE 方式生成单个标书章节正文。"""
+    try:
+        uuid.UUID(project_id)
+    except ValueError:
+        return jsonify({'error': 'project_id 不是合法 UUID。'}), 400
+
+    chapter = request.get_json(silent=True) or {}
+    if not chapter.get("title"):
+        return jsonify({'error': '缺少章节标题。'}), 400
+
+    def event_stream():
+        full_content = f"## {chapter.get('title') or '未命名章节'}\n\n"
+        try:
+            for event in stream_bid_section(project_id, chapter):
+                event_type = event.pop("type", "message")
+                if event_type == "chunk":
+                    full_content += event.get("content", "")
+                if event_type == "done" and chapter.get("id"):
+                    update_bid_section_content(project_id, chapter["id"], full_content, "generated")
+                yield f"event: {event_type}\n"
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            logging.exception("流式生成章节正文失败: %s", project_id)
+            yield "event: error\n"
+            yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+
+    return Response(
+        stream_with_context(event_stream()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        },
+    )
+
+@bp.route('/interpretations/<project_id>/sections', methods=['GET'])
+def get_bid_sections(project_id):
+    """查询项目标书章节。"""
+    try:
+        uuid.UUID(project_id)
+        return jsonify({"sections": list_bid_sections(project_id)})
+    except ValueError:
+        return jsonify({'error': 'project_id 不是合法 UUID。'}), 400
+    except Exception as e:
+        logging.exception("查询标书章节失败: %s", project_id)
+        return jsonify({'error': f'查询标书章节失败: {str(e)}'}), 500
+
+@bp.route('/interpretations/<project_id>/sections', methods=['POST'])
+def save_bid_section_api(project_id):
+    """新增或更新单个标书章节。"""
+    try:
+        uuid.UUID(project_id)
+        section = request.get_json(force=True)
+        saved = upsert_bid_section(project_id, section)
+        return jsonify({"section": saved})
+    except ValueError:
+        return jsonify({'error': 'project_id 不是合法 UUID。'}), 400
+    except Exception as e:
+        logging.exception("保存标书章节失败: %s", project_id)
+        return jsonify({'error': f'保存标书章节失败: {str(e)}'}), 500
+
+@bp.route('/interpretations/<project_id>/sections/<section_id>', methods=['DELETE'])
+def remove_bid_section(project_id, section_id):
+    """删除单个标书章节。"""
+    try:
+        uuid.UUID(project_id)
+        uuid.UUID(section_id)
+        delete_bid_section(project_id, section_id)
+        return jsonify({"message": "章节已删除。"})
+    except ValueError:
+        return jsonify({'error': 'project_id 或 section_id 不是合法 UUID。'}), 400
+    except Exception as e:
+        logging.exception("删除标书章节失败: %s", project_id)
+        return jsonify({'error': f'删除标书章节失败: {str(e)}'}), 500
      
 @bp.route('/save-callback', methods=['POST'])
 def save_callback():

@@ -1,6 +1,6 @@
 import { apiClient } from './client';
 import type { GenerateBidDocumentResponse, ParseStatusResponse, UploadResponse } from '../types/bid';
-import type { InterpretationResponse } from '../types/interpretation';
+import type { BidSection, InterpretationResponse } from '../types/interpretation';
 
 export async function identifyUser(fingerprintId: string): Promise<{ userId: number; isNew: boolean }> {
   const response = await apiClient.post('/api/users/identify', { fingerprintId });
@@ -31,13 +31,35 @@ export async function getInterpretation(projectId: string): Promise<Interpretati
 }
 
 export async function generateAIInterpretation(projectId: string): Promise<unknown> {
-  const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/ai-report`);
+  const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/ai-report`, undefined, {
+    skipGlobalLoading: true,
+  });
   return response.data;
 }
 
 export async function generateBidOutline(projectId: string): Promise<unknown> {
-  const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/bid-outline`);
+  const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/bid-outline`, undefined, {
+    skipGlobalLoading: true,
+  });
   return response.data;
+}
+
+export async function getBidSections(projectId: string): Promise<BidSection[]> {
+  const response = await apiClient.get(`/api/bidding/interpretations/${projectId}/sections`);
+  return response.data.sections || [];
+}
+
+export async function saveBidSection(projectId: string, section: Partial<BidSection>): Promise<BidSection> {
+  const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/sections`, section, {
+    skipGlobalLoading: true,
+  });
+  return response.data.section;
+}
+
+export async function deleteBidSection(projectId: string, sectionId: string): Promise<void> {
+  await apiClient.delete(`/api/bidding/interpretations/${projectId}/sections/${sectionId}`, {
+    skipGlobalLoading: true,
+  });
 }
 
 export async function preAnalyzeBid(biddingId: number): Promise<unknown> {

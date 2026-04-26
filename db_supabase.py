@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import mimetypes
 import uuid
 from pathlib import Path
@@ -110,6 +111,78 @@ def replace_bid_analysis(project_id: str, payload: dict[str, Any]) -> dict[str, 
     return rows[0] if rows else None
 
 
+def _section_payload(project_id: str, section: dict[str, Any], index: int) -> dict[str, Any]:
+    return {
+        "project_id": project_id,
+        "parent_id": section.get("parent_id"),
+        "order_index": section.get("order_index") or section.get("order") or index + 1,
+        "level": section.get("level") or 1,
+        "title": section.get("title") or "未命名章节",
+        "status": section.get("status") or "draft",
+        "purpose": section.get("purpose"),
+        "response_points": section.get("response_points") or [],
+        "mapped_requirements": section.get("mapped_requirements") or [],
+        "mapped_scoring_items": section.get("mapped_scoring_items") or [],
+        "mapped_risks": section.get("mapped_risks") or [],
+        "required_materials": section.get("required_materials") or [],
+        "source_pages": section.get("source_pages") or [],
+        "writing_notes": section.get("writing_notes") or [],
+        "content": section.get("content") or "",
+        "metadata": section.get("metadata") or {},
+    }
+
+
+def replace_bid_sections_from_outline(project_id: str, outline: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = [
+        _section_payload(project_id, section, index)
+        for index, section in enumerate(outline.get("chapters") or [])
+    ]
+    return replace_project_rows("bid_sections", project_id, rows)
+
+
+def list_bid_sections(project_id: str) -> list[dict[str, Any]]:
+    response = (
+        get_supabase_client()
+        .table("bid_sections")
+        .select("*")
+        .eq("project_id", project_id)
+        .order("order_index")
+        .execute()
+    )
+    return response.data or []
+
+
+def upsert_bid_section(project_id: str, section: dict[str, Any]) -> dict[str, Any]:
+    payload = _section_payload(project_id, section, int(section.get("order_index") or section.get("order") or 1) - 1)
+    section_id = section.get("id")
+    client = get_supabase_client()
+    if section_id:
+        response = client.table("bid_sections").update(payload).eq("id", section_id).eq("project_id", project_id).execute()
+    else:
+        response = client.table("bid_sections").insert(payload).execute()
+    if not response.data:
+        raise RuntimeError("Supabase bid_sections upsert returned no data")
+    return response.data[0]
+
+
+def update_bid_section_content(project_id: str, section_id: str, content: str, status: str = "edited") -> dict[str, Any]:
+    response = (
+        get_supabase_client()
+        .table("bid_sections")
+        .update({"content": content, "status": status})
+        .eq("id", section_id)
+        .eq("project_id", project_id)
+        .execute()
+    )
+    if not response.data:
+        raise RuntimeError("章节不存在或保存失败")
+    return response.data[0]
+
+
+def delete_bid_section(project_id: str, section_id: str) -> None:
+    get_supabase_client().table("bid_sections").delete().eq("id", section_id).eq("project_id", project_id).execute()
+
+
 def list_recent_bid_projects(limit: int = 20) -> list[dict[str, Any]]:
     response = (
         get_supabase_client()
@@ -143,6 +216,12 @@ def get_project_interpretation(project_id: str) -> dict[str, Any]:
             or []
         )
 
+    try:
+        sections = list_bid_sections(project_id)
+    except Exception as exc:
+        logging.warning("bid_sections 查询失败，可能尚未执行建表 SQL: %s", exc)
+        sections = []
+
     return {
         "project": project,
         "analysis": analysis,
@@ -151,4 +230,5 @@ def get_project_interpretation(project_id: str) -> dict[str, Any]:
         "scoringItems": select_many("bid_scoring_items"),
         "chapterSuggestions": select_many("bid_chapter_suggestions"),
         "documentChunks": select_many("document_chunks", "chunk_index", 80),
+        "sections": sections,
     }

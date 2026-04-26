@@ -71,6 +71,7 @@ lucide-react
 * 已新增招标解读页原文溯源：要求条款、风险项、评分项、原文分片和 AI 报告重点项均可查看页码、章节、直接依据和同页 MinerU 分片。
 * 已优化 AI 深度解读展示结构：按一页式摘要、项目关键信息、关键节点、资格核查、评分策略、废标风险、编制建议、材料清单和下一步动作分区展示。
 * 已新增标书章节大纲生成：基于招标解读结果生成投标文件章节目录、章节目标、响应要点、关联要求、评分/风险映射、准备资料和写作注意事项。
+* 已新增标书编制工作台 `/bid-editor`：作为全屏核心编制页面独立于系统主菜单和主布局，提供左侧章节树、正文模式/目录模式、章节搜索、新增章节、仿 Office 中文工具栏和右侧正文编辑画布。
 
 ## 📁 核心目录结构
 
@@ -378,6 +379,9 @@ http://<服务器地址>:3012/bidding
 * 已增强招标解读页原文溯源：结构化条款表格和 AI 报告卡片均支持打开“原文依据”抽屉，展示来源页码、章节、保存的 `source_text` 以及同页 MinerU 分片，方便非技术人员核对 AI 结论是否可信。
 * 已优化 AI 深度解读阅读结构：从普通列表升级为业务分区和证据卡片，重点突出资格符合性、评分高分策略、废标/否决风险、材料准备和下一步动作。
 * 已新增“生成章节大纲”按钮与“标书章节”Tab：章节大纲生成后写入 `bid_analysis.project_meta.bid_outline`，前端展示章节目录、响应要点、关联要求、评分/风险、准备资料、来源页码和后续动作。
+* 已优化招标解读页长任务 Loading：生成 AI 深度解读、生成章节大纲只使用按钮级 Loading，不再触发内容区遮罩，避免长任务期间页面无法滚动或查看已有内容。
+* 已移除主菜单中的“标书编制”：标书编制工作台仅从具体项目进入，避免被当作普通管理模块。
+* 已新增章节大纲 SSE 流式生成：点击“生成章节大纲”后立即跳转 `/bid-editor?projectId=<项目ID>&autoGenerate=outline`，工作台通过 `/api/bidding/interpretations/<project_id>/bid-outline/stream` 逐章接收并渲染章节树和正文草稿。
 * 已完成 `npm install` 和 `npm run build`，生成 `frontend/dist/` 构建产物。
 
 ### 管理模块页面
@@ -433,6 +437,13 @@ http://<服务器地址>:3012/bidding
 * 已调整 AI 解读提示词：将 `source_text` 原文依据纳入大模型上下文，要求资格核查、评分策略和风险提示尽量输出来源页码与 evidence 字段，降低只给结论但无法复核的问题。
 * 已新增 `ai_chapter_planner.py`：基于已落库的要求条款、评分项、风险项、章节建议和 AI 解读结果生成标书章节大纲，并写回 Supabase `bid_analysis.project_meta.bid_outline`。
 * 已新增 `POST /api/bidding/interpretations/<project_id>/bid-outline`：用于触发标书章节大纲生成，作为后续单章节正文生成和 Word 导出的输入。
+* 已新增 `GET /api/bidding/interpretations/<project_id>/bid-outline/stream`：使用 SSE 推送 `start`、`chapter`、`done`、`error` 事件，支撑标书编制工作台的章节级流式生成体验。
+* 已新增单章节正文流式生成：`POST /api/bidding/interpretations/<project_id>/sections/stream` 接收当前章节上下文，优先使用 DashScope SSE 流式输出，失败时回退为普通生成后分段推送；前端“生成本章正文”会在右侧正文画布中逐段追加内容。
+* 已完善标书编制工作台章节树操作：章节悬浮或选中时显示“更多”菜单，支持编写章节、自定义编写、添加章节、修改标题和删除章节，操作先作用于当前页面草稿。
+* 已新增 `bid_sections` 持久化设计与 SQL：`sql/20260426_create_bid_sections.sql`，用于保存每个项目的章节树、章节正文、状态、响应点、评分/风险映射和来源页码。
+* 已新增章节持久化 API：查询、保存/新增、删除章节；生成章节大纲后会拆分写入 `bid_sections`，生成单章节正文完成后会把正文保存为 `generated` 状态。
+* 当前本机受 Clash fake-ip 影响，无法从终端直连 Supabase PostgreSQL 自动执行建表 SQL；需要在 Supabase SQL Editor 手动执行 `sql/20260426_create_bid_sections.sql` 一次。
+* 已修复章节大纲生成的空值兼容问题：当 Supabase 中 `source_section`、`category` 等来源字段为 `null` 时，不再触发 `NoneType is not iterable`；同时增加 AI 章节生成失败时的规则版大纲兜底。
 * 已新增规则版 `interpretation_report`：生成一页式摘要、资格核查重点、商务/技术响应重点、评分响应策略、重点风险提示、建议章节和下一步动作，写入 `bid_analysis.project_meta`。
 * 已新增 `ai_interpreter.py`：封装大模型深度解读提示词、固定 JSON 输出解析和 Supabase 写回逻辑；输入采用结构化条款数据，不直接把整份 `full.md` 送入模型，以降低成本并提升稳定性。
 * 已新增 `mineru_quality`：记录解析质量分、Markdown 字符数、内容块数量、页数、块类型统计、检查清单、可疑解析片段和解析产物路径，供非技术人员判断 MinerU 分片和 OCR 是否合适。

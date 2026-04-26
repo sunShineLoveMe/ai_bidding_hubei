@@ -1,9 +1,10 @@
 import json
 import re
+import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterator
 
-from db_supabase import get_project_interpretation, get_supabase_client
+from db_supabase import get_project_interpretation, get_supabase_client, replace_bid_sections_from_outline
 from qwen_client import call_dashscope_api
 
 
@@ -25,6 +26,14 @@ def _compact_items(items: list[dict[str, Any]], fields: list[str], limit: int) -
                 row[field] = value
         rows.append(row)
     return rows
+
+
+def _text(value: Any) -> str:
+    return str(value) if value is not None else ""
+
+
+def _contains_keyword(item: dict[str, Any], keyword: str, fields: list[str]) -> bool:
+    return any(keyword in _text(item.get(field)) for field in fields)
 
 
 def _build_rule_outline(payload: dict[str, Any]) -> dict[str, Any]:
@@ -58,24 +67,20 @@ def _build_rule_outline(payload: dict[str, Any]) -> dict[str, Any]:
         keyword = title[:4]
         mapped_requirements = [
             item.get("content") for item in requirements
-            if item.get("content") and (keyword in item.get("content", "") or keyword in item.get("source_section", ""))
+            if item.get("content") and _contains_keyword(item, keyword, ["content", "source_section"])
         ][:5]
         mapped_scoring = [
             item.get("item") for item in scoring_items
-            if item.get("item") and (keyword in item.get("item", "") or keyword in item.get("source_section", ""))
+            if item.get("item") and _contains_keyword(item, keyword, ["item", "source_section"])
         ][:4]
         mapped_risks = [
             item.get("content") for item in risks
-            if item.get("content") and (keyword in item.get("content", "") or keyword in item.get("source_section", ""))
+            if item.get("content") and _contains_keyword(item, keyword, ["content", "source_section"])
         ][:4]
         source_pages = sorted({
             item.get("source_page")
             for item in [*requirements, *scoring_items, *risks]
-            if item.get("source_page") and (
-                keyword in item.get("content", "")
-                or keyword in item.get("item", "")
-                or keyword in item.get("source_section", "")
-            )
+            if item.get("source_page") and _contains_keyword(item, keyword, ["content", "item", "source_section"])
         })
 
         chapters.append({
@@ -90,7 +95,7 @@ def _build_rule_outline(payload: dict[str, Any]) -> dict[str, Any]:
             "source_pages": source_pages[:8],
             "required_materials": [
                 item.get("material") for item in materials
-                if item.get("material") and (keyword in item.get("material", "") or title[:2] in item.get("category", ""))
+                if item.get("material") and (keyword in _text(item.get("material")) or title[:2] in _text(item.get("category")))
             ][:5],
             "writing_notes": [
                 "正文生成前先核对招标文件格式要求、签章要求和附件清单。",
@@ -195,19 +200,26 @@ def generate_bid_outline(project_id: str) -> dict[str, Any]:
     if not analysis:
         raise RuntimeError("当前项目尚无结构化解读数据，请先完成招标文件解析和落库。")
 
+    ai_outline: dict[str, Any]
     fallback_outline = _build_rule_outline(payload)
-    prompt = _build_prompt(payload)
-    response = call_dashscope_api([{"role": "user", "content": prompt}], json_mode=True)
-    content = response["output"]["choices"][0]["message"]["content"]
-    ai_outline = _strip_llm_json(content)
-
+    try:
+        prompt = _build_prompt(payload)
+        response = call_dashscope_api([{"role": "user", "content": prompt}], json_mode=True)
+        content = response["output"]["choices"][0]["message"]["content"]
+        ai_outline = _strip_llm_json(content)
+    except Exception as exc:
+        ai_outline = fallback_outline
+        ai_outline["version"] = "rule-v1-fallback"
+        ai_outline["fallback_reason"] = f"AI 章节大纲生成失败，已使用规则版大纲: {exc}"
     if not isinstance(ai_outline.get("chapters"), list) or not ai_outline["chapters"]:
         ai_outline = fallback_outline
         ai_outline["version"] = "rule-v1-fallback"
+        ai_outline["fallback_reason"] = "AI 返回结果缺少 chapters，已使用规则版大纲。"
     else:
         ai_outline["version"] = ai_outline.get("version") or "ai-v1"
         ai_outline["generated_at"] = datetime.now(timezone.utc).isoformat()
-        ai_outline["model"] = response.get("model") or "dashscope"
+        if "model" not in ai_outline:
+            ai_outline["model"] = locals().get("response", {}).get("model") or "dashscope"
 
     project_meta = analysis.get("project_meta") or {}
     project_meta["bid_outline"] = ai_outline
@@ -221,5 +233,57 @@ def generate_bid_outline(project_id: str) -> dict[str, Any]:
     )
     if not updated.data:
         raise RuntimeError("标书章节大纲写回 Supabase 失败")
+    replace_bid_sections_from_outline(project_id, ai_outline)
 
     return ai_outline
+
+
+def save_bid_outline(project_id: str, outline: dict[str, Any], analysis: dict[str, Any]) -> None:
+    project_meta = analysis.get("project_meta") or {}
+    project_meta["bid_outline"] = outline
+
+    updated = (
+        get_supabase_client()
+        .table("bid_analysis")
+        .update({"project_meta": project_meta})
+        .eq("id", analysis["id"])
+        .execute()
+    )
+    if not updated.data:
+        raise RuntimeError("标书章节大纲写回 Supabase 失败")
+
+
+def stream_bid_outline(project_id: str) -> Iterator[dict[str, Any]]:
+    payload = get_project_interpretation(project_id)
+    analysis = payload.get("analysis")
+    if not analysis:
+        raise RuntimeError("当前项目尚无结构化解读数据，请先完成招标文件解析和落库。")
+
+    outline = _build_rule_outline(payload)
+    outline["version"] = "stream-rule-v1"
+    outline["generated_at"] = datetime.now(timezone.utc).isoformat()
+
+    yield {
+        "type": "start",
+        "outline": {
+            key: value for key, value in outline.items()
+            if key != "chapters"
+        },
+        "total": len(outline.get("chapters") or []),
+    }
+
+    for index, chapter in enumerate(outline.get("chapters") or [], start=1):
+        yield {
+            "type": "chapter",
+            "index": index,
+            "total": len(outline.get("chapters") or []),
+            "chapter": chapter,
+        }
+        time.sleep(0.12)
+
+    save_bid_outline(project_id, outline, analysis)
+    replace_bid_sections_from_outline(project_id, outline)
+    yield {
+        "type": "done",
+        "outline": outline,
+    }

@@ -34,8 +34,12 @@ export interface InterpretationReport {
 }
 
 export interface BidOutlineChapter {
+  id?: string;
   order?: number;
+  order_index?: number;
+  level?: number;
   title?: string;
+  status?: string;
   priority?: 'high' | 'medium' | 'low' | string;
   purpose?: string;
   response_points?: string[];
@@ -45,6 +49,21 @@ export interface BidOutlineChapter {
   source_pages?: number[];
   required_materials?: string[];
   writing_notes?: string[];
+  content?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface BidSection extends BidOutlineChapter {
+  id: string;
+  project_id: string;
+  parent_id?: string | null;
+  order_index: number;
+  level: number;
+  title: string;
+  status: string;
+  content: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface BidOutline {
@@ -179,4 +198,5 @@ export interface InterpretationResponse {
   scoringItems: ScoringItem[];
   chapterSuggestions: ChapterSuggestion[];
   documentChunks: DocumentChunk[];
+  sections?: BidSection[];
 }

@@ -80,6 +80,13 @@ def asset_file(filename):
 
 @app.route('/')
 @app.route('/bidding')
+@app.route('/interpretation')
+@app.route('/bid-editor')
+@app.route('/knowledge')
+@app.route('/qualification')
+@app.route('/products')
+@app.route('/settings')
+@app.route('/history')
 def bidding_workbench():
     dist_index = os.path.join('frontend', 'dist', 'index.html')
     if os.path.exists(dist_index):
