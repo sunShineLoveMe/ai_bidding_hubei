@@ -440,6 +440,8 @@ http://<服务器地址>:3012/bidding
 * 已新增 `GET /api/bidding/interpretations/<project_id>/bid-outline/stream`：使用 SSE 推送 `start`、`chapter`、`done`、`error` 事件，支撑标书编制工作台的章节级流式生成体验。
 * 已新增单章节正文流式生成：`POST /api/bidding/interpretations/<project_id>/sections/stream` 接收当前章节上下文，优先使用 DashScope SSE 流式输出，失败时回退为普通生成后分段推送；前端“生成本章正文”会在右侧正文画布中逐段追加内容。
 * 已完善标书编制工作台章节树操作：章节悬浮或选中时显示“更多”菜单，支持编写章节、自定义编写、添加章节、修改标题和删除章节，操作先作用于当前页面草稿。
+* 已精简标书编制工作台顶部工具栏：去除未实现的写作助手、图表助手、知识库、智能图库、图片审查等入口，仅保留当前已实现或必要的返回、关联资料和标书下载入口。
+* 已升级章节大纲生成：从仅一级章节扩展为一级 + 二级章节结构，并写入 `level`、`order_index`；当前测试项目已重新同步为 26 个章节，包含一级和二级目录。
 * 已新增 `bid_sections` 持久化设计与 SQL：`sql/20260426_create_bid_sections.sql`，用于保存每个项目的章节树、章节正文、状态、响应点、评分/风险映射和来源页码。
 * 已新增章节持久化 API：查询、保存/新增、删除章节；生成章节大纲后会拆分写入 `bid_sections`，生成单章节正文完成后会把正文保存为 `generated` 状态。
 * 当前本机受 Clash fake-ip 影响，无法从终端直连 Supabase PostgreSQL 自动执行建表 SQL；需要在 Supabase SQL Editor 手动执行 `sql/20260426_create_bid_sections.sql` 一次。

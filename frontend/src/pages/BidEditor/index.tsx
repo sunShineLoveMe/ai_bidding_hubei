@@ -7,13 +7,11 @@ import {
   AlignRight,
   Bold,
   BookOpen,
-  CheckSquare,
   ChevronDown,
   ChevronRight,
   Download,
   FileText,
   Highlighter,
-  Image,
   Italic,
   List,
   ListOrdered,
@@ -46,7 +44,7 @@ function asBidOutline(meta: Record<string, unknown> | undefined | null): BidOutl
 }
 
 function makeChapterId(chapter: BidOutlineChapter, index: number): string {
-  return `${chapter.order || index + 1}-${chapter.title || 'chapter'}`;
+  return `${chapter.order_index || chapter.order || index + 1}-${chapter.title || 'chapter'}`;
 }
 
 function initialContent(chapter: BidOutlineChapter): string {
@@ -83,6 +81,7 @@ function sectionsToDrafts(sections?: BidSection[]): ChapterDraft[] {
   return (sections || []).map(section => ({
     ...section,
     order: section.order_index,
+    level: section.level || 1,
     content: section.content || initialContent(section),
     expanded: true,
   }));
@@ -520,12 +519,7 @@ export function BidEditorPage(): JSX.Element {
         </div>
         <Space size={10} wrap>
           <Button onClick={() => navigate('/interpretation')}>返回解读</Button>
-          <Button icon={<BookOpen size={16} />}>知识库关联</Button>
-          <Button type="text" icon={<Sparkles size={17} />}>写作助手</Button>
-          <Button type="text" icon={<Table2 size={17} />}>图表助手</Button>
-          <Button type="text" icon={<BookOpen size={17} />}>知识库</Button>
-          <Button type="text" icon={<Image size={17} />}>智能图库</Button>
-          <Button type="text" icon={<CheckSquare size={17} />}>图片审查</Button>
+          <Button icon={<BookOpen size={16} />}>关联资料</Button>
           <Button type="primary" icon={<Download size={17} />}>标书下载</Button>
         </Space>
       </header>
@@ -557,7 +551,7 @@ export function BidEditorPage(): JSX.Element {
             return (
               <div
                 key={chapter.id}
-                className={`chapter-node ${active ? 'active' : ''}`}
+                className={`chapter-node level-${chapter.level || 1} ${active ? 'active' : ''}`}
                 role="button"
                 tabIndex={0}
                 onClick={() => setSelectedId(chapter.id)}

@@ -228,6 +228,24 @@ textarea {
   color: #1d4ed8;
 }
 
+.chapter-node.level-2 {
+  padding-left: 28px;
+}
+
+.chapter-node.level-3 {
+  padding-left: 48px;
+}
+
+.chapter-node.level-2 .chapter-title {
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.chapter-node.level-3 .chapter-title {
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .chapter-node:hover .chapter-more,
 .chapter-node.active .chapter-more {
   opacity: 1;
