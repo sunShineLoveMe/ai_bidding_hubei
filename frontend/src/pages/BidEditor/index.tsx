@@ -3,6 +3,7 @@ import { Alert, Button, Dropdown, Empty, Input, Modal, Segmented, Space, Spin, T
 import type { MenuProps } from 'antd';
 import {
   BookOpen,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Download,
@@ -14,6 +15,10 @@ import {
   Sparkles,
   ArrowUp,
   ArrowDown,
+  Settings,
+  Eye,
+  Trash2,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { deleteBidSection, generateOnlyOfficeConfig, getInterpretation, getLatestInterpretation, reorderBidSections, saveBidSection } from '../../api/bidProject';
@@ -181,13 +186,13 @@ export function BidEditorPage(): JSX.Element {
   const [downloadUrl, setDownloadUrl] = useState('');
   const streamStartedRef = useRef(false);
   const onlyOfficeDocumentRef = useRef('');
-  const onlyOfficeContainerRef = useRef<HTMLDivElement | null>(null);
+  const onlyOfficeWrapperRef = useRef<HTMLDivElement | null>(null);
   const onlyOfficeLoadSeqRef = useRef(0);
 
   async function waitForOnlyOfficeContainer(): Promise<HTMLDivElement> {
     for (let index = 0; index < 20; index += 1) {
-      if (onlyOfficeContainerRef.current) {
-        return onlyOfficeContainerRef.current;
+      if (onlyOfficeWrapperRef.current) {
+        return onlyOfficeWrapperRef.current;
       }
       await new Promise<void>(resolve => {
         window.requestAnimationFrame(() => resolve());
@@ -254,9 +259,13 @@ export function BidEditorPage(): JSX.Element {
         return;
       }
       const container = await waitForOnlyOfficeContainer();
-      container.innerHTML = '';
+      if ((window as any).bidDocEditor) {
+        try { (window as any).bidDocEditor.destroyEditor(); } catch (e) { /* ignore */ }
+        (window as any).bidDocEditor = null;
+      }
+      container.innerHTML = '<div id="onlyoffice-embed-editor" style="width: 100%; height: 100%;"></div>';
       // eslint-disable-next-line no-new
-      new window.DocsAPI!.DocEditor('onlyoffice-embed-editor', response.editorConfig);
+      (window as any).bidDocEditor = new window.DocsAPI!.DocEditor('onlyoffice-embed-editor', response.editorConfig);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       onlyOfficeDocumentRef.current = '';
@@ -277,7 +286,7 @@ export function BidEditorPage(): JSX.Element {
 
   useEffect(() => {
     const projectId = data?.project?.id || searchParams.get('projectId') || '';
-    if (loading || streaming || !projectId || !chapters.length) {
+    if (mode !== '正文模式' || loading || streaming || !projectId || !chapters.length) {
       return;
     }
     const documentKey = `${projectId}:${isUuid(selectedId) ? selectedId : 'full'}`;
@@ -290,7 +299,15 @@ export function BidEditorPage(): JSX.Element {
     }, 350);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.project?.id, loading, streaming, chapters.length, selectedId, searchParams]);
+  }, [data?.project?.id, loading, streaming, chapters.length, selectedId, mode, searchParams]);
+
+  useEffect(() => {
+    if (mode === '目录模式') {
+      onlyOfficeLoadSeqRef.current += 1;
+      setOnlyOfficeLoading(false);
+      setOnlyOfficeError('');
+    }
+  }, [mode]);
 
   function startOutlineStream(projectId: string): void {
     if (streamStartedRef.current) {
@@ -420,6 +437,21 @@ export function BidEditorPage(): JSX.Element {
   const matchText = keyword ? `${filteredChapters.length} / ${chapters.length}` : `0 / ${chapters.length}`;
   const totalChars = chapters.reduce((sum, chapter) => sum + chapter.content.length, 0);
   const estimatedPages = Math.max(1, Math.ceil(totalChars / 700));
+  const generatedCount = chapters.filter(chapter => (chapter.content || '').trim() && !chapter.content.includes('请在此编写章节内容')).length;
+  const generationProgress = chapters.length ? Math.round((generatedCount / chapters.length) * 10000) / 100 : 0;
+
+  function chapterWordLabel(chapter: ChapterDraft): string {
+    const content = (chapter.content || '').trim();
+    if (!content || content.includes('请在此编写章节内容') || content.includes('待进一步生成正文')) {
+      return `预计${Math.max(420, Math.min(1200, Math.round(((chapter.level || 1) <= 2 ? 680 : 520) / 10) * 10))}字`;
+    }
+    return `${content.length}字`;
+  }
+
+  function isChapterGenerated(chapter: ChapterDraft): boolean {
+    const content = (chapter.content || '').trim();
+    return !!content && !content.includes('请在此编写章节内容') && !content.includes('待进一步生成正文');
+  }
 
   function chapterIndent(level?: number): number {
     return 12 + Math.max(0, Math.min((level || 1) - 1, 3)) * 20;
@@ -607,6 +639,15 @@ export function BidEditorPage(): JSX.Element {
     setChapters(items => items.map(item => item.id === id ? { ...item, expanded: !item.expanded } : item));
   }
 
+  function setAllExpanded(expanded: boolean): void {
+    setChapters(items => items.map(item => ({ ...item, expanded })));
+  }
+
+  function previewChapter(chapter: ChapterDraft): void {
+    setSelectedId(chapter.id);
+    setMode('正文模式');
+  }
+
   async function saveDraft(): Promise<void> {
     if (!data?.project?.id || !selectedChapter) {
       message.warning('请先选择需要保存的章节');
@@ -771,12 +812,14 @@ export function BidEditorPage(): JSX.Element {
     }
   }
 
-  async function generateCurrentSection(targetChapter = selectedChapter): Promise<void> {
+  async function generateCurrentSection(targetChapter = selectedChapter, options?: { preserveMode?: boolean }): Promise<void> {
     if (!data?.project?.id || !targetChapter) {
       message.warning('请先选择需要生成正文的章节');
       return;
     }
-    setMode('正文模式');
+    if (!options?.preserveMode) {
+      setMode('正文模式');
+    }
     setSelectedId(targetChapter.id);
     setSectionStreaming(true);
     setStreamText(`正在生成章节正文：${targetChapter.title || '未命名章节'}`);
@@ -859,6 +902,137 @@ export function BidEditorPage(): JSX.Element {
       <div className="bid-editor-empty">
         <Empty description="当前项目尚未生成章节大纲" />
         <Alert type="warning" showIcon message="请先回到招标解读页生成章节大纲，再进入标书编制。" />
+      </div>
+    );
+  }
+
+  if (mode === '目录模式') {
+    return (
+      <div className="bid-editor-shell outline-mode-shell">
+        <header className="bid-editor-topbar">
+          <div className="bid-editor-brand">
+            <FileText size={26} />
+            <strong>{outline?.project_name || data?.project?.project_name || '测试标书'}</strong>
+          </div>
+          <Space size={10} wrap>
+            <Button onClick={() => navigate('/interpretation')}>返回解读</Button>
+            <Button icon={<BookOpen size={16} />}>关联资料</Button>
+            <Button
+              type="primary"
+              icon={<Download size={17} />}
+              href={downloadUrl || undefined}
+              target={downloadUrl ? '_blank' : undefined}
+              disabled={!downloadUrl}
+            >
+              标书下载
+            </Button>
+          </Space>
+        </header>
+
+        <main className="outline-workbench">
+          <section className="outline-topbar">
+            <Segmented<EditorMode>
+              value={mode}
+              onChange={value => setMode(value)}
+              options={[
+                { label: '正文模式', value: '正文模式' },
+                { label: '目录模式', value: '目录模式' },
+              ]}
+            />
+            <div className="outline-summary">
+              <span>总章节：{chapters.length}</span>
+              <span>已生成：{generatedCount}</span>
+              <span>总字数：{totalChars}（约{estimatedPages}页）</span>
+              <span>进度：{generationProgress}%</span>
+            </div>
+          </section>
+
+          <section className="outline-panel">
+            <div className="outline-panel-header">
+              <div className="outline-panel-title">
+                <BookOpen size={18} />
+                <strong>标书目录</strong>
+              </div>
+              <Space size={10} wrap>
+                <label className="outline-check">
+                  <input type="checkbox" />
+                  <span>批量操作</span>
+                </label>
+                <label className="outline-switch">
+                  <input type="checkbox" />
+                  <span>全篇图文并茂</span>
+                </label>
+                <Button size="small" icon={<SlidersHorizontal size={14} />}>全文设置</Button>
+                <Button size="small" icon={<Download size={14} />}>下载目录</Button>
+              </Space>
+            </div>
+
+            <div className="outline-table">
+              {visibleChapters.map(chapter => {
+                const generated = isChapterGenerated(chapter);
+                const active = chapter.id === selectedChapter?.id;
+                return (
+                  <div
+                    key={`outline-${chapter.id}`}
+                    className={`outline-row level-${chapter.level || 1} ${active ? 'active' : ''}`}
+                    style={{ paddingLeft: `${20 + Math.max(0, (chapter.level || 1) - 1) * 28}px` }}
+                  >
+                    <button
+                      type="button"
+                      className="outline-row-toggle"
+                      aria-label="展开或收起章节"
+                      onClick={() => toggleChapter(chapter.id)}
+                    >
+                      {chapter.expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                    </button>
+                    <button
+                      type="button"
+                      className="outline-row-title"
+                      onClick={() => {
+                        setSelectedId(chapter.id);
+                      }}
+                    >
+                      <span>{chapter.order ? `${chapter.order}. ` : ''}{chapter.title}</span>
+                    </button>
+                    <div className={`outline-word-pill ${generated ? 'done' : 'pending'}`}>
+                      {generated ? <CheckCircle2 size={13} /> : null}
+                      <span>{chapterWordLabel(chapter)}</span>
+                    </div>
+                    <div className="outline-row-actions">
+                      <Button type="link" size="small" icon={<Settings size={14} />}>章节设置</Button>
+                      <Button type="link" size="small" icon={<Plus size={14} />} onClick={() => void addChapter({ parent: chapter })}>新增章节</Button>
+                      <Button type="link" size="small" icon={<Sparkles size={14} />} loading={sectionStreaming && selectedId === chapter.id} onClick={() => void generateCurrentSection(chapter, { preserveMode: true })}>快速编写</Button>
+                      <Button type="link" size="small" icon={<Eye size={14} />} onClick={() => previewChapter(chapter)}>预览</Button>
+                      <Button type="link" size="small" danger icon={<Trash2 size={14} />} onClick={() => deleteChapter(chapter)}>删除</Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          <footer className="outline-footer">
+            <Space>
+              <Button type="text" onClick={() => setAllExpanded(false)}>全部收起</Button>
+              <Button type="text" onClick={() => setAllExpanded(true)}>全部展开</Button>
+            </Space>
+            <Button
+              type="primary"
+              size="large"
+              icon={<Sparkles size={18} />}
+              disabled={!chapters.length || sectionStreaming}
+              onClick={() => {
+                const next = chapters.find(chapter => !isChapterGenerated(chapter)) || chapters[0];
+                if (next) {
+                  void generateCurrentSection(next, { preserveMode: true });
+                }
+              }}
+            >
+              一键编写全文
+            </Button>
+            <span />
+          </footer>
+        </main>
       </div>
     );
   }
@@ -1022,8 +1196,7 @@ export function BidEditorPage(): JSX.Element {
               />
             ) : null}
             <div
-              id="onlyoffice-embed-editor"
-              ref={onlyOfficeContainerRef}
+              ref={onlyOfficeWrapperRef}
               className="onlyoffice-embed-editor"
               style={{ display: onlyOfficeError ? 'none' : 'block' }}
             />

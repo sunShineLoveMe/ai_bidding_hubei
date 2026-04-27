@@ -160,6 +160,231 @@ textarea {
   padding: 0 18px;
 }
 
+.outline-mode-shell {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.outline-workbench {
+  grid-column: 1 / -1;
+  display: grid;
+  min-height: 0;
+  grid-template-rows: 58px minmax(0, 1fr) 62px;
+  background: #f7f9fc;
+}
+
+.outline-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #ffffff;
+  padding: 0 22px;
+}
+
+.outline-summary {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.outline-panel {
+  min-height: 0;
+  margin: 16px 18px;
+  display: grid;
+  grid-template-rows: 54px minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid #dfe7f2;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.outline-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid #eef2f7;
+  padding: 0 22px;
+}
+
+.outline-panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: #111827;
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.outline-panel-title svg {
+  color: #2f6df6;
+}
+
+.outline-check,
+.outline-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.outline-switch input {
+  appearance: none;
+  width: 34px;
+  height: 18px;
+  border-radius: 99px;
+  background: #d8dee9;
+  position: relative;
+  outline: none;
+}
+
+.outline-switch input::after {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  top: 2px;
+  left: 2px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.18);
+  transition: 0.16s ease;
+}
+
+.outline-switch input:checked {
+  background: #2f6df6;
+}
+
+.outline-switch input:checked::after {
+  transform: translateX(16px);
+}
+
+.outline-table {
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 20px 22px;
+}
+
+.outline-row {
+  display: grid;
+  grid-template-columns: 24px minmax(280px, 1fr) 132px minmax(480px, auto);
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  border-radius: 0;
+  color: #1f2937;
+}
+
+.outline-row:hover {
+  background: #f5f8ff;
+}
+
+.outline-row.active {
+  background: #e9f0ff;
+}
+
+.outline-row.level-1 {
+  margin-top: 8px;
+  font-weight: 900;
+}
+
+.outline-row.level-2 .outline-row-title {
+  font-weight: 850;
+}
+
+.outline-row.level-3 .outline-row-title,
+.outline-row.level-4 .outline-row-title {
+  font-weight: 750;
+}
+
+.outline-row-toggle {
+  display: inline-grid;
+  width: 24px;
+  height: 30px;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+}
+
+.outline-row-title {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  font-size: 14px;
+  font-weight: inherit;
+}
+
+.outline-row-title span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.outline-word-pill {
+  justify-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 86px;
+  height: 24px;
+  border-radius: 99px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.outline-word-pill.done {
+  background: #eef8ef;
+  color: #16a34a;
+}
+
+.outline-word-pill.pending {
+  background: #fff7df;
+  color: #f59e0b;
+}
+
+.outline-row-actions {
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  transition: 0.16s ease;
+}
+
+.outline-row.active .outline-row-actions,
+.outline-row:hover .outline-row-actions {
+  opacity: 1;
+}
+
+.outline-row-actions .ant-btn {
+  font-weight: 850;
+}
+
+.outline-footer {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 18px;
+  border-top: 1px solid #e2e8f0;
+  background: #ffffff;
+  padding: 0 22px;
+}
+
 .bid-editor-brand {
   display: flex;
   min-width: 0;
