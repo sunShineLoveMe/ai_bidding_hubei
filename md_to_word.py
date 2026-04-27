@@ -18,6 +18,13 @@ import uuid
 def apply_run_font(run, *, east_asia='宋体', latin='Times New Roman', size=None, bold=None):
     run.font.name = latin
     run._element.rPr.rFonts.set(qn('w:eastAsia'), east_asia)
+    lang = run._element.rPr.find(qn('w:lang'))
+    if lang is None:
+        lang = OxmlElement('w:lang')
+        run._element.rPr.append(lang)
+    lang.set(qn('w:val'), 'zh-CN')
+    lang.set(qn('w:eastAsia'), 'zh-CN')
+    lang.set(qn('w:bidi'), 'zh-CN')
     if size is not None:
         run.font.size = Pt(size)
     if bold is not None:
@@ -152,6 +159,48 @@ def set_document_styles(doc):
         style.font.size = Pt(12)
         style.paragraph_format.line_spacing = 1.5
 
+def _set_rpr_language(rpr):
+    lang = rpr.find(qn('w:lang'))
+    if lang is None:
+        lang = OxmlElement('w:lang')
+        rpr.append(lang)
+    lang.set(qn('w:val'), 'zh-CN')
+    lang.set(qn('w:eastAsia'), 'zh-CN')
+    lang.set(qn('w:bidi'), 'zh-CN')
+
+def set_document_language(doc):
+    """设置 DOCX 默认校对语言为简体中文，避免 ONLYOFFICE 状态栏显示 English - United States。"""
+    styles_element = doc.styles.element
+    doc_defaults = styles_element.find(qn('w:docDefaults'))
+    if doc_defaults is None:
+        doc_defaults = OxmlElement('w:docDefaults')
+        styles_element.insert(0, doc_defaults)
+
+    rpr_default = doc_defaults.find(qn('w:rPrDefault'))
+    if rpr_default is None:
+        rpr_default = OxmlElement('w:rPrDefault')
+        doc_defaults.append(rpr_default)
+
+    rpr = rpr_default.find(qn('w:rPr'))
+    if rpr is None:
+        rpr = OxmlElement('w:rPr')
+        rpr_default.append(rpr)
+    _set_rpr_language(rpr)
+
+    for style in doc.styles:
+        if style.type in {WD_STYLE_TYPE.PARAGRAPH, WD_STYLE_TYPE.CHARACTER, WD_STYLE_TYPE.TABLE}:
+            rpr = style._element.get_or_add_rPr()
+            _set_rpr_language(rpr)
+
+    settings = doc.settings.element
+    theme_lang = settings.find(qn('w:themeFontLang'))
+    if theme_lang is None:
+        theme_lang = OxmlElement('w:themeFontLang')
+        settings.append(theme_lang)
+    theme_lang.set(qn('w:val'), 'zh-CN')
+    theme_lang.set(qn('w:eastAsia'), 'zh-CN')
+    theme_lang.set(qn('w:bidi'), 'zh-CN')
+
 def set_document_format(doc, project_name):
     """设置文档格式"""
     # 设置页面边距
@@ -249,6 +298,7 @@ def convert_md_to_word(md_file):
     # 创建Word文档
     doc = Document()
     set_document_styles(doc)
+    set_document_language(doc)
     
     # 设置文档格式
     project_name = Path(md_file).parent.name

@@ -147,7 +147,19 @@ def _section_markdown_heading(level: int, title: str) -> str:
     return f'{"#" * depth} {title}\n\n'
 
 
-def build_project_bid_markdown(project_id: str) -> tuple[Path, str]:
+def _section_with_descendants(sections: list[dict], section_id: str) -> list[dict]:
+    selected_ids = {section_id}
+    changed = True
+    while changed:
+        changed = False
+        for section in sections:
+            if section.get("parent_id") in selected_ids and section.get("id") not in selected_ids:
+                selected_ids.add(section["id"])
+                changed = True
+    return [section for section in sections if section.get("id") in selected_ids]
+
+
+def build_project_bid_markdown(project_id: str, focus_section_id: str | None = None) -> tuple[Path, str]:
     payload = get_project_interpretation(project_id)
     project = payload.get("project") or {}
     sections = list_bid_sections(project_id)
@@ -160,7 +172,16 @@ def build_project_bid_markdown(project_id: str) -> tuple[Path, str]:
     folder_name = _slug_filename(project_name, f"project-{project_id[:8]}")
     output_dir = Path(current_app.config.get('GENERATED_FOLDER', 'outputs')) / folder_name
     output_dir.mkdir(parents=True, exist_ok=True)
-    markdown_path = output_dir / f"{folder_name}.md"
+    focus_section = None
+    if focus_section_id:
+        focus_section = next((section for section in sections if section.get("id") == focus_section_id), None)
+        if focus_section:
+            sections = _section_with_descendants(sections, focus_section_id)
+
+    file_suffix = ""
+    if focus_section:
+        file_suffix = f"-section-{_slug_filename(focus_section.get('title') or 'section', 'section')}-{focus_section_id[:8]}"
+    markdown_path = output_dir / f"{folder_name}{file_suffix}.md"
 
     chunks: list[str] = [f"# {project_name}\n\n"]
     for section in sections:
@@ -599,7 +620,15 @@ def generate_onlyoffice_config(project_id):
         return jsonify({'error': 'project_id 不是合法 UUID。'}), 400
 
     try:
-        markdown_path, project_name = build_project_bid_markdown(project_id)
+        request_payload = request.get_json(silent=True) or {}
+        focus_section_id = request_payload.get("sectionId")
+        if focus_section_id:
+            try:
+                uuid.UUID(focus_section_id)
+            except ValueError:
+                focus_section_id = None
+
+        markdown_path, project_name = build_project_bid_markdown(project_id, focus_section_id)
         generated_docx_path = convert_md_to_word(markdown_path)
         if not generated_docx_path or not Path(generated_docx_path).exists():
             raise RuntimeError("DOCX 生成失败，未找到输出文件。")
@@ -617,12 +646,13 @@ def generate_onlyoffice_config(project_id):
         file_url = f"{backend_url}/api/outputs/{target.name}"
         callback_url = f"{backend_url}/api/bidding/save-callback"
         doc_key = str(uuid.uuid4())
+        display_title = f"{project_name}.docx"
 
         payload = {
             'document': {
                 'fileType': 'docx',
                 'key': doc_key,
-                'title': target_name,
+                'title': display_title,
                 'url': file_url,
                 'permissions': {
                     'chat': False,

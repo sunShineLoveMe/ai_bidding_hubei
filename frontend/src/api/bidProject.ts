@@ -69,8 +69,8 @@ export async function reorderBidSections(projectId: string, sections: Partial<Bi
   return response.data.sections || [];
 }
 
-export async function generateOnlyOfficeConfig(projectId: string): Promise<OnlyOfficeConfigResponse> {
-  const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/onlyoffice-config`, undefined, {
+export async function generateOnlyOfficeConfig(projectId: string, sectionId?: string): Promise<OnlyOfficeConfigResponse> {
+  const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/onlyoffice-config`, sectionId ? { sectionId } : undefined, {
     skipGlobalLoading: true,
     timeout: 180000,
   });

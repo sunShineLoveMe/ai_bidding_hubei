@@ -180,7 +180,21 @@ export function BidEditorPage(): JSX.Element {
   const [onlyOfficeError, setOnlyOfficeError] = useState('');
   const [downloadUrl, setDownloadUrl] = useState('');
   const streamStartedRef = useRef(false);
-  const onlyOfficeProjectRef = useRef('');
+  const onlyOfficeDocumentRef = useRef('');
+  const onlyOfficeContainerRef = useRef<HTMLDivElement | null>(null);
+  const onlyOfficeLoadSeqRef = useRef(0);
+
+  async function waitForOnlyOfficeContainer(): Promise<HTMLDivElement> {
+    for (let index = 0; index < 20; index += 1) {
+      if (onlyOfficeContainerRef.current) {
+        return onlyOfficeContainerRef.current;
+      }
+      await new Promise<void>(resolve => {
+        window.requestAnimationFrame(() => resolve());
+      });
+    }
+    throw new Error('ONLYOFFICE 容器未找到');
+  }
 
   async function load(): Promise<void> {
     setLoading(true);
@@ -219,31 +233,39 @@ export function BidEditorPage(): JSX.Element {
     setSelectedId(current => current || drafts[0]?.id || '');
   }
 
-  async function openOnlyOfficeInPanel(): Promise<void> {
+  async function openOnlyOfficeInPanel(sectionId?: string): Promise<void> {
     const projectId = data?.project?.id || searchParams.get('projectId') || '';
     if (!projectId) {
       message.warning('缺少项目编号，无法打开 ONLYOFFICE。');
       return;
     }
+    const loadSeq = onlyOfficeLoadSeqRef.current + 1;
+    onlyOfficeLoadSeqRef.current = loadSeq;
     setOnlyOfficeLoading(true);
     setOnlyOfficeError('');
     try {
-      const response = await generateOnlyOfficeConfig(projectId);
+      const response = await generateOnlyOfficeConfig(projectId, sectionId && isUuid(sectionId) ? sectionId : undefined);
+      if (onlyOfficeLoadSeqRef.current !== loadSeq) {
+        return;
+      }
       setDownloadUrl(response.downloadUrl || '');
       await loadOnlyOfficeScript();
-      const container = document.getElementById('onlyoffice-embed-editor');
-      if (!container) {
-        throw new Error('ONLYOFFICE 容器未找到');
+      if (onlyOfficeLoadSeqRef.current !== loadSeq) {
+        return;
       }
+      const container = await waitForOnlyOfficeContainer();
       container.innerHTML = '';
       // eslint-disable-next-line no-new
       new window.DocsAPI!.DocEditor('onlyoffice-embed-editor', response.editorConfig);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
+      onlyOfficeDocumentRef.current = '';
       setOnlyOfficeError(reason);
       message.error(reason);
     } finally {
-      setOnlyOfficeLoading(false);
+      if (onlyOfficeLoadSeqRef.current === loadSeq) {
+        setOnlyOfficeLoading(false);
+      }
     }
   }
 
@@ -258,13 +280,17 @@ export function BidEditorPage(): JSX.Element {
     if (loading || streaming || !projectId || !chapters.length) {
       return;
     }
-    if (onlyOfficeProjectRef.current === projectId) {
+    const documentKey = `${projectId}:${isUuid(selectedId) ? selectedId : 'full'}`;
+    if (onlyOfficeDocumentRef.current === documentKey) {
       return;
     }
-    onlyOfficeProjectRef.current = projectId;
-    void openOnlyOfficeInPanel();
+    const timer = window.setTimeout(() => {
+      onlyOfficeDocumentRef.current = documentKey;
+      void openOnlyOfficeInPanel(isUuid(selectedId) ? selectedId : undefined);
+    }, 350);
+    return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.project?.id, loading, streaming, chapters.length, searchParams]);
+  }, [data?.project?.id, loading, streaming, chapters.length, selectedId, searchParams]);
 
   function startOutlineStream(projectId: string): void {
     if (streamStartedRef.current) {
@@ -596,9 +622,9 @@ export function BidEditorPage(): JSX.Element {
       setChapters(items => normalizeChapterHierarchy(items.map(item => item.id === selectedChapter.id ? { ...item, ...saved } : item)));
       setSelectedId(saved.id);
       message.success('章节已保存到 Supabase');
-      onlyOfficeProjectRef.current = '';
+      onlyOfficeDocumentRef.current = '';
       setDownloadUrl('');
-      void openOnlyOfficeInPanel();
+      void openOnlyOfficeInPanel(selectedChapter.id);
     } catch (error) {
       message.error(error instanceof Error ? error.message : String(error));
     }
@@ -828,7 +854,7 @@ export function BidEditorPage(): JSX.Element {
     );
   }
 
-  if (!outline && !streaming) {
+  if (!outline && !streaming && !chapters.length) {
     return (
       <div className="bid-editor-empty">
         <Empty description="当前项目尚未生成章节大纲" />
@@ -997,8 +1023,9 @@ export function BidEditorPage(): JSX.Element {
             ) : null}
             <div
               id="onlyoffice-embed-editor"
+              ref={onlyOfficeContainerRef}
               className="onlyoffice-embed-editor"
-              style={{ display: onlyOfficeLoading || !!onlyOfficeError || !downloadUrl ? 'none' : 'block' }}
+              style={{ display: onlyOfficeError ? 'none' : 'block' }}
             />
           </div>
         </section>
