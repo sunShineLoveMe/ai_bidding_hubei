@@ -533,6 +533,9 @@ http://<服务器地址>:3012/bidding
 * 已优化招标解读页长任务 Loading：生成 AI 深度解读、生成章节大纲只使用按钮级 Loading，不再触发内容区遮罩，避免长任务期间页面无法滚动或查看已有内容。
 * 已移除主菜单中的“标书编制”：标书编制工作台仅从具体项目进入，避免被当作普通管理模块。
 * 已新增章节大纲 SSE 流式生成：点击“生成章节大纲”后立即跳转 `/bid-editor?projectId=<项目ID>&autoGenerate=outline`，工作台通过 `/api/bidding/interpretations/<project_id>/bid-outline/stream` 逐章接收并渲染章节树和正文草稿。
+* 已细化章节大纲流式体验：后端 SSE 会先输出一级目录框架，再按章节补充二级/三级/四级子章节；前端左侧目录会显示一级章节骨架和“正在补充子章节”占位，真实章节到达后逐步替换，避免右侧正文区长时间静止 Loading。
+* 已优化章节大纲首屏响应速度：SSE 不再等待大模型完整 JSON 返回后才输出章节，而是先用招标解读结果生成快速目录骨架并立即推送到左侧目录；快速大纲生成完成后即结束前端 Loading，AI 最终复核改为后台任务，降低“首 token 等待过久”和长时间卡在流式提示上的体感问题。
+* 已优化标书编制工作台流式提示层：`AI 正在流式生成章节` 改为左侧目录区域中部悬浮提示，并为目录底部增加半透明蒙版，避免提示挤占章节树顶部空间。
 * 已将章节大纲逻辑升级为 AI 灵活层级：大纲生成提示词明确要求按业务复杂度动态决定章节深度，允许部分章节仅到二级，复杂章节扩展到三级或四级；后端统一把嵌套 `children/subsections` 归一化为 `level + order + order_index` 后写入 `bid_outline` 和 `bid_sections`。
 * 已将 `bid_sections` 章节持久化升级为真实树结构：大纲落库时根据章节编号自动写入 `parent_id`，前端目录树按 `parent_id` + `order_index` 重建层级、可见性和编号，新增章节支持新增根章节或在当前章节下新增子章节。
 * 已新增章节同级排序持久化：左侧章节菜单支持“上移章节 / 下移章节”，移动时会按整棵子树一起交换位置，并通过 `/api/bidding/interpretations/<project_id>/sections/reorder` 批量写回 Supabase。
@@ -541,7 +544,7 @@ http://<服务器地址>:3012/bidding
 * 已新增基于 `bid_sections` 的 ONLYOFFICE 终稿链路：后端新增 `POST /api/bidding/interpretations/<project_id>/onlyoffice-config`，会把当前章节正文合并为 Markdown、转换为 DOCX、注册 `onlyoffice_documents` 映射并返回新的 `editorConfig`。
 * 已新增独立终稿页 `/onlyoffice-editor?projectId=<project_id>`：前端会调用后端生成 DOCX，再从 `http://127.0.0.1:8080` 加载 ONLYOFFICE Docs API 并打开在线编辑器。
 * 已扩展 ONLYOFFICE 保存回调：`/api/bidding/save-callback` 现在优先处理新的 `onlyoffice_documents` 映射，把编辑后的 DOCX 回写到本地 `outputs/` 文件；旧的 SQLite `bidding` 回调逻辑仍保留兼容。
-* 已将 ONLYOFFICE 终稿模式直接内嵌进 `/bid-editor` 右侧编辑区：点击“ONLYOFFICE 终稿”后，不再强制跳转独立页面，而是在当前工作台右侧加载 DOCX 在线终稿编辑器。
+* 已将 ONLYOFFICE 终稿模式直接内嵌进 `/bid-editor` 右侧编辑区：进入标书编制工作台后会自动生成 DOCX 并加载在线终稿编辑器，不再需要点击“ONLYOFFICE 终稿”按钮，也不再展示临时 textarea 编辑画布。
 * 已收敛 ONLYOFFICE 终稿模式工具栏：默认强制 `zh-CN` 语言、启用 `compactHeader + compactToolbar + toolbarNoTabs`，并关闭评论、聊天、反馈、保护、Review 等当前招投标终稿阶段不需要的能力。
 * 当前仍保留独立页 `/onlyoffice-editor` 作为联调与兜底入口，但主路径已切换为工作台内嵌模式。
 * 已完成 `npm install` 和 `npm run build`，生成 `frontend/dist/` 构建产物。

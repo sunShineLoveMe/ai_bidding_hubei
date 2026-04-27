@@ -1,33 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Dropdown, Empty, Input, Modal, Segmented, Space, Spin, Tag, Tooltip, message } from 'antd';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Button, Dropdown, Empty, Input, Modal, Segmented, Space, Spin, Tag, message } from 'antd';
 import type { MenuProps } from 'antd';
 import {
-  AlignCenter,
-  AlignLeft,
-  AlignRight,
-  Bold,
   BookOpen,
   ChevronDown,
   ChevronRight,
   Download,
   FileText,
-  Highlighter,
-  Italic,
-  List,
-  ListOrdered,
   MoreVertical,
-  PanelLeft,
   Plus,
-  Printer,
-  Redo2,
   Save,
   Search,
   Sparkles,
-  Table2,
   ArrowUp,
   ArrowDown,
-  Underline,
-  Undo2,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { deleteBidSection, generateOnlyOfficeConfig, getInterpretation, getLatestInterpretation, reorderBidSections, saveBidSection } from '../../api/bidProject';
@@ -46,8 +32,9 @@ type AddChapterOptions = {
   parent?: ChapterDraft | null;
 };
 
-type StreamingRootPlaceholder = {
+type StreamingChildPlaceholder = {
   id: string;
+  parentOrder: string;
   title: string;
 };
 
@@ -164,14 +151,6 @@ function sectionsToDrafts(sections?: BidSection[]): ChapterDraft[] {
   })));
 }
 
-function toolButton(title: string, icon: JSX.Element): JSX.Element {
-  return (
-    <Tooltip title={title}>
-      <Button type="text" size="small" icon={icon} aria-label={title} />
-    </Tooltip>
-  );
-}
-
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
@@ -196,15 +175,17 @@ export function BidEditorPage(): JSX.Element {
   const [streaming, setStreaming] = useState(false);
   const [sectionStreaming, setSectionStreaming] = useState(false);
   const [streamText, setStreamText] = useState('');
-  const [streamingRootPlaceholders, setStreamingRootPlaceholders] = useState<StreamingRootPlaceholder[]>([]);
-  const [finalMode, setFinalMode] = useState(false);
+  const [streamingChildPlaceholders, setStreamingChildPlaceholders] = useState<StreamingChildPlaceholder[]>([]);
   const [onlyOfficeLoading, setOnlyOfficeLoading] = useState(false);
   const [onlyOfficeError, setOnlyOfficeError] = useState('');
   const [downloadUrl, setDownloadUrl] = useState('');
   const streamStartedRef = useRef(false);
+  const onlyOfficeProjectRef = useRef('');
 
   async function load(): Promise<void> {
     setLoading(true);
+    setDownloadUrl('');
+    setOnlyOfficeError('');
     try {
       const projectId = searchParams.get('projectId');
       const result = projectId ? await getInterpretation(projectId) : await getLatestInterpretation();
@@ -244,7 +225,6 @@ export function BidEditorPage(): JSX.Element {
       message.warning('缺少项目编号，无法打开 ONLYOFFICE。');
       return;
     }
-    setFinalMode(true);
     setOnlyOfficeLoading(true);
     setOnlyOfficeError('');
     try {
@@ -273,6 +253,19 @@ export function BidEditorPage(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
+  useEffect(() => {
+    const projectId = data?.project?.id || searchParams.get('projectId') || '';
+    if (loading || streaming || !projectId || !chapters.length) {
+      return;
+    }
+    if (onlyOfficeProjectRef.current === projectId) {
+      return;
+    }
+    onlyOfficeProjectRef.current = projectId;
+    void openOnlyOfficeInPanel();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.project?.id, loading, streaming, chapters.length, searchParams]);
+
   function startOutlineStream(projectId: string): void {
     if (streamStartedRef.current) {
       return;
@@ -282,7 +275,7 @@ export function BidEditorPage(): JSX.Element {
     setStreamText('AI 正在分析招标解读结果，准备生成标书章节大纲...');
     setChapters([]);
     setSelectedId('');
-    setStreamingRootPlaceholders([]);
+    setStreamingChildPlaceholders([]);
 
     const source = new EventSource(`/api/bidding/interpretations/${projectId}/bid-outline/stream`);
     source.addEventListener('start', event => {
@@ -290,24 +283,31 @@ export function BidEditorPage(): JSX.Element {
       setStreamText(payload.message || 'AI 已开始生成章节大纲。');
     });
     source.addEventListener('meta', event => {
-      const payload = JSON.parse((event as MessageEvent).data) as { outline: BidOutline; total: number };
+      const payload = JSON.parse((event as MessageEvent).data) as { outline: BidOutline; total: number; rootTotal?: number; phase?: string };
       setOutlineMeta({ ...payload.outline, chapters: [] });
-      setStreamText(`AI 已开始生成章节大纲，预计 ${payload.total} 个章节。`);
-      setStreamingRootPlaceholders(
-        Array.from({ length: Math.max(1, Math.min(payload.total, 5)) }, (_, index) => ({
-          id: `streaming-root-${index + 1}`,
-          title: `正在生成第 ${index + 1} 个一级章节...`,
-        })),
-      );
+      setStreamText(payload.phase === 'quick'
+        ? `已生成快速目录骨架，预计 ${payload.total} 个章节，正在逐步展开。`
+        : `AI 已开始生成章节大纲，预计 ${payload.total} 个章节。`);
+    });
+    source.addEventListener('refined', event => {
+      const payload = JSON.parse((event as MessageEvent).data) as { outline: BidOutline; total: number; rootTotal?: number };
+      setOutlineMeta({ ...payload.outline, chapters: [] });
+      setChapters([]);
+      setSelectedId('');
+      setStreamingChildPlaceholders([]);
+      setStreamText(`AI 复核完成，正在刷新最终章节大纲，共 ${payload.total} 个章节。`);
     });
     source.addEventListener('stage', event => {
-      const payload = JSON.parse((event as MessageEvent).data) as { message?: string };
+      const payload = JSON.parse((event as MessageEvent).data) as { message?: string; stage?: string; chapter?: { rootOrder?: string } };
       if (payload.message) {
         setStreamText(payload.message);
       }
+      if (payload.stage === 'children' && payload.chapter?.rootOrder) {
+        setStreamingChildPlaceholders(items => items.filter(item => item.parentOrder !== payload.chapter?.rootOrder));
+      }
     });
     source.addEventListener('chapter', event => {
-      const payload = JSON.parse((event as MessageEvent).data) as { chapter: BidOutlineChapter; index: number; total: number };
+      const payload = JSON.parse((event as MessageEvent).data) as { chapter: BidOutlineChapter; index: number; total: number; phase?: string };
       const chapterDraft: ChapterDraft = {
         ...payload.chapter,
         id: makeChapterId(payload.chapter, payload.index - 1),
@@ -321,9 +321,24 @@ export function BidEditorPage(): JSX.Element {
         return [...items, chapterDraft];
       });
       setSelectedId(current => current || chapterDraft.id);
-      setStreamText(`正在生成第 ${payload.index} / ${payload.total} 个章节：${payload.chapter.title || '未命名章节'}`);
+      setStreamText(`${payload.phase === 'refined' ? '正在刷新最终章节' : '正在生成章节'} ${payload.index} / ${payload.total}：${payload.chapter.title || '未命名章节'}`);
       if ((payload.chapter.level || 1) === 1) {
-        setStreamingRootPlaceholders(items => items.slice(1));
+        const parentOrder = String(payload.chapter.order || '');
+        if (parentOrder) {
+          setStreamingChildPlaceholders(items => [
+            ...items.filter(item => item.parentOrder !== parentOrder),
+            {
+              id: `streaming-child-${parentOrder}`,
+              parentOrder,
+              title: `正在补充「${payload.chapter.title || parentOrder}」下的子章节...`,
+            },
+          ]);
+        }
+      } else {
+        const parentOrder = String(payload.chapter.order || '').split('.', 1)[0];
+        if (parentOrder) {
+          setStreamingChildPlaceholders(items => items.filter(item => item.parentOrder !== parentOrder));
+        }
       }
     });
     source.addEventListener('done', event => {
@@ -332,7 +347,7 @@ export function BidEditorPage(): JSX.Element {
       setData(current => current ? { ...current, sections: [] } : current);
       setStreamText('标书章节大纲生成完成，已进入可编辑状态。');
       setStreaming(false);
-      setStreamingRootPlaceholders([]);
+      setStreamingChildPlaceholders([]);
       source.close();
       window.history.replaceState(null, '', `/bid-editor?projectId=${projectId}`);
       void reloadProject(projectId);
@@ -348,7 +363,7 @@ export function BidEditorPage(): JSX.Element {
         }
       }
       setStreaming(false);
-      setStreamingRootPlaceholders([]);
+      setStreamingChildPlaceholders([]);
       source.close();
     });
   }
@@ -372,6 +387,10 @@ export function BidEditorPage(): JSX.Element {
     return chapters.filter(chapter => matchedIds.has(chapter.id));
   }, [chapters, keyword]);
   const selectedChapter = chapters.find(chapter => chapter.id === selectedId) || chapters[0];
+  const visibleChapters = useMemo(
+    () => filteredChapters.filter(chapter => isVisibleChapter(chapter, filteredChapters)),
+    [filteredChapters],
+  );
   const matchText = keyword ? `${filteredChapters.length} / ${chapters.length}` : `0 / ${chapters.length}`;
   const totalChars = chapters.reduce((sum, chapter) => sum + chapter.content.length, 0);
   const estimatedPages = Math.max(1, Math.ceil(totalChars / 700));
@@ -484,10 +503,6 @@ export function BidEditorPage(): JSX.Element {
     }
   }
 
-  function updateSelectedContent(value: string): void {
-    setChapters(items => items.map(item => item.id === selectedChapter?.id ? { ...item, content: value } : item));
-  }
-
   function createBlankChapter(order: number, title = '新增章节', parent?: ChapterDraft | null): ChapterDraft {
     return {
       id: `${order}-${title}-${Date.now()}`,
@@ -581,6 +596,9 @@ export function BidEditorPage(): JSX.Element {
       setChapters(items => normalizeChapterHierarchy(items.map(item => item.id === selectedChapter.id ? { ...item, ...saved } : item)));
       setSelectedId(saved.id);
       message.success('章节已保存到 Supabase');
+      onlyOfficeProjectRef.current = '';
+      setDownloadUrl('');
+      void openOnlyOfficeInPanel();
     } catch (error) {
       message.error(error instanceof Error ? error.message : String(error));
     }
@@ -829,8 +847,15 @@ export function BidEditorPage(): JSX.Element {
         <Space size={10} wrap>
           <Button onClick={() => navigate('/interpretation')}>返回解读</Button>
           <Button icon={<BookOpen size={16} />}>关联资料</Button>
-          {!finalMode ? <Button onClick={() => void openOnlyOfficeInPanel()}>ONLYOFFICE 终稿</Button> : <Tag color="gold">终稿模式</Tag>}
-          <Button type="primary" icon={<Download size={17} />}>标书下载</Button>
+          <Button
+            type="primary"
+            icon={<Download size={17} />}
+            href={downloadUrl || undefined}
+            target={downloadUrl ? '_blank' : undefined}
+            disabled={!downloadUrl}
+          >
+            标书下载
+          </Button>
         </Space>
       </header>
 
@@ -855,7 +880,7 @@ export function BidEditorPage(): JSX.Element {
           suffix={<span className="match-count">{matchText}</span>}
           placeholder="输入章节名称搜索"
         />
-        <div className="chapter-tree">
+        <div className={`chapter-tree ${streaming ? 'is-streaming' : ''}`}>
           {streaming ? (
             <div className="chapter-streaming-panel">
               <div className="chapter-streaming-head">
@@ -867,58 +892,64 @@ export function BidEditorPage(): JSX.Element {
                   <span>{streamText || '正在结合招标解读结果生成目录...'}</span>
                 </div>
               </div>
-              <div className="chapter-streaming-roots">
-                {streamingRootPlaceholders.map(item => (
-                  <div key={item.id} className="chapter-node chapter-node-placeholder level-1">
-                    <span className="chapter-toggle" />
-                    <span className="chapter-status" />
-                    <span className="chapter-title">{item.title}</span>
-                  </div>
-                ))}
-              </div>
             </div>
           ) : null}
-          {filteredChapters.filter(chapter => isVisibleChapter(chapter, filteredChapters)).map(chapter => {
+          {visibleChapters.map(chapter => {
             const active = chapter.id === selectedChapter?.id;
+            const childPlaceholder = (chapter.level || 1) === 1
+              ? streamingChildPlaceholders.find(item => item.parentOrder === String(chapter.order || ''))
+              : null;
             return (
-              <div
-                key={chapter.id}
-                className={`chapter-node level-${chapter.level || 1} ${active ? 'active' : ''}`}
-                style={{ paddingLeft: `${chapterIndent(chapter.level)}px` }}
-                role="button"
-                tabIndex={0}
-                onClick={() => setSelectedId(chapter.id)}
-                onKeyDown={event => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    setSelectedId(chapter.id);
-                  }
-                }}
-              >
-                <span className="chapter-toggle" onClick={event => { event.stopPropagation(); toggleChapter(chapter.id); }}>
-                  {chapter.expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                </span>
-                <span className={`chapter-status ${chapter.priority || 'medium'}`} />
-                <span className="chapter-title">{chapter.order ? `${chapter.order}. ` : ''}{chapter.title}</span>
-                <Dropdown
-                  trigger={['click']}
-                  menu={{
-                    items: chapterMenuItems(chapter),
-                    onClick: info => {
-                      info.domEvent.stopPropagation();
-                      handleChapterMenu(info.key, chapter);
-                    },
+              <Fragment key={chapter.id}>
+                <div
+                  className={`chapter-node level-${chapter.level || 1} ${active ? 'active' : ''}`}
+                  style={{ paddingLeft: `${chapterIndent(chapter.level)}px` }}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setSelectedId(chapter.id)}
+                  onKeyDown={event => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      setSelectedId(chapter.id);
+                    }
                   }}
                 >
-                  <button
-                    type="button"
-                    className="chapter-more"
-                    aria-label="章节操作"
-                    onClick={event => event.stopPropagation()}
+                  <span className="chapter-toggle" onClick={event => { event.stopPropagation(); toggleChapter(chapter.id); }}>
+                    {chapter.expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  </span>
+                  <span className={`chapter-status ${chapter.priority || 'medium'}`} />
+                  <span className="chapter-title">{chapter.order ? `${chapter.order}. ` : ''}{chapter.title}</span>
+                  <Dropdown
+                    trigger={['click']}
+                    menu={{
+                      items: chapterMenuItems(chapter),
+                      onClick: info => {
+                        info.domEvent.stopPropagation();
+                        handleChapterMenu(info.key, chapter);
+                      },
+                    }}
                   >
-                    <MoreVertical size={15} />
-                  </button>
-                </Dropdown>
-              </div>
+                    <button
+                      type="button"
+                      className="chapter-more"
+                      aria-label="章节操作"
+                      onClick={event => event.stopPropagation()}
+                    >
+                      <MoreVertical size={15} />
+                    </button>
+                  </Dropdown>
+                </div>
+                {streaming && childPlaceholder && chapter.expanded ? (
+                  <div
+                    key={childPlaceholder.id}
+                    className="chapter-node chapter-node-placeholder chapter-node-child-placeholder level-2"
+                    style={{ paddingLeft: `${chapterIndent(2)}px` }}
+                  >
+                    <span className="chapter-toggle" />
+                    <span className="chapter-status" />
+                    <span className="chapter-title">{childPlaceholder.title}</span>
+                  </div>
+                ) : null}
+              </Fragment>
             );
           })}
         </div>
@@ -932,120 +963,50 @@ export function BidEditorPage(): JSX.Element {
       <main className="bid-editor-main">
         <section className="editor-title-row">
           <div>
-            <h1>{finalMode ? 'ONLYOFFICE 终稿模式' : (selectedChapter?.title || '未选择章节')}</h1>
-            <p>{finalMode ? '当前为终稿编辑模式，右侧使用 ONLYOFFICE 进行 DOCX 在线定稿。' : (streaming ? streamText : selectedChapter?.purpose || '请选择左侧章节查看编写要求。')}</p>
+            <h1>{selectedChapter?.title || '未选择章节'}</h1>
+            <p>{streaming ? streamText : selectedChapter?.purpose || '右侧已嵌入 ONLYOFFICE，可直接进行 DOCX 格式定稿。'}</p>
           </div>
           <Space>
-            {finalMode ? <Tag color="gold">终稿模式</Tag> : null}
+            <Tag color={onlyOfficeError ? 'red' : onlyOfficeLoading ? 'processing' : 'gold'}>
+              {onlyOfficeError ? '终稿加载失败' : onlyOfficeLoading ? '终稿加载中' : 'ONLYOFFICE 在线终稿'}
+            </Tag>
             {streaming ? <Tag color="processing">大纲生成中</Tag> : null}
             {sectionStreaming ? <Tag color="processing">正文生成中</Tag> : null}
-            {!finalMode ? <Tag color="blue">{selectedChapter?.priority || 'medium'}</Tag> : null}
-            {!finalMode ? <Button icon={<Sparkles size={16} />} loading={sectionStreaming} disabled={!selectedChapter || streaming} onClick={() => void generateCurrentSection()}>生成本章正文</Button> : null}
-            {!finalMode ? <Button type="primary" icon={<Save size={16} />} onClick={() => void saveDraft()}>保存</Button> : null}
-            {finalMode ? <Button onClick={() => setFinalMode(false)}>返回章节编辑</Button> : null}
-            {finalMode && downloadUrl ? <Button icon={<Download size={16} />} href={downloadUrl} target="_blank">下载 DOCX</Button> : null}
+            <Tag color="blue">{selectedChapter?.priority || 'medium'}</Tag>
+            <Button icon={<Sparkles size={16} />} loading={sectionStreaming} disabled={!selectedChapter || streaming} onClick={() => void generateCurrentSection()}>生成本章正文</Button>
+            <Button type="primary" icon={<Save size={16} />} onClick={() => void saveDraft()}>保存</Button>
           </Space>
         </section>
 
-        {!finalMode ? (
-        <section className="office-toolbar">
-          <div className="toolbar-group">
-            {toolButton('展开/收起目录', <PanelLeft size={16} />)}
-            <span>开始</span>
-            {toolButton('撤销', <Undo2 size={16} />)}
-            {toolButton('重做', <Redo2 size={16} />)}
-          </div>
-          <div className="toolbar-group">
-            <select aria-label="段落样式" defaultValue="正文">
-              <option>正文</option>
-              <option>标题一</option>
-              <option>标题二</option>
-              <option>标题三</option>
-            </select>
-            {toolButton('加粗', <Bold size={16} />)}
-            {toolButton('斜体', <Italic size={16} />)}
-            {toolButton('下划线', <Underline size={16} />)}
-            {toolButton('高亮', <Highlighter size={16} />)}
-          </div>
-          <div className="toolbar-group">
-            {toolButton('有序列表', <ListOrdered size={16} />)}
-            {toolButton('无序列表', <List size={16} />)}
-            {toolButton('左对齐', <AlignLeft size={16} />)}
-            {toolButton('居中', <AlignCenter size={16} />)}
-            {toolButton('右对齐', <AlignRight size={16} />)}
-          </div>
-          <div className="toolbar-group">
-            {toolButton('插入表格', <Table2 size={16} />)}
-            {toolButton('打印', <Printer size={16} />)}
-          </div>
-        </section>
-        ) : null}
-
         <section className="editor-workspace">
-          {finalMode ? (
-            <div className="onlyoffice-embed-shell">
-              {onlyOfficeLoading ? (
-                <div className="onlyoffice-embed-loading">
-                  <BrandMark size={88} className="loading-brand" />
-                  <Spin size="large" />
-                  <span>正在生成 DOCX 并加载 ONLYOFFICE...</span>
-                </div>
-              ) : null}
-              {onlyOfficeError ? (
-                <Alert
-                  type="warning"
-                  showIcon
-                  message="ONLYOFFICE 加载失败"
-                  description={`${onlyOfficeError}。请确认 ONLYOFFICE 服务地址为 ${ONLYOFFICE_URL}，并且 APP_PUBLIC_BASE_URL 对容器可达。`}
-                />
-              ) : null}
-              <div
-                id="onlyoffice-embed-editor"
-                className="onlyoffice-embed-editor"
-                style={{ display: onlyOfficeLoading || !!onlyOfficeError ? 'none' : 'block' }}
+          <div className="onlyoffice-embed-shell">
+            {onlyOfficeLoading || (!onlyOfficeError && !downloadUrl) ? (
+              <div className="onlyoffice-embed-loading">
+                <BrandMark size={88} className="loading-brand" />
+                <Spin size="large" />
+                <span>{streaming ? '章节大纲生成完成后将自动加载 ONLYOFFICE...' : '正在生成 DOCX 并加载 ONLYOFFICE...'}</span>
+              </div>
+            ) : null}
+            {onlyOfficeError ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="ONLYOFFICE 加载失败"
+                description={`${onlyOfficeError}。请确认 ONLYOFFICE 服务地址为 ${ONLYOFFICE_URL}，并且 APP_PUBLIC_BASE_URL 对容器可达。`}
               />
-            </div>
-          ) : mode === '目录模式' ? (
-            <div className="outline-document">
-              <h2>投标文件目录</h2>
-              {chapters.length ? (
-                <ol>
-                  {chapters.map(chapter => (
-                    <li key={`toc-${chapter.id}`} style={{ marginLeft: `${Math.max(0, (chapter.level || 1) - 1) * 18}px` }}>
-                      <strong>{chapter.title}</strong>
-                      <span>{chapter.purpose}</span>
-                    </li>
-                  ))}
-                </ol>
-              ) : (
-                <div className="document-empty-tip">
-                  <strong>目录生成中</strong>
-                  <span>章节会优先流式出现在左侧目录，生成到首个章节后这里会自动展示草稿。</span>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="document-page">
-              {selectedChapter ? (
-                <textarea
-                  aria-label="章节正文编辑器"
-                  value={selectedChapter.content}
-                  onChange={event => updateSelectedContent(event.target.value)}
-                />
-              ) : (
-                <div className="document-empty-tip">
-                  <strong>未选择章节</strong>
-                  <span>{streaming ? '章节会在左侧目录逐条流式出现，选中后这里展示正文。' : '请在左侧选择章节后查看或编辑正文。'}</span>
-                </div>
-              )}
-            </div>
-          )}
+            ) : null}
+            <div
+              id="onlyoffice-embed-editor"
+              className="onlyoffice-embed-editor"
+              style={{ display: onlyOfficeLoading || !!onlyOfficeError || !downloadUrl ? 'none' : 'block' }}
+            />
+          </div>
         </section>
 
         <footer className="editor-statusbar">
-          <span>当前章节：{finalMode ? 'ONLYOFFICE 终稿' : (selectedChapter?.title || '-')}</span>
-          <span>来源页码：{finalMode ? 'DOCX 终稿在线编辑' : (selectedChapter?.source_pages?.join('、') || '需复核')}</span>
-          <span>{finalMode ? '在线终稿' : '缩放 99%'}</span>
+          <span>当前章节：{selectedChapter?.title || '-'}</span>
+          <span>来源页码：{selectedChapter?.source_pages?.join('、') || '需复核'}</span>
+          <span>{downloadUrl ? 'ONLYOFFICE 在线终稿' : '终稿准备中'}</span>
         </footer>
       </main>
     </div>

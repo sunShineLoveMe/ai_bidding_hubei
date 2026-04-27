@@ -1,5 +1,7 @@
 import json
+import logging
 import re
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Iterator
@@ -396,6 +398,15 @@ def _stream_ordered_chapters(chapters: list[dict[str, Any]]) -> Iterator[dict[st
             yield child
 
 
+def _refine_bid_outline_in_background(project_id: str, payload: dict[str, Any], analysis: dict[str, Any]) -> None:
+    try:
+        outline = _generate_outline_from_ai_or_rule(payload)
+        save_bid_outline(project_id, outline, analysis)
+        replace_bid_sections_from_outline(project_id, outline)
+    except Exception:
+        logging.exception("后台 AI 复核标书章节大纲失败: %s", project_id)
+
+
 def stream_bid_outline(project_id: str) -> Iterator[dict[str, Any]]:
     payload = get_project_interpretation(project_id)
     analysis = payload.get("analysis")
@@ -407,50 +418,74 @@ def stream_bid_outline(project_id: str) -> Iterator[dict[str, Any]]:
         "message": "AI 正在结合招标解读结果生成章节大纲。",
     }
 
-    outline = _generate_outline_from_ai_or_rule(payload)
+    quick_outline = _build_rule_outline(payload)
+    quick_chapters = quick_outline.get("chapters") or []
+    quick_root_count = sum(1 for chapter in quick_chapters if "." not in str(chapter.get("order") or ""))
 
     yield {
         "type": "meta",
         "outline": {
-            key: value for key, value in outline.items()
+            key: value for key, value in quick_outline.items()
             if key != "chapters"
         },
-        "total": len(outline.get("chapters") or []),
+        "total": len(quick_chapters),
+        "rootTotal": quick_root_count,
+        "phase": "quick",
     }
-
-    chapters = outline.get("chapters") or []
-    root_count = sum(1 for chapter in chapters if "." not in str(chapter.get("order") or ""))
-    yielded = 0
 
     yield {
         "type": "stage",
         "stage": "roots",
-        "message": f"正在生成一级目录框架，共 {root_count} 个一级章节。",
+        "message": f"已生成快速一级目录框架，共 {quick_root_count} 个一级章节，正在逐章展开。",
     }
 
-    for chapter in _stream_ordered_chapters(chapters):
+    yielded = 0
+    quick_root_titles = {
+        str(chapter.get("order") or ""): chapter.get("title")
+        for chapter in quick_chapters
+        if "." not in str(chapter.get("order") or "")
+    }
+    for chapter in _stream_ordered_chapters(quick_chapters):
         yielded += 1
         if (chapter.get("level") or 1) == 2:
+            root_order = str(chapter.get("order") or "").split(".", 1)[0]
             yield {
                 "type": "stage",
                 "stage": "children",
-                "message": f"正在补充「{str(chapter.get('order') or '').split('.', 1)[0]}」下的子章节。",
+                "message": f"正在补充「{quick_root_titles.get(root_order) or root_order}」下的子章节。",
                 "chapter": {
                     "order": chapter.get("order"),
                     "title": chapter.get("title"),
+                    "rootOrder": root_order,
+                    "rootTitle": quick_root_titles.get(root_order),
                 },
             }
         yield {
             "type": "chapter",
             "index": yielded,
-            "total": len(chapters),
+            "total": len(quick_chapters),
+            "phase": "quick",
             "chapter": chapter,
         }
-        time.sleep(0.08 if (chapter.get("level") or 1) == 1 else 0.12)
+        time.sleep(0.03 if (chapter.get("level") or 1) == 1 else 0.05)
 
-    save_bid_outline(project_id, outline, analysis)
-    replace_bid_sections_from_outline(project_id, outline)
+    save_bid_outline(project_id, quick_outline, analysis)
+    replace_bid_sections_from_outline(project_id, quick_outline)
+
+    yield {
+        "type": "stage",
+        "stage": "done",
+        "message": "快速章节大纲已生成，AI 将在后台继续复核并优化最终版本。",
+    }
+
+    threading.Thread(
+        target=_refine_bid_outline_in_background,
+        args=(project_id, payload, analysis),
+        daemon=True,
+    ).start()
+
     yield {
         "type": "done",
-        "outline": outline,
+        "outline": quick_outline,
+        "backgroundRefining": True,
     }
