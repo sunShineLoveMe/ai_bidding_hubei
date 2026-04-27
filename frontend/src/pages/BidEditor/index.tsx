@@ -1195,11 +1195,13 @@ export function BidEditorPage(): JSX.Element {
                 description={`${onlyOfficeError}。请确认 ONLYOFFICE 服务地址为 ${ONLYOFFICE_URL}，并且 APP_PUBLIC_BASE_URL 对容器可达。`}
               />
             ) : null}
-            <div
-              ref={onlyOfficeWrapperRef}
-              className="onlyoffice-embed-editor"
-              style={{ display: onlyOfficeError ? 'none' : 'block' }}
-            />
+            <div className="onlyoffice-safe-house" style={{ display: onlyOfficeError ? 'none' : 'flex', flex: 1, flexDirection: 'column', width: '100%', height: '100%' }}>
+              <div
+                ref={onlyOfficeWrapperRef}
+                className="onlyoffice-embed-editor"
+                style={{ flex: 1, width: '100%', height: '100%' }}
+              />
+            </div>
           </div>
         </section>
 
