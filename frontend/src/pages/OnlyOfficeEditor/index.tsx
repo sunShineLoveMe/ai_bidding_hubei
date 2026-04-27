@@ -43,6 +43,8 @@ export function OnlyOfficeEditorPage(): JSX.Element {
   const [downloadUrl, setDownloadUrl] = useState('');
 
   const projectId = useMemo(() => searchParams.get('projectId') || '', [searchParams]);
+  const sectionId = useMemo(() => searchParams.get('sectionId') || undefined, [searchParams]);
+  const embedded = searchParams.get('embed') === '1';
 
   async function bootstrap(): Promise<void> {
     if (!projectId) {
@@ -54,7 +56,7 @@ export function OnlyOfficeEditorPage(): JSX.Element {
     setLoading(true);
     setError('');
     try {
-      const data = await generateOnlyOfficeConfig(projectId);
+      const data = await generateOnlyOfficeConfig(projectId, sectionId);
       setDownloadUrl(data.downloadUrl || '');
       await loadOnlyOfficeScript();
       const container = document.getElementById('onlyoffice-editor');
@@ -76,17 +78,17 @@ export function OnlyOfficeEditorPage(): JSX.Element {
   useEffect(() => {
     void bootstrap();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [projectId, sectionId]);
 
   if (error) {
     return (
-      <div className="onlyoffice-shell">
-        <div className="onlyoffice-topbar">
+      <div className={`onlyoffice-shell ${embedded ? 'embedded' : ''}`}>
+        {!embedded ? <div className="onlyoffice-topbar">
           <Space>
             <Button icon={<ArrowLeft size={16} />} onClick={() => navigate(`/bid-editor?projectId=${projectId}`)}>返回工作台</Button>
             {downloadUrl ? <Button icon={<Download size={16} />} href={downloadUrl} target="_blank">下载 DOCX</Button> : null}
           </Space>
-        </div>
+        </div> : null}
         <Result
           status="warning"
           title="ONLYOFFICE 加载失败"
@@ -109,13 +111,13 @@ export function OnlyOfficeEditorPage(): JSX.Element {
   }
 
   return (
-    <div className="onlyoffice-shell">
-      <div className="onlyoffice-topbar">
+    <div className={`onlyoffice-shell ${embedded ? 'embedded' : ''}`}>
+      {!embedded ? <div className="onlyoffice-topbar">
         <Space>
           <Button icon={<ArrowLeft size={16} />} onClick={() => navigate(`/bid-editor?projectId=${projectId}`)}>返回工作台</Button>
           {downloadUrl ? <Button icon={<Download size={16} />} href={downloadUrl} target="_blank">下载 DOCX</Button> : null}
         </Space>
-      </div>
+      </div> : null}
       {loading ? (
         <div className="onlyoffice-loading">
           <Spin size="large" />

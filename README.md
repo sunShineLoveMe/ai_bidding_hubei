@@ -547,6 +547,7 @@ http://<服务器地址>:3012/bidding
 * 已新增独立终稿页 `/onlyoffice-editor?projectId=<project_id>`：前端会调用后端生成 DOCX，再从 `http://127.0.0.1:8080` 加载 ONLYOFFICE Docs API 并打开在线编辑器。
 * 已扩展 ONLYOFFICE 保存回调：`/api/bidding/save-callback` 现在优先处理新的 `onlyoffice_documents` 映射，把编辑后的 DOCX 回写到本地 `outputs/` 文件；旧的 SQLite `bidding` 回调逻辑仍保留兼容。
 * 已将 ONLYOFFICE 终稿模式直接内嵌进 `/bid-editor` 右侧编辑区：进入标书编制工作台后会自动生成 DOCX 并加载在线终稿编辑器，不再需要点击“ONLYOFFICE 终稿”按钮，也不再展示临时 textarea 编辑画布。
+* 已将工作台内嵌 ONLYOFFICE 改为 iframe 隔离加载：父级 `/bid-editor` 不再直接加载 ONLYOFFICE SDK 或创建 `DocEditor`，而是嵌入 `/onlyoffice-editor?embed=1`，避免 React 与 ONLYOFFICE 同时操作同一 DOM 导致 `insertBefore`、容器丢失等异常。
 * 已收敛 ONLYOFFICE 终稿模式工具栏：默认强制 `zh-CN` 语言、启用 `compactHeader + compactToolbar + toolbarNoTabs`，并关闭评论、聊天、反馈、保护、Review 等当前招投标终稿阶段不需要的能力。
 * 已优化 ONLYOFFICE 中文体验：DOCX 生成时写入默认校对语言 `zh-CN` 和中文字体信息，避免状态栏默认显示 `English - United States`；ONLYOFFICE 顶部文档标题改为中文项目名，不再展示拼音安全文件名。
 * 已新增章节目录与右侧 ONLYOFFICE 聚焦联动：左侧选中章节后，会按“当前章节及其子章节”生成聚焦 DOCX 并重新加载到右侧编辑区，用于快速查看和编辑当前章节内容。

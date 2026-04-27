@@ -21,7 +21,7 @@ import {
   SlidersHorizontal,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { deleteBidSection, generateOnlyOfficeConfig, getInterpretation, getLatestInterpretation, reorderBidSections, saveBidSection } from '../../api/bidProject';
+import { deleteBidSection, getInterpretation, getLatestInterpretation, reorderBidSections, saveBidSection } from '../../api/bidProject';
 import { BrandMark } from '../../components/common/BrandMark';
 import type { BidOutline, BidOutlineChapter, BidSection, InterpretationResponse } from '../../types/interpretation';
 
@@ -42,37 +42,6 @@ type StreamingChildPlaceholder = {
   parentOrder: string;
   title: string;
 };
-
-declare global {
-  interface Window {
-    DocsAPI?: {
-      DocEditor: new (id: string, config: Record<string, unknown>) => unknown;
-    };
-  }
-}
-
-const ONLYOFFICE_URL = (((import.meta as ImportMeta & { env?: Record<string, string> }).env?.VITE_ONLYOFFICE_URL) || 'http://127.0.0.1:8080').replace(/\/$/, '');
-
-function loadOnlyOfficeScript(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (window.DocsAPI) {
-      resolve();
-      return;
-    }
-    const existing = document.querySelector<HTMLScriptElement>('script[data-onlyoffice="true"]');
-    if (existing) {
-      existing.addEventListener('load', () => resolve(), { once: true });
-      existing.addEventListener('error', () => reject(new Error('ONLYOFFICE 脚本加载失败')), { once: true });
-      return;
-    }
-    const script = document.createElement('script');
-    script.src = `${ONLYOFFICE_URL}/web-apps/apps/api/documents/api.js`;
-    script.dataset.onlyoffice = 'true';
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error('ONLYOFFICE 脚本加载失败'));
-    document.body.appendChild(script);
-  });
-}
 
 function asBidOutline(meta: Record<string, unknown> | undefined | null): BidOutline | null {
   return (meta?.bid_outline || null) as BidOutline | null;
@@ -184,22 +153,9 @@ export function BidEditorPage(): JSX.Element {
   const [onlyOfficeLoading, setOnlyOfficeLoading] = useState(false);
   const [onlyOfficeError, setOnlyOfficeError] = useState('');
   const [downloadUrl, setDownloadUrl] = useState('');
+  const [onlyOfficeFrameUrl, setOnlyOfficeFrameUrl] = useState('');
   const streamStartedRef = useRef(false);
   const onlyOfficeDocumentRef = useRef('');
-  const onlyOfficeWrapperRef = useRef<HTMLDivElement | null>(null);
-  const onlyOfficeLoadSeqRef = useRef(0);
-
-  async function waitForOnlyOfficeContainer(): Promise<HTMLDivElement> {
-    for (let index = 0; index < 20; index += 1) {
-      if (onlyOfficeWrapperRef.current) {
-        return onlyOfficeWrapperRef.current;
-      }
-      await new Promise<void>(resolve => {
-        window.requestAnimationFrame(() => resolve());
-      });
-    }
-    throw new Error('ONLYOFFICE 容器未找到');
-  }
 
   async function load(): Promise<void> {
     setLoading(true);
@@ -238,44 +194,24 @@ export function BidEditorPage(): JSX.Element {
     setSelectedId(current => current || drafts[0]?.id || '');
   }
 
-  async function openOnlyOfficeInPanel(sectionId?: string): Promise<void> {
+  function openOnlyOfficeInPanel(sectionId?: string): void {
     const projectId = data?.project?.id || searchParams.get('projectId') || '';
     if (!projectId) {
       message.warning('缺少项目编号，无法打开 ONLYOFFICE。');
       return;
     }
-    const loadSeq = onlyOfficeLoadSeqRef.current + 1;
-    onlyOfficeLoadSeqRef.current = loadSeq;
+    const params = new URLSearchParams({
+      projectId,
+      embed: '1',
+      t: String(Date.now()),
+    });
+    if (sectionId && isUuid(sectionId)) {
+      params.set('sectionId', sectionId);
+    }
     setOnlyOfficeLoading(true);
     setOnlyOfficeError('');
-    try {
-      const response = await generateOnlyOfficeConfig(projectId, sectionId && isUuid(sectionId) ? sectionId : undefined);
-      if (onlyOfficeLoadSeqRef.current !== loadSeq) {
-        return;
-      }
-      setDownloadUrl(response.downloadUrl || '');
-      await loadOnlyOfficeScript();
-      if (onlyOfficeLoadSeqRef.current !== loadSeq) {
-        return;
-      }
-      const container = await waitForOnlyOfficeContainer();
-      if ((window as any).bidDocEditor) {
-        try { (window as any).bidDocEditor.destroyEditor(); } catch (e) { /* ignore */ }
-        (window as any).bidDocEditor = null;
-      }
-      container.innerHTML = '<div id="onlyoffice-embed-editor" style="width: 100%; height: 100%;"></div>';
-      // eslint-disable-next-line no-new
-      (window as any).bidDocEditor = new window.DocsAPI!.DocEditor('onlyoffice-embed-editor', response.editorConfig);
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      onlyOfficeDocumentRef.current = '';
-      setOnlyOfficeError(reason);
-      message.error(reason);
-    } finally {
-      if (onlyOfficeLoadSeqRef.current === loadSeq) {
-        setOnlyOfficeLoading(false);
-      }
-    }
+    setDownloadUrl('');
+    setOnlyOfficeFrameUrl(`/onlyoffice-editor?${params.toString()}`);
   }
 
   useEffect(() => {
@@ -295,7 +231,7 @@ export function BidEditorPage(): JSX.Element {
     }
     const timer = window.setTimeout(() => {
       onlyOfficeDocumentRef.current = documentKey;
-      void openOnlyOfficeInPanel(isUuid(selectedId) ? selectedId : undefined);
+      openOnlyOfficeInPanel(isUuid(selectedId) ? selectedId : undefined);
     }, 350);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -303,9 +239,9 @@ export function BidEditorPage(): JSX.Element {
 
   useEffect(() => {
     if (mode === '目录模式') {
-      onlyOfficeLoadSeqRef.current += 1;
       setOnlyOfficeLoading(false);
       setOnlyOfficeError('');
+      setOnlyOfficeFrameUrl('');
     }
   }, [mode]);
 
@@ -665,7 +601,7 @@ export function BidEditorPage(): JSX.Element {
       message.success('章节已保存到 Supabase');
       onlyOfficeDocumentRef.current = '';
       setDownloadUrl('');
-      void openOnlyOfficeInPanel(selectedChapter.id);
+      openOnlyOfficeInPanel(selectedChapter.id);
     } catch (error) {
       message.error(error instanceof Error ? error.message : String(error));
     }
@@ -1180,11 +1116,11 @@ export function BidEditorPage(): JSX.Element {
 
         <section className="editor-workspace">
           <div className="onlyoffice-embed-shell">
-            {onlyOfficeLoading || (!onlyOfficeError && !downloadUrl) ? (
+            {onlyOfficeLoading || (!onlyOfficeError && !onlyOfficeFrameUrl) ? (
               <div className="onlyoffice-embed-loading">
                 <BrandMark size={88} className="loading-brand" />
                 <Spin size="large" />
-                <span>{streaming ? '章节大纲生成完成后将自动加载 ONLYOFFICE...' : '正在生成 DOCX 并加载 ONLYOFFICE...'}</span>
+                <span>{streaming ? '章节大纲生成完成后将自动加载 ONLYOFFICE...' : '正在准备 ONLYOFFICE 编辑区...'}</span>
               </div>
             ) : null}
             {onlyOfficeError ? (
@@ -1192,23 +1128,25 @@ export function BidEditorPage(): JSX.Element {
                 type="warning"
                 showIcon
                 message="ONLYOFFICE 加载失败"
-                description={`${onlyOfficeError}。请确认 ONLYOFFICE 服务地址为 ${ONLYOFFICE_URL}，并且 APP_PUBLIC_BASE_URL 对容器可达。`}
+                description={`${onlyOfficeError}。请确认 ONLYOFFICE 服务和后端 APP_PUBLIC_BASE_URL 配置可用。`}
               />
             ) : null}
-            <div className="onlyoffice-safe-house" style={{ display: onlyOfficeError ? 'none' : 'flex', flex: 1, flexDirection: 'column', width: '100%', height: '100%' }}>
-              <div
-                ref={onlyOfficeWrapperRef}
-                className="onlyoffice-embed-editor"
-                style={{ flex: 1, width: '100%', height: '100%' }}
+            {onlyOfficeFrameUrl && !onlyOfficeError ? (
+              <iframe
+                key={onlyOfficeFrameUrl}
+                className="onlyoffice-embed-frame"
+                src={onlyOfficeFrameUrl}
+                title="ONLYOFFICE 在线终稿"
+                onLoad={() => setOnlyOfficeLoading(false)}
               />
-            </div>
+            ) : null}
           </div>
         </section>
 
         <footer className="editor-statusbar">
           <span>当前章节：{selectedChapter?.title || '-'}</span>
           <span>来源页码：{selectedChapter?.source_pages?.join('、') || '需复核'}</span>
-          <span>{downloadUrl ? 'ONLYOFFICE 在线终稿' : '终稿准备中'}</span>
+          <span>{onlyOfficeFrameUrl ? 'ONLYOFFICE 在线终稿' : '终稿准备中'}</span>
         </footer>
       </main>
     </div>
