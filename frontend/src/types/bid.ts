@@ -23,6 +23,14 @@ export interface GenerateBidDocumentResponse {
   downloadUrl: string;
 }
 
+export interface OnlyOfficeConfigResponse {
+  message: string;
+  markdown: string;
+  editorConfig: Record<string, unknown>;
+  fileUrl: string;
+  downloadUrl: string;
+}
+
 export interface RecentTask {
   id: string;
   projectName: string;

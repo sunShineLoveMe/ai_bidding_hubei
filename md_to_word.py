@@ -14,6 +14,23 @@ from docx.oxml import OxmlElement
 import shutil
 import uuid
 
+
+def apply_run_font(run, *, east_asia='宋体', latin='Times New Roman', size=None, bold=None):
+    run.font.name = latin
+    run._element.rPr.rFonts.set(qn('w:eastAsia'), east_asia)
+    if size is not None:
+        run.font.size = Pt(size)
+    if bold is not None:
+        run.font.bold = bold
+
+
+def apply_paragraph_format(paragraph, *, first_line_chars=2, line_spacing=1.5, space_before=0, space_after=0):
+    fmt = paragraph.paragraph_format
+    fmt.first_line_indent = Pt(first_line_chars * 12)
+    fmt.line_spacing = line_spacing
+    fmt.space_before = Pt(space_before)
+    fmt.space_after = Pt(space_after)
+
 def convert_mermaid_to_image(mermaid_code):
     """将 Mermaid 代码转换为图片"""
     # 创建临时文件
@@ -100,28 +117,40 @@ def process_mermaid(doc, mermaid_code):
 
 def set_document_styles(doc):
     """设置文档样式"""
-    # 设置默认字体
     styles = doc.styles
-    style = styles['Normal']
-    style.font.name = '宋体'
-    style.font.size = Pt(12)
-    
-    # 设置标题样式
+    normal = styles['Normal']
+    normal.font.name = 'Times New Roman'
+    normal._element.rPr.rFonts.set(qn('w:eastAsia'), '宋体')
+    normal.font.size = Pt(12)
+    normal.paragraph_format.line_spacing = 1.5
+    normal.paragraph_format.first_line_indent = Pt(24)
+    normal.paragraph_format.space_before = Pt(0)
+    normal.paragraph_format.space_after = Pt(0)
+
+    heading_specs = {
+        1: ('黑体', 16, True),
+        2: ('黑体', 15, True),
+        3: ('黑体', 14, True),
+        4: ('宋体', 12, True),
+    }
     for i in range(1, 5):
         style = styles[f'Heading {i}']
-        style.font.name = '黑体'
-        style.font.size = Pt(16 - i)  # 标题字号递减
-        if i == 1:
-            style.font.bold = True
-    
-    # 设置列表样式
-    style = styles['List Bullet']
-    style.font.name = '宋体'
-    style.font.size = Pt(12)
-    
-    style = styles['List Number']
-    style.font.name = '宋体'
-    style.font.size = Pt(12)
+        east_asia, size, bold = heading_specs[i]
+        style.font.name = 'Times New Roman'
+        style._element.rPr.rFonts.set(qn('w:eastAsia'), east_asia)
+        style.font.size = Pt(size)
+        style.font.bold = bold
+        style.paragraph_format.line_spacing = 1.5
+        style.paragraph_format.first_line_indent = Pt(0)
+        style.paragraph_format.space_before = Pt(6 if i <= 2 else 0)
+        style.paragraph_format.space_after = Pt(6 if i <= 2 else 0)
+
+    for style_name in ['List Bullet', 'List Number']:
+        style = styles[style_name]
+        style.font.name = 'Times New Roman'
+        style._element.rPr.rFonts.set(qn('w:eastAsia'), '宋体')
+        style.font.size = Pt(12)
+        style.paragraph_format.line_spacing = 1.5
 
 def set_document_format(doc, project_name):
     """设置文档格式"""
@@ -138,6 +167,8 @@ def set_document_format(doc, project_name):
         header_para = header.paragraphs[0]
         header_para.text = f"{project_name}投标文件"
         header_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for run in header_para.runs:
+            apply_run_font(run, east_asia='宋体', size=10.5)
         
         # 添加页脚
         footer = section.footer
@@ -168,6 +199,8 @@ def set_document_format(doc, project_name):
         run._r.append(fldChar2)
         footer_para.add_run(" 页")
         footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for run in footer_para.runs:
+            apply_run_font(run, east_asia='宋体', size=10.5)
 
 def process_table(md_table, doc):
     """处理 Markdown 表格"""
@@ -192,7 +225,7 @@ def process_table(md_table, doc):
             paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
             for run in paragraph.runs:
                 run.bold = True
-                run.font.name = '黑体'
+                apply_run_font(run, east_asia='黑体', size=12, bold=True)
     
     # 添加数据行
     for line in lines[2:]:  # 跳过表头和分隔行
@@ -205,7 +238,7 @@ def process_table(md_table, doc):
                 for paragraph in row.cells[i].paragraphs:
                     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     for run in paragraph.runs:
-                        run.font.name = '宋体'
+                        apply_run_font(run, east_asia='宋体', size=12)
 
 def convert_md_to_word(md_file):
     """将Markdown文件转换为Word文档"""
@@ -215,6 +248,7 @@ def convert_md_to_word(md_file):
     
     # 创建Word文档
     doc = Document()
+    set_document_styles(doc)
     
     # 设置文档格式
     project_name = Path(md_file).parent.name
@@ -242,10 +276,22 @@ def convert_md_to_word(md_file):
             text = re.sub(r'\*\*(.*?)\*\*', r'\1', line.lstrip('#').strip())
             if level == 1:
                 # 一级标题作为文档标题
-                doc.add_heading(text, level=0)
+                p = doc.add_heading(text, level=0)
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                for run in p.runs:
+                    apply_run_font(run, east_asia='黑体', size=22, bold=True)
             else:
                 # 其他级别的标题
-                doc.add_heading(text, level=level-1)
+                p = doc.add_heading(text, level=level-1)
+                if level == 2:
+                    p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                for run in p.runs:
+                    if level == 2:
+                        apply_run_font(run, east_asia='黑体', size=16, bold=True)
+                    elif level == 3:
+                        apply_run_font(run, east_asia='黑体', size=15, bold=True)
+                    else:
+                        apply_run_font(run, east_asia='宋体', size=12, bold=True)
         
         # 处理列表
         elif line.startswith(('- ', '* ', '+ ')):
@@ -254,7 +300,9 @@ def convert_md_to_word(md_file):
             # 移除加粗标记
             text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
             p = doc.add_paragraph(style='List Bullet')
-            p.add_run(text)
+            run = p.add_run(text)
+            apply_run_font(run, east_asia='宋体', size=12)
+            apply_paragraph_format(p, first_line_chars=0)
         
         # 处理数字列表
         elif re.match(r'^\d+\.', line):
@@ -263,14 +311,18 @@ def convert_md_to_word(md_file):
             # 移除加粗标记
             text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
             p = doc.add_paragraph(style='List Number')
-            p.add_run(text)
+            run = p.add_run(text)
+            apply_run_font(run, east_asia='宋体', size=12)
+            apply_paragraph_format(p, first_line_chars=0)
         
         # 处理普通段落
         elif line:
             # 移除加粗标记
             text = re.sub(r'\*\*(.*?)\*\*', r'\1', line)
             p = doc.add_paragraph()
-            p.add_run(text)
+            run = p.add_run(text)
+            apply_run_font(run, east_asia='宋体', size=12)
+            apply_paragraph_format(p)
         
         i += 1
     

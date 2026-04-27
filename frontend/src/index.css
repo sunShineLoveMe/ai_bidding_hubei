@@ -228,14 +228,6 @@ textarea {
   color: #1d4ed8;
 }
 
-.chapter-node.level-2 {
-  padding-left: 28px;
-}
-
-.chapter-node.level-3 {
-  padding-left: 48px;
-}
-
 .chapter-node.level-2 .chapter-title {
   font-size: 12px;
   font-weight: 750;
@@ -244,6 +236,11 @@ textarea {
 .chapter-node.level-3 .chapter-title {
   font-size: 12px;
   font-weight: 700;
+}
+
+.chapter-node.level-4 .chapter-title {
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .chapter-node:hover .chapter-more,
@@ -337,6 +334,38 @@ textarea {
   background: #f1f3f7;
 }
 
+.onlyoffice-shell {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #f8fafc;
+}
+
+.onlyoffice-topbar {
+  height: 64px;
+  padding: 0 20px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.onlyoffice-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  color: #475569;
+}
+
+.onlyoffice-editor {
+  flex: 1;
+  min-height: 0;
+}
+
 .editor-title-row {
   display: flex;
   align-items: center;
@@ -407,6 +436,37 @@ textarea {
   overflow: auto;
   background: #eef1f6;
   padding: 28px 0;
+}
+
+.onlyoffice-embed-shell {
+  width: min(1280px, calc(100% - 40px));
+  min-height: 760px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.onlyoffice-embed-loading {
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: #475569;
+  background: #fff;
+  border: 1px solid #dce3ee;
+  border-radius: 14px;
+}
+
+.onlyoffice-embed-editor {
+  min-height: 760px;
+  border: 1px solid #dce3ee;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
 }
 
 .document-page,

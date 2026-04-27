@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import type { GenerateBidDocumentResponse, ParseStatusResponse, UploadResponse } from '../types/bid';
+import type { GenerateBidDocumentResponse, OnlyOfficeConfigResponse, ParseStatusResponse, UploadResponse } from '../types/bid';
 import type { BidSection, InterpretationResponse } from '../types/interpretation';
 
 export async function identifyUser(fingerprintId: string): Promise<{ userId: number; isNew: boolean }> {
@@ -60,6 +60,21 @@ export async function deleteBidSection(projectId: string, sectionId: string): Pr
   await apiClient.delete(`/api/bidding/interpretations/${projectId}/sections/${sectionId}`, {
     skipGlobalLoading: true,
   });
+}
+
+export async function reorderBidSections(projectId: string, sections: Partial<BidSection>[]): Promise<BidSection[]> {
+  const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/sections/reorder`, { sections }, {
+    skipGlobalLoading: true,
+  });
+  return response.data.sections || [];
+}
+
+export async function generateOnlyOfficeConfig(projectId: string): Promise<OnlyOfficeConfigResponse> {
+  const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/onlyoffice-config`, undefined, {
+    skipGlobalLoading: true,
+    timeout: 180000,
+  });
+  return response.data;
 }
 
 export async function preAnalyzeBid(biddingId: number): Promise<unknown> {

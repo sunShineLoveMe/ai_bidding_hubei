@@ -35,7 +35,8 @@ export interface InterpretationReport {
 
 export interface BidOutlineChapter {
   id?: string;
-  order?: number;
+  parent_id?: string | null;
+  order?: number | string;
   order_index?: number;
   level?: number;
   title?: string;

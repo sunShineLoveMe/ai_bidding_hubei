@@ -28,6 +28,156 @@
 * **本地兼容数据库:** SQLite，现有 MVP 接口仍保留，后续逐步迁移到 Supabase
 * **文档处理:** `python-docx` / Markdown 解析库
 
+### 在线编辑器架构建议
+
+针对招投标标书“字体、字号、行距、页边距、页码、分页、分节、表格版式必须严格合规”的特点，当前建议采用 **双编辑器分层架构**，而不是只依赖单一富文本编辑器：
+
+```text
+AI 标书编制工作台（React / TipTap 或 Umo 类中文编辑层）
+  ↓
+章节生成 / AI 改写 / 资料引用 / 风险校验 / 结构化编辑
+  ↓
+Markdown / 结构化章节数据
+  ↓
+python-docx 生成标准 DOCX
+  ↓
+ONLYOFFICE Docs 作为最终定稿编辑器
+  ↓
+DOCX / PDF 导出交付
+```
+
+该架构的核心原则：
+
+* **AI 工作台** 负责章节树、AI 生成、资料引用、审阅和结构化写作体验。
+* **ONLYOFFICE** 负责最终版式合规、页眉页脚、页码、分节、表格、打印结果和 DOCX 定稿。
+* 不建议仅依赖 TipTap/Umo 一类富文本编辑器直接承担最终投标文件的格式合规责任。
+
+推荐的数据链路：
+
+```text
+招标文件解析
+→ AI 解读
+→ 章节大纲生成
+→ 单章节正文生成
+→ 工作台人工修订
+→ 生成标准 DOCX
+→ ONLYOFFICE 在线终稿校对
+→ 导出 PDF / DOCX
+```
+
+推荐的页面职责拆分：
+
+* `/bid-editor`：AI 标书编制工作台，负责章节树、正文生成、资料插入、结构化审阅。
+* `/outputs/<doc>.docx`：标准 DOCX 产物。
+* ONLYOFFICE 编辑页：负责最终在线排版、格式校验、下载与打印。
+
+后续实施建议：
+
+* 当前阶段保留 `/bid-editor` 作为 AI 工作台。
+* 后续引入 TipTap 或 Umo，只承接“编写层/审阅层”，不直接替换终稿编辑器。
+* 终稿交付仍以 `DOCX + ONLYOFFICE` 为主链路。
+
+### 在线编辑器选型调研结论
+
+#### 1. ONLYOFFICE Docs
+
+定位：**最终定稿编辑器首选**
+
+适合原因：
+
+* 属于在线 Office 文档引擎，不是普通富文本框架。
+* 更适合承接 `DOCX` 主格式和强版式场景。
+* 能覆盖页面大小、页边距、方向、分页、分节、页眉页脚、行距、段前段后、表格等终稿排版能力。
+* 更适合投标文件、正式公文、对外交付材料。
+
+不足：
+
+* 不是 100% 等同 Word/WPS，复杂历史文档仍可能存在兼容差异。
+* 部署和集成相对较重。
+
+结论：
+
+* **当前项目应继续保留 ONLYOFFICE 作为最终在线编辑器。**
+
+#### 2. Collabora Online
+
+定位：**办公套件备选**
+
+适合原因：
+
+* 同样属于在线 Office 套件路线。
+* 支持私有化部署和常见 Office 文档格式。
+
+不足：
+
+* 在国内中文投标场景下，体验和接受度通常不如 ONLYOFFICE。
+* 不建议优先于 ONLYOFFICE 使用。
+
+结论：
+
+* 可作为备选，不作为当前首选路线。
+
+#### 3. Umo Editor / Umo Editor Next
+
+定位：**中文写作工作台候选**
+
+适合原因：
+
+* 中文体验好，产品感强，更贴近国内用户习惯。
+* 支持类 Word 分页、页面大小、页边距、打印、内网部署。
+* 很适合做“AI 写作层”“中文工作台层”。
+
+限制：
+
+* 开源版基于 Vue3 + Tiptap3，当前 React 项目若接入，通常需要 iframe 或独立子应用方式。
+* 更强的导入导出、协作、评论等能力主要在 Next 版本，属于商业路线。
+* 不建议单独承担最终投标格式合规责任。
+
+结论：
+
+* **适合作为中文 AI 编写工作台候选，不适合作为唯一终稿编辑器。**
+
+#### 4. TipTap 及基于 TipTap 的二开方案
+
+定位：**AI 结构化写作层首选框架**
+
+适合原因：
+
+* React 集成最好，定制能力最强。
+* 适合实现章节写作、AI 续写、批注、审阅、知识库引用、自定义组件。
+* 很适合作为当前 `/bid-editor` 的下一阶段富文本内核。
+
+限制：
+
+* 本质上是编辑框架，不是成熟的 Office 文档排版引擎。
+* 页面对齐、分页、打印一致性、DOCX 最终兼容性，不适合作为投标终稿唯一保障。
+
+结论：
+
+* **适合作为 AI 工作台的主编辑框架，不适合作为最终标书定稿引擎。**
+
+### 当前编辑器选型建议
+
+综合当前项目形态，建议如下：
+
+```text
+AI 编写工作台层：
+  TipTap 或 Umo Editor
+
+最终定稿层：
+  ONLYOFFICE Docs
+
+导出交付层：
+  DOCX / PDF
+```
+
+换句话说：
+
+* **AI 生成、章节编辑、知识库引用、结构化写作** 用 TipTap / Umo。
+* **最终格式合规、终稿排版、导出交付** 用 ONLYOFFICE。
+
+这是当前最稳、也最符合中文招投标业务的路线。
+
 ### 前端技术框架说明
 
 当前版本定位为 **企业单机部署版 MVP**，前端已按 `AI标书系统前端技术选型建议.md` 迁移为 Vite + React + TypeScript 组件化工程：
@@ -72,6 +222,7 @@ lucide-react
 * 已优化 AI 深度解读展示结构：按一页式摘要、项目关键信息、关键节点、资格核查、评分策略、废标风险、编制建议、材料清单和下一步动作分区展示。
 * 已新增标书章节大纲生成：基于招标解读结果生成投标文件章节目录、章节目标、响应要点、关联要求、评分/风险映射、准备资料和写作注意事项。
 * 已新增标书编制工作台 `/bid-editor`：作为全屏核心编制页面独立于系统主菜单和主布局，提供左侧章节树、正文模式/目录模式、章节搜索、新增章节、仿 Office 中文工具栏和右侧正文编辑画布。
+* 已将章节层级生成改为 **AI 灵活层级模式**：不再固定只生成一级或二级目录，支持按招标文件复杂度动态输出 1~4 级章节；前端目录树与目录模式按 `level` 自动缩进展示。
 
 ## 📁 核心目录结构
 
@@ -382,6 +533,17 @@ http://<服务器地址>:3012/bidding
 * 已优化招标解读页长任务 Loading：生成 AI 深度解读、生成章节大纲只使用按钮级 Loading，不再触发内容区遮罩，避免长任务期间页面无法滚动或查看已有内容。
 * 已移除主菜单中的“标书编制”：标书编制工作台仅从具体项目进入，避免被当作普通管理模块。
 * 已新增章节大纲 SSE 流式生成：点击“生成章节大纲”后立即跳转 `/bid-editor?projectId=<项目ID>&autoGenerate=outline`，工作台通过 `/api/bidding/interpretations/<project_id>/bid-outline/stream` 逐章接收并渲染章节树和正文草稿。
+* 已将章节大纲逻辑升级为 AI 灵活层级：大纲生成提示词明确要求按业务复杂度动态决定章节深度，允许部分章节仅到二级，复杂章节扩展到三级或四级；后端统一把嵌套 `children/subsections` 归一化为 `level + order + order_index` 后写入 `bid_outline` 和 `bid_sections`。
+* 已将 `bid_sections` 章节持久化升级为真实树结构：大纲落库时根据章节编号自动写入 `parent_id`，前端目录树按 `parent_id` + `order_index` 重建层级、可见性和编号，新增章节支持新增根章节或在当前章节下新增子章节。
+* 已新增章节同级排序持久化：左侧章节菜单支持“上移章节 / 下移章节”，移动时会按整棵子树一起交换位置，并通过 `/api/bidding/interpretations/<project_id>/sections/reorder` 批量写回 Supabase。
+* 已修复章节排序时 Supabase `RemoteProtocolError: Server disconnected`：原实现对同一 HTTP/2 连接连续逐条 `update`，在批量排序时容易被 PostgREST/Supabase 服务端主动断开；现已改为单次批量 `upsert` 写回，并在连接异常时自动重建 Supabase client 后重试。
+* 已修复章节排序批量 `upsert` 的 `title` 非空约束错误：排序接口现在会先读取现有 `bid_sections` 完整记录，再只覆盖 `parent_id / order_index / level` 后批量写回，避免因只传半截字段导致 `title`、`status` 等必填列被写成 `null`。
+* 已新增基于 `bid_sections` 的 ONLYOFFICE 终稿链路：后端新增 `POST /api/bidding/interpretations/<project_id>/onlyoffice-config`，会把当前章节正文合并为 Markdown、转换为 DOCX、注册 `onlyoffice_documents` 映射并返回新的 `editorConfig`。
+* 已新增独立终稿页 `/onlyoffice-editor?projectId=<project_id>`：前端会调用后端生成 DOCX，再从 `http://127.0.0.1:8080` 加载 ONLYOFFICE Docs API 并打开在线编辑器。
+* 已扩展 ONLYOFFICE 保存回调：`/api/bidding/save-callback` 现在优先处理新的 `onlyoffice_documents` 映射，把编辑后的 DOCX 回写到本地 `outputs/` 文件；旧的 SQLite `bidding` 回调逻辑仍保留兼容。
+* 已将 ONLYOFFICE 终稿模式直接内嵌进 `/bid-editor` 右侧编辑区：点击“ONLYOFFICE 终稿”后，不再强制跳转独立页面，而是在当前工作台右侧加载 DOCX 在线终稿编辑器。
+* 已收敛 ONLYOFFICE 终稿模式工具栏：默认强制 `zh-CN` 语言、启用 `compactHeader + compactToolbar + toolbarNoTabs`，并关闭评论、聊天、反馈、保护、Review 等当前招投标终稿阶段不需要的能力。
+* 当前仍保留独立页 `/onlyoffice-editor` 作为联调与兜底入口，但主路径已切换为工作台内嵌模式。
 * 已完成 `npm install` 和 `npm run build`，生成 `frontend/dist/` 构建产物。
 
 ### 管理模块页面

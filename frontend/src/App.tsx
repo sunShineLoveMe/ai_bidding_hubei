@@ -3,6 +3,7 @@ import { AppLayout } from './components/layout/AppLayout';
 import { EmptyRoutePage } from './components/common/EmptyRoutePage';
 import { HomePage } from './pages/HomePage';
 import { BidEditorPage } from './pages/BidEditor';
+import { OnlyOfficeEditorPage } from './pages/OnlyOfficeEditor';
 import { InterpretationPage } from './pages/Interpretation';
 import { KnowledgeBasePage } from './pages/KnowledgeBase';
 import { ProductBasePage } from './pages/ProductBase';
@@ -13,6 +14,7 @@ export function App(): JSX.Element {
   return (
     <Routes>
       <Route path="/bid-editor" element={<BidEditorPage />} />
+      <Route path="/onlyoffice-editor" element={<OnlyOfficeEditorPage />} />
       <Route
         path="/*"
         element={

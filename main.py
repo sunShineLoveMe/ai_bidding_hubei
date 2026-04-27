@@ -51,6 +51,19 @@ def init_db():
             FOREIGN KEY (user_id) REFERENCES users (id)
         )
     ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS onlyoffice_documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            document_key TEXT UNIQUE NOT NULL,
+            project_id TEXT,
+            title TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            download_url TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -82,6 +95,7 @@ def asset_file(filename):
 @app.route('/bidding')
 @app.route('/interpretation')
 @app.route('/bid-editor')
+@app.route('/onlyoffice-editor')
 @app.route('/knowledge')
 @app.route('/qualification')
 @app.route('/products')

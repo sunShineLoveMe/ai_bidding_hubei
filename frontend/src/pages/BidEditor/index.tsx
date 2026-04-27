@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Dropdown, Empty, Input, Modal, Segmented, Space, Tag, Tooltip, message } from 'antd';
+import { Alert, Button, Dropdown, Empty, Input, Modal, Segmented, Space, Spin, Tag, Tooltip, message } from 'antd';
 import type { MenuProps } from 'antd';
 import {
   AlignCenter,
@@ -24,11 +24,13 @@ import {
   Search,
   Sparkles,
   Table2,
+  ArrowUp,
+  ArrowDown,
   Underline,
   Undo2,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { deleteBidSection, getInterpretation, getLatestInterpretation, saveBidSection } from '../../api/bidProject';
+import { deleteBidSection, generateOnlyOfficeConfig, getInterpretation, getLatestInterpretation, reorderBidSections, saveBidSection } from '../../api/bidProject';
 import type { BidOutline, BidOutlineChapter, BidSection, InterpretationResponse } from '../../types/interpretation';
 
 type EditorMode = '正文模式' | '目录模式';
@@ -38,6 +40,41 @@ type ChapterDraft = BidOutlineChapter & {
   content: string;
   expanded: boolean;
 };
+
+type AddChapterOptions = {
+  parent?: ChapterDraft | null;
+};
+
+declare global {
+  interface Window {
+    DocsAPI?: {
+      DocEditor: new (id: string, config: Record<string, unknown>) => unknown;
+    };
+  }
+}
+
+const ONLYOFFICE_URL = (((import.meta as ImportMeta & { env?: Record<string, string> }).env?.VITE_ONLYOFFICE_URL) || 'http://127.0.0.1:8080').replace(/\/$/, '');
+
+function loadOnlyOfficeScript(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (window.DocsAPI) {
+      resolve();
+      return;
+    }
+    const existing = document.querySelector<HTMLScriptElement>('script[data-onlyoffice="true"]');
+    if (existing) {
+      existing.addEventListener('load', () => resolve(), { once: true });
+      existing.addEventListener('error', () => reject(new Error('ONLYOFFICE 脚本加载失败')), { once: true });
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = `${ONLYOFFICE_URL}/web-apps/apps/api/documents/api.js`;
+    script.dataset.onlyoffice = 'true';
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('ONLYOFFICE 脚本加载失败'));
+    document.body.appendChild(script);
+  });
+}
 
 function asBidOutline(meta: Record<string, unknown> | undefined | null): BidOutline | null {
   return (meta?.bid_outline || null) as BidOutline | null;
@@ -68,23 +105,57 @@ function initialContent(chapter: BidOutlineChapter): string {
   ].join('\n');
 }
 
+function normalizeChapterHierarchy(items: ChapterDraft[]): ChapterDraft[] {
+  const childrenByParent = new Map<string, ChapterDraft[]>();
+  const roots: ChapterDraft[] = [];
+
+  items.forEach(item => {
+    if (item.parent_id) {
+      const siblings = childrenByParent.get(item.parent_id) || [];
+      siblings.push(item);
+      childrenByParent.set(item.parent_id, siblings);
+      return;
+    }
+    roots.push(item);
+  });
+
+  const ordered: ChapterDraft[] = [];
+  const visit = (nodes: ChapterDraft[], prefix = '', depth = 1): void => {
+    nodes.forEach((node, index) => {
+      const nextOrder = prefix ? `${prefix}.${index + 1}` : `${index + 1}`;
+      ordered.push({
+        ...node,
+        order: nextOrder,
+        level: depth,
+      });
+      const children = [...(childrenByParent.get(node.id) || [])];
+      if (children.length) {
+        visit(children, nextOrder, Math.min(depth + 1, 4));
+      }
+    });
+  };
+
+  visit(roots);
+  return ordered.map((item, index) => ({ ...item, order_index: index + 1 }));
+}
+
 function flattenChapters(outline: BidOutline | null): ChapterDraft[] {
-  return (outline?.chapters || []).map((chapter, index) => ({
+  return normalizeChapterHierarchy((outline?.chapters || []).map((chapter, index) => ({
     ...chapter,
     id: makeChapterId(chapter, index),
     content: initialContent(chapter),
     expanded: true,
-  }));
+  })));
 }
 
 function sectionsToDrafts(sections?: BidSection[]): ChapterDraft[] {
-  return (sections || []).map(section => ({
+  return normalizeChapterHierarchy((sections || []).map(section => ({
     ...section,
     order: section.order_index,
     level: section.level || 1,
     content: section.content || initialContent(section),
     expanded: true,
-  }));
+  })));
 }
 
 function toolButton(title: string, icon: JSX.Element): JSX.Element {
@@ -97,6 +168,13 @@ function toolButton(title: string, icon: JSX.Element): JSX.Element {
 
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+function numericOrderIndex(value: string | number | undefined, fallback: number): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  return fallback;
 }
 
 export function BidEditorPage(): JSX.Element {
@@ -112,6 +190,10 @@ export function BidEditorPage(): JSX.Element {
   const [streaming, setStreaming] = useState(false);
   const [sectionStreaming, setSectionStreaming] = useState(false);
   const [streamText, setStreamText] = useState('');
+  const [finalMode, setFinalMode] = useState(false);
+  const [onlyOfficeLoading, setOnlyOfficeLoading] = useState(false);
+  const [onlyOfficeError, setOnlyOfficeError] = useState('');
+  const [downloadUrl, setDownloadUrl] = useState('');
   const streamStartedRef = useRef(false);
 
   async function load(): Promise<void> {
@@ -149,6 +231,35 @@ export function BidEditorPage(): JSX.Element {
     setSelectedId(current => current || drafts[0]?.id || '');
   }
 
+  async function openOnlyOfficeInPanel(): Promise<void> {
+    const projectId = data?.project?.id || searchParams.get('projectId') || '';
+    if (!projectId) {
+      message.warning('缺少项目编号，无法打开 ONLYOFFICE。');
+      return;
+    }
+    setFinalMode(true);
+    setOnlyOfficeLoading(true);
+    setOnlyOfficeError('');
+    try {
+      const response = await generateOnlyOfficeConfig(projectId);
+      setDownloadUrl(response.downloadUrl || '');
+      await loadOnlyOfficeScript();
+      const container = document.getElementById('onlyoffice-embed-editor');
+      if (!container) {
+        throw new Error('ONLYOFFICE 容器未找到');
+      }
+      container.innerHTML = '';
+      // eslint-disable-next-line no-new
+      new window.DocsAPI!.DocEditor('onlyoffice-embed-editor', response.editorConfig);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      setOnlyOfficeError(reason);
+      message.error(reason);
+    } finally {
+      setOnlyOfficeLoading(false);
+    }
+  }
+
   useEffect(() => {
     void load();
     // searchParams is stable enough for this route-level load; it changes only when projectId changes.
@@ -167,6 +278,10 @@ export function BidEditorPage(): JSX.Element {
 
     const source = new EventSource(`/api/bidding/interpretations/${projectId}/bid-outline/stream`);
     source.addEventListener('start', event => {
+      const payload = JSON.parse((event as MessageEvent).data) as { message?: string };
+      setStreamText(payload.message || 'AI 已开始生成章节大纲。');
+    });
+    source.addEventListener('meta', event => {
       const payload = JSON.parse((event as MessageEvent).data) as { outline: BidOutline; total: number };
       setOutlineMeta({ ...payload.outline, chapters: [] });
       setStreamText(`AI 已开始生成章节大纲，预计 ${payload.total} 个章节。`);
@@ -220,21 +335,141 @@ export function BidEditorPage(): JSX.Element {
     if (!term) {
       return chapters;
     }
-    return chapters.filter(chapter => (chapter.title || '').includes(term));
+    const matchedIds = new Set(chapters.filter(chapter => (chapter.title || '').includes(term)).map(chapter => chapter.id));
+    const byId = new Map(chapters.map(chapter => [chapter.id, chapter]));
+    matchedIds.forEach(id => {
+      let parentId = byId.get(id)?.parent_id || null;
+      while (parentId) {
+        matchedIds.add(parentId);
+        parentId = byId.get(parentId)?.parent_id || null;
+      }
+    });
+    return chapters.filter(chapter => matchedIds.has(chapter.id));
   }, [chapters, keyword]);
   const selectedChapter = chapters.find(chapter => chapter.id === selectedId) || chapters[0];
   const matchText = keyword ? `${filteredChapters.length} / ${chapters.length}` : `0 / ${chapters.length}`;
   const totalChars = chapters.reduce((sum, chapter) => sum + chapter.content.length, 0);
   const estimatedPages = Math.max(1, Math.ceil(totalChars / 700));
 
+  function chapterIndent(level?: number): number {
+    return 12 + Math.max(0, Math.min((level || 1) - 1, 3)) * 20;
+  }
+
+  function collectDescendantIds(source: ChapterDraft[], rootId: string): Set<string> {
+    const descendants = new Set<string>([rootId]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      source.forEach(item => {
+        if (item.parent_id && descendants.has(item.parent_id) && !descendants.has(item.id)) {
+          descendants.add(item.id);
+          changed = true;
+        }
+      });
+    }
+    return descendants;
+  }
+
+  function syncChapterOrder(nextChapters: ChapterDraft[]): Promise<void> | void {
+    if (!data?.project?.id) {
+      return;
+    }
+    return reorderBidSections(
+      data.project.id,
+      nextChapters
+        .filter(item => isUuid(item.id))
+        .map((item, index) => ({
+          id: item.id,
+          parent_id: item.parent_id,
+          level: item.level || 1,
+          order_index: index + 1,
+        })),
+    ).then(() => {
+      setChapters(normalizeChapterHierarchy(nextChapters));
+    });
+  }
+
+  function isVisibleChapter(chapter: ChapterDraft, pool: ChapterDraft[]): boolean {
+    const byId = new Map(pool.map(item => [item.id, item]));
+    let parentId = chapter.parent_id || null;
+    while (parentId) {
+      const parent = byId.get(parentId);
+      if (!parent) {
+        break;
+      }
+      if (!parent.expanded) {
+        return false;
+      }
+      parentId = parent.parent_id || null;
+    }
+    return true;
+  }
+
+  function siblingChapters(chapter: ChapterDraft, source = chapters): ChapterDraft[] {
+    return source.filter(item => (item.parent_id || null) === (chapter.parent_id || null));
+  }
+
+  function canMoveChapter(chapter: ChapterDraft, direction: 'up' | 'down'): boolean {
+    const siblings = siblingChapters(chapter);
+    const index = siblings.findIndex(item => item.id === chapter.id);
+    if (index < 0) {
+      return false;
+    }
+    return direction === 'up' ? index > 0 : index < siblings.length - 1;
+  }
+
+  async function moveChapter(chapter: ChapterDraft, direction: 'up' | 'down'): Promise<void> {
+    const siblings = siblingChapters(chapter, chapters);
+    const siblingIndex = siblings.findIndex(item => item.id === chapter.id);
+    if (siblingIndex < 0) {
+      return;
+    }
+    const targetSibling = direction === 'up' ? siblings[siblingIndex - 1] : siblings[siblingIndex + 1];
+    if (!targetSibling) {
+      return;
+    }
+
+    const currentIds = collectDescendantIds(chapters, chapter.id);
+    const targetIds = collectDescendantIds(chapters, targetSibling.id);
+    const currentBlock = chapters.filter(item => currentIds.has(item.id));
+    const targetBlock = chapters.filter(item => targetIds.has(item.id));
+    const currentStart = chapters.findIndex(item => item.id === currentBlock[0]?.id);
+    const targetStart = chapters.findIndex(item => item.id === targetBlock[0]?.id);
+    if (currentStart < 0 || targetStart < 0) {
+      return;
+    }
+
+    const withoutBlocks = chapters.filter(item => !currentIds.has(item.id) && !targetIds.has(item.id));
+    const insertAt = Math.min(currentStart, targetStart);
+    const reorderedBlocks = direction === 'up'
+      ? [...currentBlock, ...targetBlock]
+      : [...targetBlock, ...currentBlock];
+    const nextChapters = normalizeChapterHierarchy([
+      ...withoutBlocks.slice(0, insertAt),
+      ...reorderedBlocks,
+      ...withoutBlocks.slice(insertAt),
+    ]);
+
+    setChapters(nextChapters);
+    try {
+      await syncChapterOrder(nextChapters);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : String(error));
+      void reloadProject(data?.project?.id || '');
+    }
+  }
+
   function updateSelectedContent(value: string): void {
     setChapters(items => items.map(item => item.id === selectedChapter?.id ? { ...item, content: value } : item));
   }
 
-  function createBlankChapter(order: number, title = '新增章节'): ChapterDraft {
+  function createBlankChapter(order: number, title = '新增章节', parent?: ChapterDraft | null): ChapterDraft {
     return {
       id: `${order}-${title}-${Date.now()}`,
       order,
+      order_index: order,
+      parent_id: parent?.id || null,
+      level: Math.min((parent?.level || 0) + 1 || 1, 4),
       title,
       priority: 'medium',
       purpose: '请补充本章编写目标。',
@@ -250,25 +485,51 @@ export function BidEditorPage(): JSX.Element {
     };
   }
 
-  async function addChapter(afterId?: string): Promise<void> {
-    const chapter = createBlankChapter(chapters.length + 1);
+  function lastDescendantIndex(items: ChapterDraft[], parentId: string): number {
+    const idSet = new Set<string>([parentId]);
+    let lastIndex = items.findIndex(item => item.id === parentId);
+    for (let index = lastIndex + 1; index < items.length; index += 1) {
+      const item = items[index];
+      if (item.parent_id && idSet.has(item.parent_id)) {
+        idSet.add(item.id);
+        lastIndex = index;
+        continue;
+      }
+      if (item.level && (items[lastIndex]?.level || 1) < item.level && item.parent_id && idSet.has(item.parent_id)) {
+        idSet.add(item.id);
+        lastIndex = index;
+        continue;
+      }
+      if ((item.level || 1) <= (items.find(node => node.id === parentId)?.level || 1)) {
+        break;
+      }
+    }
+    return Math.max(lastIndex, items.findIndex(item => item.id === parentId));
+  }
+
+  async function addChapter(options?: AddChapterOptions): Promise<void> {
+    const parent = options?.parent || null;
+    const chapter = createBlankChapter(chapters.length + 1, '新增章节', parent);
     const nextChapters = (() => {
-      if (!afterId) {
-        return [...chapters, chapter];
+      if (!parent) {
+        return normalizeChapterHierarchy([...chapters, chapter]);
       }
-      const index = chapters.findIndex(item => item.id === afterId);
-      if (index < 0) {
-        return [...chapters, chapter];
-      }
-      return [...chapters.slice(0, index + 1), chapter, ...chapters.slice(index + 1)]
-        .map((item, itemIndex) => ({ ...item, order: itemIndex + 1 }));
+      const insertAfter = lastDescendantIndex(chapters, parent.id);
+      const nextItems = [...chapters];
+      nextItems.splice(insertAfter + 1, 0, chapter);
+      return normalizeChapterHierarchy(nextItems);
     })();
     setChapters(nextChapters);
     setSelectedId(chapter.id);
     if (data?.project?.id) {
       try {
-        const saved = await saveBidSection(data.project.id, { ...chapter, order_index: chapter.order || nextChapters.length });
-        setChapters(items => items.map(item => item.id === chapter.id ? { ...item, ...saved, order: saved.order_index } : item));
+        const saved = await saveBidSection(data.project.id, {
+          ...chapter,
+          parent_id: parent?.id || null,
+          level: chapter.level || 1,
+          order_index: nextChapters.findIndex(item => item.id === chapter.id) + 1,
+        });
+        setChapters(items => normalizeChapterHierarchy(items.map(item => item.id === chapter.id ? { ...item, ...saved } : item)));
         setSelectedId(saved.id);
       } catch (error) {
         message.error(error instanceof Error ? error.message : String(error));
@@ -288,10 +549,11 @@ export function BidEditorPage(): JSX.Element {
     try {
       const saved = await saveBidSection(data.project.id, {
         ...selectedChapter,
-        order_index: selectedChapter.order || 1,
+        level: selectedChapter.level || 1,
+        order_index: chapters.findIndex(item => item.id === selectedChapter.id) + 1,
         status: selectedChapter.status || 'edited',
       });
-      setChapters(items => items.map(item => item.id === selectedChapter.id ? { ...item, ...saved, order: saved.order_index } : item));
+      setChapters(items => normalizeChapterHierarchy(items.map(item => item.id === selectedChapter.id ? { ...item, ...saved } : item)));
       setSelectedId(saved.id);
       message.success('章节已保存到 Supabase');
     } catch (error) {
@@ -328,17 +590,17 @@ export function BidEditorPage(): JSX.Element {
           ...chapter,
           title,
           content: chapter.content.replace(/^## .*/m, `## ${title}`),
-          order_index: chapter.order || chapter.order_index || 1,
+          order_index: chapters.findIndex(item => item.id === chapter.id) + 1,
           status: 'edited',
         };
         if (data?.project?.id) {
           await saveBidSection(data.project.id, renamed);
         }
-        setChapters(items => items.map(item => item.id === chapter.id ? {
+        setChapters(items => normalizeChapterHierarchy(items.map(item => item.id === chapter.id ? {
           ...item,
           title,
           content: item.content.replace(/^## .*/m, `## ${title}`),
-        } : item));
+        } : item)));
       },
     });
   }
@@ -355,7 +617,18 @@ export function BidEditorPage(): JSX.Element {
           await deleteBidSection(data.project.id, chapter.id);
         }
         setChapters(items => {
-          const nextItems = items.filter(item => item.id !== chapter.id).map((item, index) => ({ ...item, order: index + 1 }));
+          const descendants = new Set<string>([chapter.id]);
+          let changed = true;
+          while (changed) {
+            changed = false;
+            items.forEach(item => {
+              if (item.parent_id && descendants.has(item.parent_id) && !descendants.has(item.id)) {
+                descendants.add(item.id);
+                changed = true;
+              }
+            });
+          }
+          const nextItems = normalizeChapterHierarchy(items.filter(item => !descendants.has(item.id)));
           if (selectedId === chapter.id) {
             setSelectedId(nextItems[0]?.id || '');
           }
@@ -391,11 +664,13 @@ export function BidEditorPage(): JSX.Element {
     });
   }
 
-  function chapterMenuItems(): MenuProps['items'] {
+  function chapterMenuItems(chapter: ChapterDraft): MenuProps['items'] {
     return [
       { key: 'write', label: '编写章节' },
       { key: 'custom', label: '自定义编写' },
       { key: 'add', label: '添加章节' },
+      { key: 'move-up', label: '上移章节', icon: <ArrowUp size={14} />, disabled: !canMoveChapter(chapter, 'up') },
+      { key: 'move-down', label: '下移章节', icon: <ArrowDown size={14} />, disabled: !canMoveChapter(chapter, 'down') },
       { key: 'rename', label: '修改标题' },
       { type: 'divider' },
       { key: 'delete', label: '删除章节', danger: true },
@@ -411,10 +686,16 @@ export function BidEditorPage(): JSX.Element {
       customWriteChapter(chapter);
     }
     if (key === 'add') {
-      void addChapter(chapter.id);
+      void addChapter({ parent: chapter });
     }
     if (key === 'rename') {
       renameChapter(chapter);
+    }
+    if (key === 'move-up') {
+      void moveChapter(chapter, 'up');
+    }
+    if (key === 'move-down') {
+      void moveChapter(chapter, 'down');
     }
     if (key === 'delete') {
       deleteChapter(chapter);
@@ -520,6 +801,7 @@ export function BidEditorPage(): JSX.Element {
         <Space size={10} wrap>
           <Button onClick={() => navigate('/interpretation')}>返回解读</Button>
           <Button icon={<BookOpen size={16} />}>关联资料</Button>
+          {!finalMode ? <Button onClick={() => void openOnlyOfficeInPanel()}>ONLYOFFICE 终稿</Button> : <Tag color="gold">终稿模式</Tag>}
           <Button type="primary" icon={<Download size={17} />}>标书下载</Button>
         </Space>
       </header>
@@ -546,12 +828,13 @@ export function BidEditorPage(): JSX.Element {
           placeholder="输入章节名称搜索"
         />
         <div className="chapter-tree">
-          {filteredChapters.map(chapter => {
+          {filteredChapters.filter(chapter => isVisibleChapter(chapter, filteredChapters)).map(chapter => {
             const active = chapter.id === selectedChapter?.id;
             return (
               <div
                 key={chapter.id}
                 className={`chapter-node level-${chapter.level || 1} ${active ? 'active' : ''}`}
+                style={{ paddingLeft: `${chapterIndent(chapter.level)}px` }}
                 role="button"
                 tabIndex={0}
                 onClick={() => setSelectedId(chapter.id)}
@@ -569,7 +852,7 @@ export function BidEditorPage(): JSX.Element {
                 <Dropdown
                   trigger={['click']}
                   menu={{
-                    items: chapterMenuItems(),
+                    items: chapterMenuItems(chapter),
                     onClick: info => {
                       info.domEvent.stopPropagation();
                       handleChapterMenu(info.key, chapter);
@@ -599,18 +882,22 @@ export function BidEditorPage(): JSX.Element {
       <main className="bid-editor-main">
         <section className="editor-title-row">
           <div>
-            <h1>{selectedChapter?.title || '未选择章节'}</h1>
-            <p>{streaming ? streamText : selectedChapter?.purpose || '请选择左侧章节查看编写要求。'}</p>
+            <h1>{finalMode ? 'ONLYOFFICE 终稿模式' : (selectedChapter?.title || '未选择章节')}</h1>
+            <p>{finalMode ? '当前为终稿编辑模式，右侧使用 ONLYOFFICE 进行 DOCX 在线定稿。' : (streaming ? streamText : selectedChapter?.purpose || '请选择左侧章节查看编写要求。')}</p>
           </div>
           <Space>
+            {finalMode ? <Tag color="gold">终稿模式</Tag> : null}
             {streaming ? <Tag color="processing">大纲生成中</Tag> : null}
             {sectionStreaming ? <Tag color="processing">正文生成中</Tag> : null}
-            <Tag color="blue">{selectedChapter?.priority || 'medium'}</Tag>
-            <Button icon={<Sparkles size={16} />} loading={sectionStreaming} disabled={!selectedChapter || streaming} onClick={() => void generateCurrentSection()}>生成本章正文</Button>
-            <Button type="primary" icon={<Save size={16} />} onClick={() => void saveDraft()}>保存</Button>
+            {!finalMode ? <Tag color="blue">{selectedChapter?.priority || 'medium'}</Tag> : null}
+            {!finalMode ? <Button icon={<Sparkles size={16} />} loading={sectionStreaming} disabled={!selectedChapter || streaming} onClick={() => void generateCurrentSection()}>生成本章正文</Button> : null}
+            {!finalMode ? <Button type="primary" icon={<Save size={16} />} onClick={() => void saveDraft()}>保存</Button> : null}
+            {finalMode ? <Button onClick={() => setFinalMode(false)}>返回章节编辑</Button> : null}
+            {finalMode && downloadUrl ? <Button icon={<Download size={16} />} href={downloadUrl} target="_blank">下载 DOCX</Button> : null}
           </Space>
         </section>
 
+        {!finalMode ? (
         <section className="office-toolbar">
           <div className="toolbar-group">
             {toolButton('展开/收起目录', <PanelLeft size={16} />)}
@@ -642,15 +929,38 @@ export function BidEditorPage(): JSX.Element {
             {toolButton('打印', <Printer size={16} />)}
           </div>
         </section>
+        ) : null}
 
         <section className="editor-workspace">
-          {mode === '目录模式' ? (
+          {finalMode ? (
+            <div className="onlyoffice-embed-shell">
+              {onlyOfficeLoading ? (
+                <div className="onlyoffice-embed-loading">
+                  <Spin size="large" />
+                  <span>正在生成 DOCX 并加载 ONLYOFFICE...</span>
+                </div>
+              ) : null}
+              {onlyOfficeError ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="ONLYOFFICE 加载失败"
+                  description={`${onlyOfficeError}。请确认 ONLYOFFICE 服务地址为 ${ONLYOFFICE_URL}，并且 APP_PUBLIC_BASE_URL 对容器可达。`}
+                />
+              ) : null}
+              <div
+                id="onlyoffice-embed-editor"
+                className="onlyoffice-embed-editor"
+                style={{ display: onlyOfficeLoading || !!onlyOfficeError ? 'none' : 'block' }}
+              />
+            </div>
+          ) : mode === '目录模式' ? (
             <div className="outline-document">
               <h2>投标文件目录</h2>
               {chapters.length ? (
                 <ol>
                   {chapters.map(chapter => (
-                    <li key={`toc-${chapter.id}`}>
+                    <li key={`toc-${chapter.id}`} style={{ marginLeft: `${Math.max(0, (chapter.level || 1) - 1) * 18}px` }}>
                       <strong>{chapter.title}</strong>
                       <span>{chapter.purpose}</span>
                     </li>
@@ -658,7 +968,9 @@ export function BidEditorPage(): JSX.Element {
                 </ol>
               ) : (
                 <div className="stream-placeholder">
-                  <Sparkles size={28} />
+                  <div className="stream-placeholder-icon">
+                    <Sparkles size={28} />
+                  </div>
                   <strong>{streamText || '等待章节生成...'}</strong>
                 </div>
               )}
@@ -673,7 +985,9 @@ export function BidEditorPage(): JSX.Element {
                 />
               ) : (
                 <div className="stream-placeholder">
-                  <Sparkles size={30} />
+                  <div className="stream-placeholder-icon">
+                    <Sparkles size={30} />
+                  </div>
                   <strong>{streamText || 'AI 正在准备章节大纲...'}</strong>
                   <span>章节生成后会自动出现在左侧目录，并在这里展示草稿。</span>
                 </div>
@@ -683,9 +997,9 @@ export function BidEditorPage(): JSX.Element {
         </section>
 
         <footer className="editor-statusbar">
-          <span>当前章节：{selectedChapter?.title || '-'}</span>
-          <span>来源页码：{selectedChapter?.source_pages?.join('、') || '需复核'}</span>
-          <span>缩放 99%</span>
+          <span>当前章节：{finalMode ? 'ONLYOFFICE 终稿' : (selectedChapter?.title || '-')}</span>
+          <span>来源页码：{finalMode ? 'DOCX 终稿在线编辑' : (selectedChapter?.source_pages?.join('、') || '需复核')}</span>
+          <span>{finalMode ? '在线终稿' : '缩放 99%'}</span>
         </footer>
       </main>
     </div>

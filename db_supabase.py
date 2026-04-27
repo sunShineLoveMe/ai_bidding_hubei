@@ -1,11 +1,12 @@
 import hashlib
 import logging
 import mimetypes
+import time
 import uuid
 from pathlib import Path
 from typing import Any
 
-from supabase_client import get_bucket_name, get_supabase_client, upload_file_to_storage
+from supabase_client import get_bucket_name, get_supabase_client, reset_supabase_client, upload_file_to_storage
 
 
 def _file_sha256(file_path: str | Path) -> str:
@@ -111,10 +112,20 @@ def replace_bid_analysis(project_id: str, payload: dict[str, Any]) -> dict[str, 
     return rows[0] if rows else None
 
 
+def _is_valid_uuid(value: Any) -> bool:
+    if not value or not isinstance(value, str):
+        return False
+    try:
+        uuid.UUID(value)
+        return True
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
 def _section_payload(project_id: str, section: dict[str, Any], index: int) -> dict[str, Any]:
     return {
         "project_id": project_id,
-        "parent_id": section.get("parent_id"),
+        "parent_id": section.get("parent_id") if _is_valid_uuid(section.get("parent_id")) else None,
         "order_index": section.get("order_index") or section.get("order") or index + 1,
         "level": section.get("level") or 1,
         "title": section.get("title") or "未命名章节",
@@ -133,11 +144,27 @@ def _section_payload(project_id: str, section: dict[str, Any], index: int) -> di
 
 
 def replace_bid_sections_from_outline(project_id: str, outline: dict[str, Any]) -> list[dict[str, Any]]:
-    rows = [
-        _section_payload(project_id, section, index)
-        for index, section in enumerate(outline.get("chapters") or [])
-    ]
-    return replace_project_rows("bid_sections", project_id, rows)
+    client = get_supabase_client()
+    client.table("bid_sections").delete().eq("project_id", project_id).execute()
+
+    inserted_rows: list[dict[str, Any]] = []
+    order_to_id: dict[str, str] = {}
+    for index, section in enumerate(outline.get("chapters") or []):
+        section_order = str(section.get("order") or index + 1)
+        parent_id = section.get("parent_id")
+        if not parent_id and "." in section_order:
+            parent_order = section_order.rsplit(".", 1)[0]
+            parent_id = order_to_id.get(parent_order)
+
+        payload = _section_payload(project_id, {**section, "parent_id": parent_id}, index)
+        response = client.table("bid_sections").insert(payload).execute()
+        if not response.data:
+            raise RuntimeError("Supabase bid_sections insert returned no data")
+        row = response.data[0]
+        inserted_rows.append(row)
+        order_to_id[section_order] = row["id"]
+
+    return inserted_rows
 
 
 def list_bid_sections(project_id: str) -> list[dict[str, Any]]:
@@ -156,13 +183,55 @@ def upsert_bid_section(project_id: str, section: dict[str, Any]) -> dict[str, An
     payload = _section_payload(project_id, section, int(section.get("order_index") or section.get("order") or 1) - 1)
     section_id = section.get("id")
     client = get_supabase_client()
-    if section_id:
+    if _is_valid_uuid(section_id):
         response = client.table("bid_sections").update(payload).eq("id", section_id).eq("project_id", project_id).execute()
     else:
         response = client.table("bid_sections").insert(payload).execute()
     if not response.data:
         raise RuntimeError("Supabase bid_sections upsert returned no data")
     return response.data[0]
+
+
+def reorder_bid_sections(project_id: str, sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    existing_rows = {row["id"]: row for row in list_bid_sections(project_id)}
+    payloads: list[dict[str, Any]] = []
+    for index, section in enumerate(sections, start=1):
+        section_id = section.get("id")
+        if not section_id:
+            continue
+        existing = existing_rows.get(section_id)
+        if not existing:
+            raise RuntimeError(f"章节不存在，无法排序: {section_id}")
+        payload = {
+            key: value
+            for key, value in existing.items()
+            if key not in {"created_at", "updated_at"}
+        }
+        payload.update({
+            "project_id": project_id,
+            "parent_id": section.get("parent_id"),
+            "order_index": int(section.get("order_index") or index),
+            "level": int(section.get("level") or existing.get("level") or 1),
+        })
+        payloads.append(payload)
+
+    if not payloads:
+        return []
+
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            client = get_supabase_client()
+            response = client.table("bid_sections").upsert(payloads).execute()
+            return response.data or []
+        except Exception as exc:
+            last_error = exc
+            logging.warning("批量排序 bid_sections 第 %s 次失败，准备重试: %s", attempt, exc)
+            reset_supabase_client()
+            if attempt < 3:
+                time.sleep(0.4 * attempt)
+
+    raise RuntimeError(f"批量排序章节失败，已重试 3 次: {last_error}") from last_error
 
 
 def update_bid_section_content(project_id: str, section_id: str, content: str, status: str = "edited") -> dict[str, Any]:

@@ -27,6 +27,10 @@ def get_supabase_client() -> Client:
     return create_client(url, key)
 
 
+def reset_supabase_client() -> None:
+    get_supabase_client.cache_clear()
+
+
 def get_bucket_name(kind: str) -> str:
     env_key = {
         "tender": "SUPABASE_STORAGE_TENDER_BUCKET",

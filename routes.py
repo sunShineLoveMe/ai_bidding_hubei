@@ -19,7 +19,7 @@ from md_to_word import convert_md_to_word
 from ai_chapter_planner import generate_bid_outline, stream_bid_outline
 from ai_section_writer import stream_bid_section
 from ai_interpreter import generate_ai_interpretation_report
-from db_supabase import delete_bid_section, get_bid_file, get_project_interpretation, list_bid_sections, list_recent_bid_projects, sync_uploaded_tender_to_supabase, update_bid_section_content, upsert_bid_section
+from db_supabase import delete_bid_section, get_bid_file, get_project_interpretation, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, sync_uploaded_tender_to_supabase, update_bid_section_content, upsert_bid_section
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import shutil
@@ -135,6 +135,67 @@ def merge_sections(output_dir, tender_name, sections):
         except Exception as e:
             logging.error(f"保存合并文件时出错: {e}")
             return None    
+
+
+def _slug_filename(name: str, fallback: str = "bid-document") -> str:
+    base = secure_filename(unidecode(name or "").strip()) or fallback
+    return base
+
+
+def _section_markdown_heading(level: int, title: str) -> str:
+    depth = max(1, min(level, 6))
+    return f'{"#" * depth} {title}\n\n'
+
+
+def build_project_bid_markdown(project_id: str) -> tuple[Path, str]:
+    payload = get_project_interpretation(project_id)
+    project = payload.get("project") or {}
+    sections = list_bid_sections(project_id)
+    if not sections:
+        raise RuntimeError("当前项目暂无章节内容，请先生成章节大纲或正文。")
+
+    project_name = (
+        (payload.get("analysis") or {}).get("project_meta", {}) or {}
+    ).get("project_name") or project.get("project_name") or "投标文件"
+    folder_name = _slug_filename(project_name, f"project-{project_id[:8]}")
+    output_dir = Path(current_app.config.get('GENERATED_FOLDER', 'outputs')) / folder_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+    markdown_path = output_dir / f"{folder_name}.md"
+
+    chunks: list[str] = [f"# {project_name}\n\n"]
+    for section in sections:
+        title = section.get("title") or "未命名章节"
+        content = (section.get("content") or "").strip()
+        if content:
+            chunks.append(f"{content}\n\n" if content.endswith("\n") else f"{content}\n\n")
+        else:
+            chunks.append(_section_markdown_heading(int(section.get("level") or 1), title))
+            chunks.append("待补充章节正文。\n\n")
+
+    markdown_path.write_text("".join(chunks), encoding="utf-8")
+    return markdown_path, project_name
+
+
+def save_onlyoffice_document_mapping(*, document_key: str, project_id: str, title: str, file_path: str, download_url: str) -> None:
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            '''
+            INSERT INTO onlyoffice_documents (document_key, project_id, title, file_path, download_url)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(document_key) DO UPDATE SET
+              project_id=excluded.project_id,
+              title=excluded.title,
+              file_path=excluded.file_path,
+              download_url=excluded.download_url,
+              updated_at=CURRENT_TIMESTAMP
+            ''',
+            (document_key, project_id, title, file_path, download_url),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 def sync_and_parse_tender_in_background(file_path, original_filename, parse_id):
     supabase_file_id = None
@@ -499,6 +560,21 @@ def save_bid_section_api(project_id):
         logging.exception("保存标书章节失败: %s", project_id)
         return jsonify({'error': f'保存标书章节失败: {str(e)}'}), 500
 
+@bp.route('/interpretations/<project_id>/sections/reorder', methods=['POST'])
+def reorder_bid_sections_api(project_id):
+    """批量保存章节顺序和父子关系。"""
+    try:
+        uuid.UUID(project_id)
+        payload = request.get_json(force=True) or {}
+        sections = payload.get("sections") or []
+        saved = reorder_bid_sections(project_id, sections)
+        return jsonify({"sections": saved})
+    except ValueError:
+        return jsonify({'error': 'project_id 不是合法 UUID。'}), 400
+    except Exception as e:
+        logging.exception("批量排序标书章节失败: %s", project_id)
+        return jsonify({'error': f'批量排序标书章节失败: {str(e)}'}), 500
+
 @bp.route('/interpretations/<project_id>/sections/<section_id>', methods=['DELETE'])
 def remove_bid_section(project_id, section_id):
     """删除单个标书章节。"""
@@ -512,6 +588,103 @@ def remove_bid_section(project_id, section_id):
     except Exception as e:
         logging.exception("删除标书章节失败: %s", project_id)
         return jsonify({'error': f'删除标书章节失败: {str(e)}'}), 500
+
+
+@bp.route('/interpretations/<project_id>/onlyoffice-config', methods=['POST'])
+def generate_onlyoffice_config(project_id):
+    """基于 bid_sections 生成 DOCX，并返回 ONLYOFFICE editorConfig。"""
+    try:
+        uuid.UUID(project_id)
+    except ValueError:
+        return jsonify({'error': 'project_id 不是合法 UUID。'}), 400
+
+    try:
+        markdown_path, project_name = build_project_bid_markdown(project_id)
+        generated_docx_path = convert_md_to_word(markdown_path)
+        if not generated_docx_path or not Path(generated_docx_path).exists():
+            raise RuntimeError("DOCX 生成失败，未找到输出文件。")
+
+        generated_docx_path = Path(generated_docx_path)
+        gen_folder = Path(current_app.config.get('GENERATED_FOLDER', 'outputs'))
+        gen_folder.mkdir(parents=True, exist_ok=True)
+
+        target_name = generated_docx_path.name
+        target = gen_folder / target_name
+        if generated_docx_path.resolve() != target.resolve():
+            shutil.copy2(str(generated_docx_path), str(target))
+
+        backend_url = get_backend_public_base_url()
+        file_url = f"{backend_url}/api/outputs/{target.name}"
+        callback_url = f"{backend_url}/api/bidding/save-callback"
+        doc_key = str(uuid.uuid4())
+
+        payload = {
+            'document': {
+                'fileType': 'docx',
+                'key': doc_key,
+                'title': target_name,
+                'url': file_url,
+                'permissions': {
+                    'chat': False,
+                    'comment': False,
+                    'copy': True,
+                    'download': True,
+                    'edit': True,
+                    'fillForms': False,
+                    'modifyContentControl': False,
+                    'modifyFilter': False,
+                    'print': True,
+                    'protect': False,
+                    'review': False,
+                },
+            },
+            'documentType': 'word',
+            'editorConfig': {
+                'callbackUrl': callback_url,
+                'lang': 'zh-CN',
+                'region': 'zh-CN',
+                'mode': 'edit',
+                'user': {
+                    'id': f"project-{project_id[:8]}",
+                    'name': '企业标书编制岗',
+                },
+                'customization': {
+                    'autosave': True,
+                    'chat': False,
+                    'comments': False,
+                    'compactHeader': True,
+                    'compactToolbar': True,
+                    'feedback': False,
+                    'forcesave': True,
+                    'help': False,
+                    'hideRightMenu': True,
+                    'hideRulers': False,
+                    'toolbarNoTabs': True,
+                    'uiTheme': 'theme-light',
+                },
+            }
+        }
+        token = jwt.encode(payload, ONLYOFFICE_JWT_SECRET, algorithm='HS256')
+        editor_config_with_token = {**payload, 'token': token}
+
+        save_onlyoffice_document_mapping(
+            document_key=doc_key,
+            project_id=project_id,
+            title=project_name,
+            file_path=str(target),
+            download_url=f"/api/outputs/{target.name}",
+        )
+
+        return jsonify({
+            'message': 'ONLYOFFICE 配置生成成功',
+            'markdown': str(markdown_path),
+            'editorConfig': editor_config_with_token,
+            'fileUrl': file_url,
+            'downloadUrl': f"/api/outputs/{target.name}",
+        }), 201
+    except Exception as e:
+        logging.exception("生成 ONLYOFFICE 配置失败: %s", project_id)
+        return jsonify({'error': f'生成 ONLYOFFICE 配置失败: {str(e)}'}), 500
      
 @bp.route('/save-callback', methods=['POST'])
 def save_callback():
@@ -527,6 +700,26 @@ def save_callback():
 
             if not download_url:
                 logging.warning(f'No download URL provided for key {document_key}')
+                return jsonify({'error': 0})
+
+            conn = get_db()
+            try:
+                cursor = conn.cursor()
+                cursor.execute('SELECT * FROM onlyoffice_documents WHERE document_key = ?', (document_key,))
+                doc_row = cursor.fetchone()
+            finally:
+                conn.close()
+
+            if doc_row:
+                target_path = doc_row['file_path']
+                Path(target_path).parent.mkdir(parents=True, exist_ok=True)
+                resp = requests.get(download_url, stream=True, timeout=60)
+                resp.raise_for_status()
+                with open(target_path, 'wb') as f:
+                    for chunk in resp.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                logging.info('ONLYOFFICE 文档已保存到 %s', target_path)
                 return jsonify({'error': 0})
 
             conn = get_db()
