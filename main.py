@@ -89,6 +89,10 @@ def asset_file(filename):
     dist_asset_path = os.path.join(dist_assets, filename)
     if os.path.exists(dist_asset_path):
         return send_from_directory(dist_assets, filename)
+    public_assets = os.path.join('frontend', 'public', 'assets')
+    public_asset_path = os.path.join(public_assets, filename)
+    if os.path.exists(public_asset_path):
+        return send_from_directory(public_assets, filename)
     return send_from_directory('assets', filename)
 
 @app.route('/')

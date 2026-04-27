@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { deleteBidSection, generateOnlyOfficeConfig, getInterpretation, getLatestInterpretation, reorderBidSections, saveBidSection } from '../../api/bidProject';
+import { BrandMark } from '../../components/common/BrandMark';
 import type { BidOutline, BidOutlineChapter, BidSection, InterpretationResponse } from '../../types/interpretation';
 
 type EditorMode = '正文模式' | '目录模式';
@@ -43,6 +44,11 @@ type ChapterDraft = BidOutlineChapter & {
 
 type AddChapterOptions = {
   parent?: ChapterDraft | null;
+};
+
+type StreamingRootPlaceholder = {
+  id: string;
+  title: string;
 };
 
 declare global {
@@ -190,6 +196,7 @@ export function BidEditorPage(): JSX.Element {
   const [streaming, setStreaming] = useState(false);
   const [sectionStreaming, setSectionStreaming] = useState(false);
   const [streamText, setStreamText] = useState('');
+  const [streamingRootPlaceholders, setStreamingRootPlaceholders] = useState<StreamingRootPlaceholder[]>([]);
   const [finalMode, setFinalMode] = useState(false);
   const [onlyOfficeLoading, setOnlyOfficeLoading] = useState(false);
   const [onlyOfficeError, setOnlyOfficeError] = useState('');
@@ -275,6 +282,7 @@ export function BidEditorPage(): JSX.Element {
     setStreamText('AI 正在分析招标解读结果，准备生成标书章节大纲...');
     setChapters([]);
     setSelectedId('');
+    setStreamingRootPlaceholders([]);
 
     const source = new EventSource(`/api/bidding/interpretations/${projectId}/bid-outline/stream`);
     source.addEventListener('start', event => {
@@ -285,6 +293,18 @@ export function BidEditorPage(): JSX.Element {
       const payload = JSON.parse((event as MessageEvent).data) as { outline: BidOutline; total: number };
       setOutlineMeta({ ...payload.outline, chapters: [] });
       setStreamText(`AI 已开始生成章节大纲，预计 ${payload.total} 个章节。`);
+      setStreamingRootPlaceholders(
+        Array.from({ length: Math.max(1, Math.min(payload.total, 5)) }, (_, index) => ({
+          id: `streaming-root-${index + 1}`,
+          title: `正在生成第 ${index + 1} 个一级章节...`,
+        })),
+      );
+    });
+    source.addEventListener('stage', event => {
+      const payload = JSON.parse((event as MessageEvent).data) as { message?: string };
+      if (payload.message) {
+        setStreamText(payload.message);
+      }
     });
     source.addEventListener('chapter', event => {
       const payload = JSON.parse((event as MessageEvent).data) as { chapter: BidOutlineChapter; index: number; total: number };
@@ -302,6 +322,9 @@ export function BidEditorPage(): JSX.Element {
       });
       setSelectedId(current => current || chapterDraft.id);
       setStreamText(`正在生成第 ${payload.index} / ${payload.total} 个章节：${payload.chapter.title || '未命名章节'}`);
+      if ((payload.chapter.level || 1) === 1) {
+        setStreamingRootPlaceholders(items => items.slice(1));
+      }
     });
     source.addEventListener('done', event => {
       const payload = JSON.parse((event as MessageEvent).data) as { outline: BidOutline };
@@ -309,6 +332,7 @@ export function BidEditorPage(): JSX.Element {
       setData(current => current ? { ...current, sections: [] } : current);
       setStreamText('标书章节大纲生成完成，已进入可编辑状态。');
       setStreaming(false);
+      setStreamingRootPlaceholders([]);
       source.close();
       window.history.replaceState(null, '', `/bid-editor?projectId=${projectId}`);
       void reloadProject(projectId);
@@ -324,6 +348,7 @@ export function BidEditorPage(): JSX.Element {
         }
       }
       setStreaming(false);
+      setStreamingRootPlaceholders([]);
       source.close();
     });
   }
@@ -777,7 +802,10 @@ export function BidEditorPage(): JSX.Element {
   if (loading) {
     return (
       <div className="bid-editor-loading">
-        <Alert type="info" showIcon message="正在加载标书编制工作台" description="正在读取当前项目的章节大纲。" />
+        <div className="bid-editor-loading-panel">
+          <BrandMark size={96} className="loading-brand" />
+          <Alert type="info" showIcon message="正在加载标书编制工作台" description="正在读取当前项目的章节大纲。" />
+        </div>
       </div>
     );
   }
@@ -828,6 +856,28 @@ export function BidEditorPage(): JSX.Element {
           placeholder="输入章节名称搜索"
         />
         <div className="chapter-tree">
+          {streaming ? (
+            <div className="chapter-streaming-panel">
+              <div className="chapter-streaming-head">
+                <div className="stream-placeholder-icon chapter-streaming-icon">
+                  <BrandMark size={34} rounded={false} />
+                </div>
+                <div>
+                  <strong>AI 正在流式生成章节</strong>
+                  <span>{streamText || '正在结合招标解读结果生成目录...'}</span>
+                </div>
+              </div>
+              <div className="chapter-streaming-roots">
+                {streamingRootPlaceholders.map(item => (
+                  <div key={item.id} className="chapter-node chapter-node-placeholder level-1">
+                    <span className="chapter-toggle" />
+                    <span className="chapter-status" />
+                    <span className="chapter-title">{item.title}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
           {filteredChapters.filter(chapter => isVisibleChapter(chapter, filteredChapters)).map(chapter => {
             const active = chapter.id === selectedChapter?.id;
             return (
@@ -936,6 +986,7 @@ export function BidEditorPage(): JSX.Element {
             <div className="onlyoffice-embed-shell">
               {onlyOfficeLoading ? (
                 <div className="onlyoffice-embed-loading">
+                  <BrandMark size={88} className="loading-brand" />
                   <Spin size="large" />
                   <span>正在生成 DOCX 并加载 ONLYOFFICE...</span>
                 </div>
@@ -967,11 +1018,9 @@ export function BidEditorPage(): JSX.Element {
                   ))}
                 </ol>
               ) : (
-                <div className="stream-placeholder">
-                  <div className="stream-placeholder-icon">
-                    <Sparkles size={28} />
-                  </div>
-                  <strong>{streamText || '等待章节生成...'}</strong>
+                <div className="document-empty-tip">
+                  <strong>目录生成中</strong>
+                  <span>章节会优先流式出现在左侧目录，生成到首个章节后这里会自动展示草稿。</span>
                 </div>
               )}
             </div>
@@ -984,12 +1033,9 @@ export function BidEditorPage(): JSX.Element {
                   onChange={event => updateSelectedContent(event.target.value)}
                 />
               ) : (
-                <div className="stream-placeholder">
-                  <div className="stream-placeholder-icon">
-                    <Sparkles size={30} />
-                  </div>
-                  <strong>{streamText || 'AI 正在准备章节大纲...'}</strong>
-                  <span>章节生成后会自动出现在左侧目录，并在这里展示草稿。</span>
+                <div className="document-empty-tip">
+                  <strong>未选择章节</strong>
+                  <span>{streaming ? '章节会在左侧目录逐条流式出现，选中后这里展示正文。' : '请在左侧选择章节后查看或编辑正文。'}</span>
                 </div>
               )}
             </div>

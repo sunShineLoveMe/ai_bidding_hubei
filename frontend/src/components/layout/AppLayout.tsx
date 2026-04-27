@@ -3,6 +3,7 @@ import { BookOpen, Box, FileClock, FileSearch, Home, Settings, ShieldCheck } fro
 import { Button, Tag } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { GlobalLoading } from '../common/GlobalLoading';
+import { BrandMark } from '../common/BrandMark';
 
 const navItems = [
   { path: '/', label: '主页', icon: Home },
@@ -21,9 +22,7 @@ export function AppLayout({ children }: PropsWithChildren): JSX.Element {
     <div className="h-screen overflow-hidden bg-slate-50 text-slate-950">
       <header className="fixed left-0 right-0 top-0 z-30 flex h-16 items-center justify-between border-b border-slate-200 bg-white px-7 shadow-[0_2px_12px_rgba(22,35,72,0.04)]">
         <div className="flex items-center gap-3 text-[26px] font-black tracking-normal">
-          <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-500 text-base font-black text-white shadow-lg shadow-blue-200">
-            标
-          </div>
+          <BrandMark size={40} />
           <span>AI标书系统</span>
         </div>
         <div className="flex items-center gap-5">

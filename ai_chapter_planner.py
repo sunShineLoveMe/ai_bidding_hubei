@@ -377,6 +377,25 @@ def save_bid_outline(project_id: str, outline: dict[str, Any], analysis: dict[st
         raise RuntimeError("标书章节大纲写回 Supabase 失败")
 
 
+def _stream_ordered_chapters(chapters: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+    roots = [chapter for chapter in chapters if "." not in str(chapter.get("order") or "")]
+    descendants_by_root: dict[str, list[dict[str, Any]]] = {}
+    for chapter in chapters:
+        order = str(chapter.get("order") or "")
+        if "." not in order:
+            continue
+        root_key = order.split(".", 1)[0]
+        descendants_by_root.setdefault(root_key, []).append(chapter)
+
+    for chapter in roots:
+        yield chapter
+
+    for root in roots:
+        root_key = str(root.get("order") or "")
+        for child in descendants_by_root.get(root_key, []):
+            yield child
+
+
 def stream_bid_outline(project_id: str) -> Iterator[dict[str, Any]]:
     payload = get_project_interpretation(project_id)
     analysis = payload.get("analysis")
@@ -399,14 +418,35 @@ def stream_bid_outline(project_id: str) -> Iterator[dict[str, Any]]:
         "total": len(outline.get("chapters") or []),
     }
 
-    for index, chapter in enumerate(outline.get("chapters") or [], start=1):
+    chapters = outline.get("chapters") or []
+    root_count = sum(1 for chapter in chapters if "." not in str(chapter.get("order") or ""))
+    yielded = 0
+
+    yield {
+        "type": "stage",
+        "stage": "roots",
+        "message": f"正在生成一级目录框架，共 {root_count} 个一级章节。",
+    }
+
+    for chapter in _stream_ordered_chapters(chapters):
+        yielded += 1
+        if (chapter.get("level") or 1) == 2:
+            yield {
+                "type": "stage",
+                "stage": "children",
+                "message": f"正在补充「{str(chapter.get('order') or '').split('.', 1)[0]}」下的子章节。",
+                "chapter": {
+                    "order": chapter.get("order"),
+                    "title": chapter.get("title"),
+                },
+            }
         yield {
             "type": "chapter",
-            "index": index,
-            "total": len(outline.get("chapters") or []),
+            "index": yielded,
+            "total": len(chapters),
             "chapter": chapter,
         }
-        time.sleep(0.12)
+        time.sleep(0.08 if (chapter.get("level") or 1) == 1 else 0.12)
 
     save_bid_outline(project_id, outline, analysis)
     replace_bid_sections_from_outline(project_id, outline)
