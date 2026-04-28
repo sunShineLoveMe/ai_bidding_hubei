@@ -1,12 +1,10 @@
 import { Button, Empty, Progress, Space, Table, Tag, Upload, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { BookOpen, Database, FileText, RefreshCw, UploadCloud } from 'lucide-react';
-import { SearchOutlined } from '@ant-design/icons';
 import { useState, useEffect, useMemo } from 'react';
 import { CategoryList } from '../../components/common/CategoryList';
 import { MetricCards } from '../../components/common/MetricCards';
 import { ModuleHeader } from '../../components/common/ModuleHeader';
-import { KnowledgeSearchDrawer } from './KnowledgeSearchDrawer';
 import dayjs from 'dayjs';
 import { apiClient } from '../../api/client';
 
@@ -43,7 +41,6 @@ export function KnowledgeBasePage(): JSX.Element {
   const [activeCategory, setActiveCategory] = useState('全部资料');
   const [files, setFiles] = useState<KnowledgeFile[]>([]);
   const [loading, setLoading] = useState(false);
-  const [searchDrawerVisible, setSearchDrawerVisible] = useState(false);
 
   const fetchDocuments = async () => {
     try {
@@ -137,9 +134,6 @@ export function KnowledgeBasePage(): JSX.Element {
         description="管理企业介绍、历史标书、项目案例、标准话术和行业资料，为 RAG 标书生成提供可检索知识来源。"
         actions={
           <>
-            <Button icon={<SearchOutlined />} onClick={() => setSearchDrawerVisible(true)} className="border-blue-600 text-blue-600">
-              RAG 知识问答
-            </Button>
             <Button icon={<RefreshCw size={16} />} onClick={fetchDocuments}>刷新状态</Button>
             <Upload showUploadList={false} customRequest={handleUpload}>
               <Button type="primary" icon={<UploadCloud size={16} />}>上传资料</Button>
@@ -189,11 +183,6 @@ export function KnowledgeBasePage(): JSX.Element {
           </div>
         </section>
       </div>
-      
-      <KnowledgeSearchDrawer 
-        visible={searchDrawerVisible} 
-        onClose={() => setSearchDrawerVisible(false)} 
-      />
     </div>
   );
 }

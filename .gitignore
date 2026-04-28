@@ -11,6 +11,7 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+config/runtime_settings.json
 
 # Python
 __pycache__/

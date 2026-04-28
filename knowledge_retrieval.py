@@ -6,6 +6,7 @@ from openai import OpenAI
 from supabase_client import get_supabase_client
 from file_to_chroma import init_ali_client, get_embeddings
 from qwen_client import stream_dashscope_api
+from app_config import get_setting
 
 def search_knowledge_base(query: str, match_threshold: float = 0.5, match_count: int = 5) -> List[Dict[str, Any]]:
     """
@@ -72,7 +73,7 @@ def generate_knowledge_answer(
     prompt, images = build_knowledge_prompt(query, contexts, assets)
 
     response = ali_client.chat.completions.create(
-        model="qwen-long", # 阿里云适合做长文本RAG的模型
+        model=get_setting("knowledge_model", "qwen-long"),
         messages=[
             {"role": "system", "content": "你是一个严谨的 RAG 知识库问答助手。"},
             {"role": "user", "content": prompt}
@@ -123,9 +124,10 @@ def build_knowledge_prompt(
         similarity = float(asset.get("similarity") or 0)
         searchable_text = asset.get("searchable_text") or asset.get("description") or ""
         sections = "、".join(asset.get("applicable_sections") or [])
+        public_url = asset.get("public_url") or ""
         asset_contexts.append(
             f"【图片资产{index}｜相关度 {similarity:.2f}｜分类 {category}｜类型 {asset_type}】\n"
-            f"名称：{title}\n适用章节：{sections}\n说明：{searchable_text}"
+            f"名称：{title}\n适用章节：{sections}\n图片地址：{public_url}\n说明：{searchable_text}"
         )
         if asset.get("public_url"):
             images.append({
@@ -151,9 +153,11 @@ def build_knowledge_prompt(
 1. 先给出结论，再按要点展开。
 2. 如果资料不足，请明确说明哪些信息需要继续补充。
 3. 涉及投标材料、废标风险、施工组织设计等内容时，尽量给出可执行清单。
-4. 如果相关图片/资质资产适合插入标书，请单独给出“可引用图片建议”，说明适合放在哪类章节。
-5. 结尾列出“参考依据”，用“资料1、资料2...”说明依据来自哪些检索片段；图片资产只作为配图建议，不要把它当成法规依据。
-6. 语言专业、客观、准确，适合非技术标书人员阅读。
+4. 如果相关图片/资质资产适合插入标书正文，请直接在对应说明段落后使用 Markdown 图片语法插入，不要在结尾集中罗列图片。格式必须是：![图片名称](图片地址)
+5. 最多插入 3 张最相关图片。资质证书、营业执照、安全生产许可证类图片只能作为“脱敏示意图/排版占位图”，必须明确说明不能替代正式法定资质文件。
+6. 不要输出 Markdown 表格，图片建议用自然段和项目符号描述，避免表格在聊天窗口中换行错乱。
+7. 结尾列出“参考依据”，用“资料1、资料2...”说明依据来自哪些检索片段；图片资产只作为配图建议，不要把它当成法规依据。
+8. 语言专业、客观、准确，适合非技术标书人员阅读。
 """
     return prompt, images
 
@@ -180,7 +184,7 @@ def stream_knowledge_answer(
                 {"role": "system", "content": "你是一个严谨的 RAG 知识库问答助手。"},
                 {"role": "user", "content": prompt},
             ],
-            model=os.getenv("DASHSCOPE_KNOWLEDGE_MODEL", "qwen-long"),
+            model=get_setting("knowledge_model", "qwen-long"),
         ):
             emitted = True
             yield {

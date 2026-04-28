@@ -1,6 +1,5 @@
 import { message } from 'antd';
 import { useCallback, useRef } from 'react';
-import { AIAssistantWidget } from '../components/assistant/AIAssistantWidget';
 import { BasicTools } from '../components/home/BasicTools';
 import { HeroBanner } from '../components/home/HeroBanner';
 import { KnowledgeStats } from '../components/home/KnowledgeStats';
@@ -28,7 +27,6 @@ export function HomePage(): JSX.Element {
       </div>
       <KnowledgeStats />
       <BidWorkflow onReady={registerFilePicker} />
-      <AIAssistantWidget />
     </div>
   );
 }

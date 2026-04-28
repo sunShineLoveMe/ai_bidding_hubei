@@ -1,4 +1,4 @@
-import { Drawer, Input, Button, List, Spin, Typography, Image, Space, message } from 'antd';
+import { Drawer, Input, Button, List, Spin, Typography, Image, message } from 'antd';
 import { SearchOutlined, SendOutlined } from '@ant-design/icons';
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -204,7 +204,7 @@ export function KnowledgeSearchDrawer({
 
   return (
     <Drawer
-      title="企业知识库 RAG 问答"
+      title="企业知识库助手"
       placement="right"
       width={600}
       onClose={onClose}
@@ -216,7 +216,7 @@ export function KnowledgeSearchDrawer({
           <div className="flex flex-col items-center justify-center h-full text-slate-400">
             <SearchOutlined style={{ fontSize: 48, marginBottom: 16 }} />
             <Text type="secondary">试着问我关于水利招标文件、政策法规、标准话术和投标章节的问题</Text>
-            <Text type="secondary" className="mt-2 text-xs">当前基于已入库文本分片回答，后续可扩展图文资料召回</Text>
+            <Text type="secondary" className="mt-2 text-xs">可检索企业资料、产品图片、资质样张和水利行业知识</Text>
             <div className="mt-6 w-full space-y-3">
               {guideQuestions.map((question) => (
                 <button
@@ -249,100 +249,31 @@ export function KnowledgeSearchDrawer({
                         <span>{msg.status}</span>
                       </div>
                     )}
-                    {msg.content ? <ReactMarkdown>{msg.content}</ReactMarkdown> : null}
+                    {msg.content ? (
+                      <ReactMarkdown
+                        components={{
+                          img: ({ alt, src }) => (
+                            <span className="my-3 block">
+                              <Image
+                                src={src || ''}
+                                alt={alt || '知识库图片'}
+                                className="max-h-64 rounded-xl border border-slate-200 object-contain"
+                                preview={{ src }}
+                              />
+                              {alt && (
+                                <span className="mt-1 block text-center text-xs font-semibold text-slate-400">
+                                  {alt}
+                                </span>
+                              )}
+                            </span>
+                          ),
+                        }}
+                      >
+                        {msg.content}
+                      </ReactMarkdown>
+                    ) : null}
                     {msg.streaming && msg.content && <span className="ml-1 inline-block h-4 w-1 animate-pulse rounded bg-blue-500 align-middle" />}
                   </div>
-                  
-                  {/* 图片画廊渲染 */}
-                  {msg.images && msg.images.length > 0 && (
-                    <div className="mt-4 pt-4 border-t border-slate-100">
-                      <div className="text-xs text-slate-500 mb-2 font-medium">相关参考图片：</div>
-                      <Space wrap size={8}>
-                        {msg.images.map((img, i) => (
-                          <div key={i} className="relative group rounded-md overflow-hidden border border-slate-200">
-                            <Image
-                              src={img.url}
-                              alt={img.alt}
-                              width={120}
-                              height={120}
-                              className="object-cover"
-                              preview={{
-                                src: img.url,
-                              }}
-                            />
-                            <div className="absolute bottom-0 left-0 right-0 bg-black/50 p-1 truncate text-[10px] text-white opacity-0 group-hover:opacity-100 transition-opacity">
-                              {img.alt}
-                            </div>
-                          </div>
-                        ))}
-                      </Space>
-                    </div>
-                  )}
-
-                  {msg.role === 'assistant' && !msg.streaming && msg.assets && msg.assets.length > 0 && (
-                    <div className="mt-4 border-t border-slate-100 pt-4">
-                      <div className="mb-2 text-xs font-bold text-slate-500">相关图片 / 资质附件</div>
-                      <div className="grid grid-cols-1 gap-3">
-                        {msg.assets.slice(0, 6).map((asset, assetIndex) => (
-                          <div key={asset.id || `${asset.title}-${assetIndex}`} className="flex gap-3 rounded-xl bg-slate-50 p-3">
-                            {asset.public_url ? (
-                              <Image
-                                src={asset.public_url}
-                                alt={asset.title}
-                                width={88}
-                                height={72}
-                                className="rounded-lg object-cover"
-                                preview={{ src: asset.public_url }}
-                              />
-                            ) : (
-                              <div className="flex h-[72px] w-[88px] shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs text-slate-400">
-                                无图片
-                              </div>
-                            )}
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="truncate text-sm font-bold text-slate-700">
-                                  {asset.title || '未命名图片'}
-                                </div>
-                                {typeof asset.similarity === 'number' && (
-                                  <span className="shrink-0 rounded-full bg-blue-50 px-2 py-1 text-xs font-bold text-blue-600">
-                                    {(asset.similarity * 100).toFixed(0)}%
-                                  </span>
-                                )}
-                              </div>
-                              <div className="mt-1 text-xs font-semibold text-slate-400">
-                                {[asset.category, asset.asset_type].filter(Boolean).join(' · ')}
-                              </div>
-                              {asset.description && (
-                                <div className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">
-                                  {asset.description}
-                                </div>
-                              )}
-                              {asset.applicable_sections && asset.applicable_sections.length > 0 && (
-                                <div className="mt-2 flex flex-wrap gap-1">
-                                  {asset.applicable_sections.slice(0, 3).map((section) => (
-                                    <span key={section} className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-500">
-                                      {section}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                              {asset.source_url && (
-                                <a
-                                  href={asset.source_url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="mt-2 inline-block text-xs font-bold text-blue-600 hover:text-blue-700"
-                                >
-                                  查看图片来源
-                                </a>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
 
                   {msg.role === 'assistant' && !msg.streaming && msg.sources && msg.sources.length > 0 && (
                     <div className="mt-4 border-t border-slate-100 pt-4">

@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import shutil
 from datetime import timedelta
+from app_config import DEFAULT_SETTINGS, load_runtime_settings, save_runtime_settings
 
 # 操作向量数据库的函数
 from document_parser import ingest_artifacts as ingest_mineru_artifacts_to_supabase, import_mineru_result_zip, parse_and_index_tender_file, read_parse_status, retry_mineru_result_download, write_parse_status
@@ -64,6 +65,31 @@ def get_db():
     conn = sqlite3.connect('bidding.db')
     conn.row_factory = sqlite3.Row
     return conn
+
+
+@bp.route('/settings', methods=['GET'])
+def get_runtime_settings():
+    settings = load_runtime_settings()
+    return jsonify({
+        "settings": settings,
+        "defaults": DEFAULT_SETTINGS,
+        "sensitive": {
+            "dashscope_api_key_configured": bool(os.getenv("DASHSCOPE_API_KEY")),
+            "supabase_url_configured": bool(os.getenv("SUPABASE_URL")),
+            "supabase_service_role_configured": bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY")),
+        }
+    }), 200
+
+
+@bp.route('/settings', methods=['POST'])
+def update_runtime_settings():
+    data = request.get_json() or {}
+    settings = data.get("settings") if isinstance(data.get("settings"), dict) else data
+    saved = save_runtime_settings(settings)
+    return jsonify({
+        "settings": saved,
+        "message": "系统设置已保存，新的模型配置会在下一次请求时生效。"
+    }), 200
 
 def read_tender_file(bidding_id):
     """读取招标文件"""

@@ -7,10 +7,10 @@ from unidecode import unidecode
 from werkzeug.utils import secure_filename
 import logging
 import json
+from app_config import get_setting
 
 # 通义千问API配置
 DASHSCOPE_API_KEY = os.getenv('DASHSCOPE_API_KEY')
-DASHSCOPE_MODEL = os.getenv('DASHSCOPE_MODEL', 'qwen-turbo-latest')
 AI_PROVIDER = os.getenv('AI_PROVIDER', 'dashscope')
 
 
@@ -24,7 +24,7 @@ def call_dashscope_api(messages, model=None, json_mode=True):
     }
 
     data = {
-        'model': model or DASHSCOPE_MODEL,
+        'model': model or get_setting("text_model", "qwen-turbo-latest"),
         'input': {
             'messages': messages
         }
@@ -34,7 +34,12 @@ def call_dashscope_api(messages, model=None, json_mode=True):
     else:
         data['parameters'] = {'result_format': 'message'}
     
-    response = requests.post(url, headers=headers, json=data)
+    response = requests.post(
+        url,
+        headers=headers,
+        json=data,
+        timeout=int(get_setting("request_timeout_seconds", 120)),
+    )
     if response.status_code != 200:
         error_message = f"Dashscope API Error: Status Code: {response.status_code}, Response Body: {response.text}"
         logging.error(error_message)
@@ -60,7 +65,7 @@ def stream_dashscope_api(messages, model=None):
         'X-DashScope-SSE': 'enable',
     }
     data = {
-        'model': model or DASHSCOPE_MODEL,
+        'model': model or get_setting("text_model", "qwen-turbo-latest"),
         'input': {
             'messages': messages
         },
@@ -70,7 +75,12 @@ def stream_dashscope_api(messages, model=None):
         },
     }
 
-    with requests.post(url, headers=headers, json=data, stream=True, timeout=(15, 180)) as response:
+    timeout = (
+        int(get_setting("stream_connect_timeout_seconds", 15)),
+        int(get_setting("stream_read_timeout_seconds", 180)),
+    )
+
+    with requests.post(url, headers=headers, json=data, stream=True, timeout=timeout) as response:
         if response.status_code != 200:
             error_message = f"Dashscope Stream API Error: Status Code: {response.status_code}, Response Body: {response.text}"
             logging.error(error_message)

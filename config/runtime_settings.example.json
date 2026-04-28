@@ -1,0 +1,21 @@
+{
+  "ai_provider": "dashscope",
+  "text_model": "qwen-turbo-latest",
+  "knowledge_model": "qwen-long",
+  "embedding_model": "text-embedding-v3",
+  "request_timeout_seconds": 120,
+  "stream_connect_timeout_seconds": 15,
+  "stream_read_timeout_seconds": 180,
+  "upload_dir": "uploads/",
+  "output_dir": "outputs/",
+  "vector_store": "supabase_pgvector",
+  "chroma_dir": "chroma_db/",
+  "sqlite_db": "bidding.db",
+  "onlyoffice_url": "http://localhost:8080",
+  "backend_public_url": "http://host.docker.internal:3012",
+  "word_template": "templates/default_bid_template.docx",
+  "online_editing_enabled": true,
+  "auto_backup_enabled": true,
+  "backup_frequency": "daily",
+  "backup_dir": "backups/"
+}

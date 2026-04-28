@@ -1,9 +1,11 @@
 import type { PropsWithChildren } from 'react';
-import { BookOpen, Box, FileClock, FileSearch, Home, Settings, ShieldCheck } from 'lucide-react';
+import { BookOpen, Box, FileClock, FileSearch, Home, Settings, ShieldCheck, Sparkles } from 'lucide-react';
 import { Button, Tag } from 'antd';
+import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { GlobalLoading } from '../common/GlobalLoading';
 import { BrandMark } from '../common/BrandMark';
+import { KnowledgeSearchDrawer } from '../../pages/KnowledgeBase/KnowledgeSearchDrawer';
 
 const navItems = [
   { path: '/', label: '主页', icon: Home },
@@ -17,6 +19,7 @@ const navItems = [
 export function AppLayout({ children }: PropsWithChildren): JSX.Element {
   const location = useLocation();
   const navigate = useNavigate();
+  const [knowledgeAssistantOpen, setKnowledgeAssistantOpen] = useState(false);
 
   return (
     <div className="h-screen overflow-hidden bg-slate-50 text-slate-950">
@@ -60,9 +63,23 @@ export function AppLayout({ children }: PropsWithChildren): JSX.Element {
         <GlobalLoading />
       </main>
 
+      <Button
+        type="primary"
+        className="fixed bottom-[72px] right-7 z-40 h-14 rounded-full bg-gradient-to-r from-blue-600 to-cyan-500 px-6 text-base font-black shadow-xl shadow-blue-200"
+        icon={<Sparkles size={19} />}
+        onClick={() => setKnowledgeAssistantOpen(true)}
+      >
+        知识库助手
+      </Button>
+
+      <KnowledgeSearchDrawer
+        visible={knowledgeAssistantOpen}
+        onClose={() => setKnowledgeAssistantOpen(false)}
+      />
+
       <footer className="fixed bottom-0 left-0 right-0 z-30 flex h-12 items-center justify-between border-t border-slate-200 bg-white px-7 text-sm font-semibold text-slate-500">
-        <span>企业单机部署版 · 本地知识库驱动 · Word 导出</span>
-        <span>Flask API / Vite React / ChromaDB / Qwen</span>
+        <span>企业单机部署版 · 招标解读 · 知识库问答 · 标书编制</span>
+        <span>数据本地可控 · 支持内网部署 · 面向水利招投标场景</span>
       </footer>
     </div>
   );

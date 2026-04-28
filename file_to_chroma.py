@@ -4,6 +4,7 @@ from chromadb.utils import embedding_functions
 from openai import OpenAI
 import hashlib
 from pathlib import Path
+from app_config import get_setting
 
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 
@@ -106,7 +107,7 @@ def get_embeddings(client, texts, batch_size=10):
     for i in range(0, len(texts), batch_size):
         batch_texts = texts[i:i+batch_size]
         response = client.embeddings.create(
-            model="text-embedding-v3",
+            model=get_setting("embedding_model", "text-embedding-v3"),
             input=batch_texts
         )
         # 提取当前批次的向量并添加到结果列表
