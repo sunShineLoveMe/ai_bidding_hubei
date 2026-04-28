@@ -3,10 +3,11 @@ import { ClipboardList, FileText, UploadCloud } from 'lucide-react';
 
 interface SmartBidCardProps {
   onPrimaryAction: () => void;
-  onSecondaryAction: (message: string) => void;
+  onTechnicalAction: () => void;
+  onBusinessAction: () => void;
 }
 
-export function SmartBidCard({ onPrimaryAction, onSecondaryAction }: SmartBidCardProps): JSX.Element {
+export function SmartBidCard({ onPrimaryAction, onTechnicalAction, onBusinessAction }: SmartBidCardProps): JSX.Element {
   return (
     <section className="grid min-h-32 grid-cols-[430px_1fr] items-center gap-5 rounded-2xl border border-slate-200 bg-white px-6 py-5 shadow-soft max-[1500px]:grid-cols-1">
       <div className="flex items-center gap-4">
@@ -16,7 +17,7 @@ export function SmartBidCard({ onPrimaryAction, onSecondaryAction }: SmartBidCar
         <div>
           <h2 className="mb-1 text-2xl font-black text-indigo-600">智能标书</h2>
           <p className="m-0 text-sm font-semibold leading-6 text-slate-500">
-            上传招标文件，结合企业知识库、资信库、产品库，生成可编辑的标书初稿
+            第一步上传招标文件，系统会解析招标要求，并结合知识库、资信库、产品库生成可编辑初稿
           </p>
         </div>
       </div>
@@ -27,16 +28,16 @@ export function SmartBidCard({ onPrimaryAction, onSecondaryAction }: SmartBidCar
         <Button
           size="large"
           icon={<ClipboardList size={18} />}
-          onClick={() => onSecondaryAction('请先上传招标文件，再执行预分析和章节格式提取。')}
+          onClick={onTechnicalAction}
         >
-          按目录生成技术标
+          继续历史标书
         </Button>
         <Button
           size="large"
           icon={<FileText size={18} />}
-          onClick={() => onSecondaryAction('商务响应材料会在章节设计后随标书正文一起生成。')}
+          onClick={onBusinessAction}
         >
-          生成商务响应材料
+          管理知识资料
         </Button>
       </div>
     </section>

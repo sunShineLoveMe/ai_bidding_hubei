@@ -18,11 +18,12 @@ type ResultTab = '运行结果' | '预分析' | '章节格式' | '章节设计';
 
 interface BidWorkflowProps {
   onReady?: (openFilePicker: () => void) => void;
+  onTaskChanged?: () => void;
 }
 
 const steps = ['上传招标文件', 'AI 预分析', '提取章节格式', '生成章节设计', '生成 Word'];
 
-export function BidWorkflow({ onReady }: BidWorkflowProps): JSX.Element {
+export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.Element {
   const [current, setCurrent] = useState(0);
   const [busy, setBusy] = useState(false);
   const [file, setFile] = useState<File | null>(null);
@@ -125,6 +126,7 @@ export function BidWorkflow({ onReady }: BidWorkflowProps): JSX.Element {
           status: '已上传',
           action: '查看',
         });
+        onTaskChanged?.();
         message.success('上传完成');
         return;
       }
@@ -175,6 +177,7 @@ export function BidWorkflow({ onReady }: BidWorkflowProps): JSX.Element {
           status: '已导出',
           action: '查看',
         });
+        onTaskChanged?.();
         message.success('Word 已生成');
       }
     } catch (error) {
