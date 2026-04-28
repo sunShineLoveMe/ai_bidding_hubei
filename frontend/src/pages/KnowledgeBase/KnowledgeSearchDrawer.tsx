@@ -24,11 +24,27 @@ interface SourceContext {
   };
 }
 
+interface KnowledgeAsset {
+  id?: string;
+  title?: string;
+  description?: string;
+  category?: string;
+  asset_type?: string;
+  public_url?: string;
+  source_url?: string;
+  license?: string;
+  attribution?: string;
+  applicable_sections?: string[];
+  tags?: string[];
+  similarity?: number;
+}
+
 interface Message {
   role: 'user' | 'assistant';
   content: string;
   images?: ImageMeta[];
   sources?: SourceContext[];
+  assets?: KnowledgeAsset[];
   streaming?: boolean;
   status?: string;
 }
@@ -116,9 +132,10 @@ export function KnowledgeSearchDrawer({
         if (event.type === 'retrieved') {
           updateAssistant((msg) => ({
             ...msg,
-            status: `已召回 ${event.contexts_count || 0} 条相关资料，正在生成回答...`,
+            status: `已召回 ${event.contexts_count || 0} 条资料、${event.assets_count || 0} 个图片资产，正在生成回答...`,
             images: event.images || [],
             sources: event.raw_contexts || [],
+            assets: event.assets || [],
           }));
           return;
         }
@@ -259,6 +276,71 @@ export function KnowledgeSearchDrawer({
                           </div>
                         ))}
                       </Space>
+                    </div>
+                  )}
+
+                  {msg.role === 'assistant' && !msg.streaming && msg.assets && msg.assets.length > 0 && (
+                    <div className="mt-4 border-t border-slate-100 pt-4">
+                      <div className="mb-2 text-xs font-bold text-slate-500">相关图片 / 资质附件</div>
+                      <div className="grid grid-cols-1 gap-3">
+                        {msg.assets.slice(0, 6).map((asset, assetIndex) => (
+                          <div key={asset.id || `${asset.title}-${assetIndex}`} className="flex gap-3 rounded-xl bg-slate-50 p-3">
+                            {asset.public_url ? (
+                              <Image
+                                src={asset.public_url}
+                                alt={asset.title}
+                                width={88}
+                                height={72}
+                                className="rounded-lg object-cover"
+                                preview={{ src: asset.public_url }}
+                              />
+                            ) : (
+                              <div className="flex h-[72px] w-[88px] shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs text-slate-400">
+                                无图片
+                              </div>
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="truncate text-sm font-bold text-slate-700">
+                                  {asset.title || '未命名图片'}
+                                </div>
+                                {typeof asset.similarity === 'number' && (
+                                  <span className="shrink-0 rounded-full bg-blue-50 px-2 py-1 text-xs font-bold text-blue-600">
+                                    {(asset.similarity * 100).toFixed(0)}%
+                                  </span>
+                                )}
+                              </div>
+                              <div className="mt-1 text-xs font-semibold text-slate-400">
+                                {[asset.category, asset.asset_type].filter(Boolean).join(' · ')}
+                              </div>
+                              {asset.description && (
+                                <div className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">
+                                  {asset.description}
+                                </div>
+                              )}
+                              {asset.applicable_sections && asset.applicable_sections.length > 0 && (
+                                <div className="mt-2 flex flex-wrap gap-1">
+                                  {asset.applicable_sections.slice(0, 3).map((section) => (
+                                    <span key={section} className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-500">
+                                      {section}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                              {asset.source_url && (
+                                <a
+                                  href={asset.source_url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="mt-2 inline-block text-xs font-bold text-blue-600 hover:text-blue-700"
+                                >
+                                  查看图片来源
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
 

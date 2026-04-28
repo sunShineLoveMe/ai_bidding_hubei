@@ -32,13 +32,44 @@ def search_knowledge_base(query: str, match_threshold: float = 0.5, match_count:
     
     return response.data or []
 
-def generate_knowledge_answer(query: str, contexts: List[Dict[str, Any]]) -> Dict[str, Any]:
+
+def search_knowledge_assets(query: str, match_count: int = 8) -> List[Dict[str, Any]]:
+    """
+    检索企业知识库中的图片/资质资产。
+    图片本身不直接参与语义检索，检索的是 OCR、AI 描述、规格参数和适用章节组成的 searchable_text。
+    """
+    ali_client = init_ali_client()
+    client = get_supabase_client()
+
+    query_embeddings = get_embeddings(ali_client, [query])
+    if not query_embeddings:
+        return []
+
+    response = client.rpc(
+        "match_knowledge_assets",
+        {
+            "query_embedding": query_embeddings[0],
+            "match_count": match_count,
+            "filter_category": None,
+            "filter_asset_type": None,
+        },
+    ).execute()
+
+    assets = response.data or []
+    # 过滤掉明显弱相关的资产，保留图片来源展示的准确性。
+    return [asset for asset in assets if float(asset.get("similarity") or 0) >= 0.28]
+
+def generate_knowledge_answer(
+    query: str,
+    contexts: List[Dict[str, Any]],
+    assets: List[Dict[str, Any]] | None = None,
+) -> Dict[str, Any]:
     """
     组装包含图片链接的 Prompt，让大模型基于知识库生成最终回答
     """
     ali_client = init_ali_client()
     
-    prompt, images = build_knowledge_prompt(query, contexts)
+    prompt, images = build_knowledge_prompt(query, contexts, assets)
 
     response = ali_client.chat.completions.create(
         model="qwen-long", # 阿里云适合做长文本RAG的模型
@@ -54,11 +85,16 @@ def generate_knowledge_answer(query: str, contexts: List[Dict[str, Any]]) -> Dic
     return {
         "answer": answer,
         "images": images,
+        "assets": assets or [],
         "raw_contexts": contexts
     }
 
 
-def build_knowledge_prompt(query: str, contexts: List[Dict[str, Any]]) -> tuple[str, list[dict[str, str]]]:
+def build_knowledge_prompt(
+    query: str,
+    contexts: List[Dict[str, Any]],
+    assets: List[Dict[str, Any]] | None = None,
+) -> tuple[str, list[dict[str, str]]]:
     text_contexts = []
     images = []
 
@@ -79,12 +115,34 @@ def build_knowledge_prompt(query: str, contexts: List[Dict[str, Any]]) -> tuple[
                 "alt": meta.get("alt", "未命名图片")
             })
 
+    asset_contexts = []
+    for index, asset in enumerate(assets or [], 1):
+        title = asset.get("title") or "未命名图片"
+        category = asset.get("category") or "图片资产"
+        asset_type = asset.get("asset_type") or "image"
+        similarity = float(asset.get("similarity") or 0)
+        searchable_text = asset.get("searchable_text") or asset.get("description") or ""
+        sections = "、".join(asset.get("applicable_sections") or [])
+        asset_contexts.append(
+            f"【图片资产{index}｜相关度 {similarity:.2f}｜分类 {category}｜类型 {asset_type}】\n"
+            f"名称：{title}\n适用章节：{sections}\n说明：{searchable_text}"
+        )
+        if asset.get("public_url"):
+            images.append({
+                "url": asset["public_url"],
+                "alt": title,
+            })
+
     context_str = "\n\n---\n\n".join(text_contexts)
+    asset_context_str = "\n\n---\n\n".join(asset_contexts) or "无相关图片资产。"
     prompt = f"""你是一个专业的水利招投标 RAG 知识库问答助手。
 请只依据下方企业知识库检索片段回答用户问题，不要编造未出现在资料中的证书编号、人员姓名、合同金额或具体日期。
 
 【知识库检索片段】：
 {context_str}
+
+【相关图片/资质资产】：
+{asset_context_str}
 
 【用户问题】：
 {query}
@@ -93,19 +151,26 @@ def build_knowledge_prompt(query: str, contexts: List[Dict[str, Any]]) -> tuple[
 1. 先给出结论，再按要点展开。
 2. 如果资料不足，请明确说明哪些信息需要继续补充。
 3. 涉及投标材料、废标风险、施工组织设计等内容时，尽量给出可执行清单。
-4. 结尾列出“参考依据”，用“资料1、资料2...”说明依据来自哪些检索片段。
-5. 语言专业、客观、准确，适合非技术标书人员阅读。
+4. 如果相关图片/资质资产适合插入标书，请单独给出“可引用图片建议”，说明适合放在哪类章节。
+5. 结尾列出“参考依据”，用“资料1、资料2...”说明依据来自哪些检索片段；图片资产只作为配图建议，不要把它当成法规依据。
+6. 语言专业、客观、准确，适合非技术标书人员阅读。
 """
     return prompt, images
 
 
-def stream_knowledge_answer(query: str, contexts: List[Dict[str, Any]]) -> Iterator[Dict[str, Any]]:
-    prompt, images = build_knowledge_prompt(query, contexts)
+def stream_knowledge_answer(
+    query: str,
+    contexts: List[Dict[str, Any]],
+    assets: List[Dict[str, Any]] | None = None,
+) -> Iterator[Dict[str, Any]]:
+    prompt, images = build_knowledge_prompt(query, contexts, assets)
     yield {
         "type": "retrieved",
         "contexts_count": len(contexts),
+        "assets_count": len(assets or []),
         "images": images,
         "raw_contexts": contexts,
+        "assets": assets or [],
     }
 
     emitted = False

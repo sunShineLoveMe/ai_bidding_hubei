@@ -1188,7 +1188,12 @@ def generate_bid_document():
         return jsonify({'error': f'生成投标书失败: {str(e)}'}), 500
 
 from knowledge_ingestion import ingest_knowledge_document, create_knowledge_document, update_knowledge_document_status
-from knowledge_retrieval import search_knowledge_base, generate_knowledge_answer, stream_knowledge_answer
+from knowledge_retrieval import (
+    generate_knowledge_answer,
+    search_knowledge_assets,
+    search_knowledge_base,
+    stream_knowledge_answer,
+)
 
 def sync_and_parse_knowledge_in_background(file_path, original_filename, parse_id, document_id):
     try:
@@ -1288,9 +1293,10 @@ def search_knowledge():
     try:
         # 1. 向量化并检索 Supabase
         contexts = search_knowledge_base(query, match_threshold=0.3, match_count=8)
+        assets = search_knowledge_assets(query, match_count=8)
         
         # 2. RAG 生成回答
-        result = generate_knowledge_answer(query, contexts)
+        result = generate_knowledge_answer(query, contexts, assets)
         
         return jsonify(result), 200
         
@@ -1335,8 +1341,12 @@ def stream_search_knowledge():
                 return
             yield emit({"type": "status", "message": "正在检索知识库资料..."})
             contexts = search_knowledge_base(query, match_threshold=0.3, match_count=8)
-            yield emit({"type": "status", "message": f"已召回 {len(contexts)} 条相关资料，正在生成回答..."})
-            for event in stream_knowledge_answer(query, contexts):
+            assets = search_knowledge_assets(query, match_count=8)
+            yield emit({
+                "type": "status",
+                "message": f"已召回 {len(contexts)} 条资料、{len(assets)} 个图片资产，正在生成回答..."
+            })
+            for event in stream_knowledge_answer(query, contexts, assets):
                 yield emit(event)
         except Exception as e:
             logging.exception("知识库流式检索问答失败")
