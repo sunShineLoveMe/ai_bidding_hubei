@@ -1,10 +1,11 @@
 import os
 import json
-from typing import Any, List, Dict
+from typing import Any, Iterator, List, Dict
 from openai import OpenAI
 
 from supabase_client import get_supabase_client
 from file_to_chroma import init_ali_client, get_embeddings
+from qwen_client import stream_dashscope_api
 
 def search_knowledge_base(query: str, match_threshold: float = 0.5, match_count: int = 5) -> List[Dict[str, Any]]:
     """
@@ -37,42 +38,7 @@ def generate_knowledge_answer(query: str, contexts: List[Dict[str, Any]]) -> Dic
     """
     ali_client = init_ali_client()
     
-    # 提取纯文本上下文和包含的图片
-    text_contexts = []
-    images = []
-    
-    for ctx in contexts:
-        content = ctx.get("content", "")
-        meta = ctx.get("metadata", {})
-        similarity = ctx.get("similarity", 0)
-        
-        # 将所有的内容拼接进 Prompt，让大模型能看到图文的关联
-        text_contexts.append(f"【相关度 {similarity:.2f}】\n{content}")
-        
-        # 收集图片用于前端独立展示
-        if meta.get("type") == "image" and meta.get("image_url"):
-            images.append({
-                "url": meta.get("image_url"),
-                "alt": meta.get("alt", "未命名图片")
-            })
-            
-    context_str = "\n\n---\n\n".join(text_contexts)
-    
-    prompt = f"""你是一个专业的企业招投标与知识库 AI 助手。
-请仔细阅读以下从企业知识库中检索到的上下文片段（可能包含关于图片的描述信息）。
-
-【上下文资料】：
-{context_str}
-
-【用户问题】：
-{query}
-
-请根据上面的资料回答用户的问题。
-要求：
-1. 如果上下文不足以回答问题，请如实告知，不要编造。
-2. 如果回答中涉及某张图片或资质（可以通过【图片元数据】判断），请在回答中明确提到该图片，让用户参考附带的图片。
-3. 语言专业、客观、准确。
-"""
+    prompt, images = build_knowledge_prompt(query, contexts)
 
     response = ali_client.chat.completions.create(
         model="qwen-long", # 阿里云适合做长文本RAG的模型
@@ -89,4 +55,89 @@ def generate_knowledge_answer(query: str, contexts: List[Dict[str, Any]]) -> Dic
         "answer": answer,
         "images": images,
         "raw_contexts": contexts
+    }
+
+
+def build_knowledge_prompt(query: str, contexts: List[Dict[str, Any]]) -> tuple[str, list[dict[str, str]]]:
+    text_contexts = []
+    images = []
+
+    for index, ctx in enumerate(contexts, 1):
+        content = ctx.get("content", "")
+        meta = ctx.get("metadata", {}) or {}
+        similarity = ctx.get("similarity", 0)
+        source = meta.get("source_org") or meta.get("source_file") or "企业知识库"
+        doc_type = meta.get("doc_type") or "知识片段"
+
+        text_contexts.append(
+            f"【资料{index}｜相关度 {similarity:.2f}｜来源 {source}｜类型 {doc_type}】\n{content}"
+        )
+
+        if meta.get("type") == "image" and meta.get("image_url"):
+            images.append({
+                "url": meta.get("image_url"),
+                "alt": meta.get("alt", "未命名图片")
+            })
+
+    context_str = "\n\n---\n\n".join(text_contexts)
+    prompt = f"""你是一个专业的水利招投标 RAG 知识库问答助手。
+请只依据下方企业知识库检索片段回答用户问题，不要编造未出现在资料中的证书编号、人员姓名、合同金额或具体日期。
+
+【知识库检索片段】：
+{context_str}
+
+【用户问题】：
+{query}
+
+回答要求：
+1. 先给出结论，再按要点展开。
+2. 如果资料不足，请明确说明哪些信息需要继续补充。
+3. 涉及投标材料、废标风险、施工组织设计等内容时，尽量给出可执行清单。
+4. 结尾列出“参考依据”，用“资料1、资料2...”说明依据来自哪些检索片段。
+5. 语言专业、客观、准确，适合非技术标书人员阅读。
+"""
+    return prompt, images
+
+
+def stream_knowledge_answer(query: str, contexts: List[Dict[str, Any]]) -> Iterator[Dict[str, Any]]:
+    prompt, images = build_knowledge_prompt(query, contexts)
+    yield {
+        "type": "retrieved",
+        "contexts_count": len(contexts),
+        "images": images,
+        "raw_contexts": contexts,
+    }
+
+    emitted = False
+    try:
+        for chunk in stream_dashscope_api(
+            [
+                {"role": "system", "content": "你是一个严谨的 RAG 知识库问答助手。"},
+                {"role": "user", "content": prompt},
+            ],
+            model=os.getenv("DASHSCOPE_KNOWLEDGE_MODEL", "qwen-long"),
+        ):
+            emitted = True
+            yield {
+                "type": "chunk",
+                "content": chunk,
+            }
+    except Exception:
+        result = generate_knowledge_answer(query, contexts)
+        content = result.get("answer") or ""
+        for start in range(0, len(content), 120):
+            emitted = True
+            yield {
+                "type": "chunk",
+                "content": content[start:start + 120],
+            }
+
+    if not emitted:
+        yield {
+            "type": "chunk",
+            "content": "未能生成回答，请稍后重试或补充更多知识库资料。",
+        }
+
+    yield {
+        "type": "done",
     }

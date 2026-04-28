@@ -2,6 +2,7 @@ import { Badge } from 'antd';
 
 export interface CategoryItem {
   name: string;
+  label?: string;
   count: number;
 }
 
@@ -28,7 +29,7 @@ export function CategoryList({ title, items, activeName, onChange }: CategoryLis
               }`}
               onClick={() => onChange(item.name)}
             >
-              <span>{item.name}</span>
+              <span>{item.label || item.name}</span>
               <Badge count={item.count} color={active ? '#3267ff' : '#94a3b8'} />
             </button>
           );

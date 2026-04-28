@@ -2,12 +2,13 @@ import { Button, Empty, Progress, Space, Table, Tag, Upload, message } from 'ant
 import type { ColumnsType } from 'antd/es/table';
 import { BookOpen, Database, FileText, RefreshCw, UploadCloud } from 'lucide-react';
 import { SearchOutlined } from '@ant-design/icons';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { CategoryList } from '../../components/common/CategoryList';
 import { MetricCards } from '../../components/common/MetricCards';
 import { ModuleHeader } from '../../components/common/ModuleHeader';
 import { KnowledgeSearchDrawer } from './KnowledgeSearchDrawer';
 import dayjs from 'dayjs';
+import { apiClient } from '../../api/client';
 
 interface KnowledgeFile {
   id: string;
@@ -18,15 +19,13 @@ interface KnowledgeFile {
   created_at: string;
 }
 
-const categories = [
-  { name: '全部资料', count: 0 },
-  { name: 'general', count: 0 },
-  { name: '企业介绍', count: 0 },
-  { name: '历史标书', count: 0 },
-  { name: '项目案例', count: 0 },
-  { name: '标准话术', count: 0 },
-  { name: '行业资料', count: 0 },
-];
+const categoryLabel: Record<string, string> = {
+  general: '通用资料',
+  water_tender_documents: '水利招标文件',
+  water_policy_regulations: '水利政策法规',
+  water_standards_specs: '水利标准规范',
+  water_standard_phrases: '水利标准话术',
+};
 
 const statusColor: Record<string, string> = {
   indexed: 'green',
@@ -49,11 +48,10 @@ export function KnowledgeBasePage(): JSX.Element {
   const fetchDocuments = async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/knowledge/documents');
-      if (res.ok) {
-        const data = await res.json();
-        setFiles(data);
-      }
+      const { data } = await apiClient.get<KnowledgeFile[]>('/api/knowledge/documents', {
+        skipGlobalLoading: true,
+      });
+      setFiles(data);
     } catch (err) {
       console.error(err);
       message.error("获取知识库列表失败");
@@ -96,11 +94,28 @@ export function KnowledgeBasePage(): JSX.Element {
     }
   };
 
+  const categories = useMemo(() => {
+    const counts = files.reduce<Record<string, number>>((acc, file) => {
+      acc[file.category] = (acc[file.category] || 0) + 1;
+      return acc;
+    }, {});
+    return [
+      { name: '全部资料', count: files.length },
+      ...Object.entries(counts)
+        .sort(([a], [b]) => (categoryLabel[a] || a).localeCompare(categoryLabel[b] || b, 'zh-CN'))
+        .map(([category, count]) => ({
+          name: category,
+          label: categoryLabel[category] || category,
+          count,
+        })),
+    ];
+  }, [files]);
+
   const dataSource = activeCategory === '全部资料' ? files : files.filter(file => file.category === activeCategory);
 
   const columns: ColumnsType<KnowledgeFile> = [
     { title: '文件名称', dataIndex: 'title', ellipsis: true },
-    { title: '分类', dataIndex: 'category', width: 110, render: value => <Tag color="blue">{value}</Tag> },
+    { title: '分类', dataIndex: 'category', width: 140, render: value => <Tag color="blue">{categoryLabel[value] || value}</Tag> },
     { title: '类型', dataIndex: 'source_type', width: 88, render: value => value?.toUpperCase() },
     { title: '索引状态', dataIndex: 'status', width: 100, render: status => <Tag color={statusColor[status] || 'default'}>{statusLabel[status] || status}</Tag> },
     { title: '更新时间', dataIndex: 'created_at', width: 160, render: val => dayjs(val).format('YYYY-MM-DD HH:mm') },
@@ -123,7 +138,7 @@ export function KnowledgeBasePage(): JSX.Element {
         actions={
           <>
             <Button icon={<SearchOutlined />} onClick={() => setSearchDrawerVisible(true)} className="border-blue-600 text-blue-600">
-              知识图文检索
+              RAG 知识问答
             </Button>
             <Button icon={<RefreshCw size={16} />} onClick={fetchDocuments}>刷新状态</Button>
             <Upload showUploadList={false} customRequest={handleUpload}>
@@ -166,10 +181,10 @@ export function KnowledgeBasePage(): JSX.Element {
               <Progress percent={files.length > 0 ? Math.round((files.filter(f => f.status === 'indexed').length / files.length) * 100) : 0} showInfo={false} />
             </div>
             <div className="rounded-xl bg-slate-50 p-3 leading-6">
-              当前采用 Supabase PGVector 持久化存储。通过 MinerU 对上传的 PDF/Word 进行解析，自动剥离纯文本和图片节点。
+              当前采用 Supabase PGVector 持久化存储。水利行业种子库已按资料分类、文本抽取、分片和向量化流程入库，可用于法规、招标文件和标准话术检索。
             </div>
             <div className="rounded-xl bg-blue-50 p-3 leading-6 text-blue-700">
-              采用“轻量级图文打标”策略，图片将会与所在的章节及前后文一同向量化，支持精确的“以文搜图”。点击右上角「知识图文检索」进行测试。
+              当前 26 份水利资料主要支持文本 RAG 问答。后续上传资质扫描件、产品图片或图文混排资料并完成 MinerU 图文解析后，可继续扩展图片召回能力。
             </div>
           </div>
         </section>

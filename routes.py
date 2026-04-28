@@ -30,6 +30,7 @@ from document_parser import ingest_artifacts as ingest_mineru_artifacts_to_supab
 from file_to_chroma import query_chroma
 # 创建蓝图
 bp = Blueprint('bidding', __name__)
+knowledge_bp = Blueprint('knowledge', __name__)
 
 # 临时的内存存储，用于在 upload -> pre-analysis -> chapter-analysis 之间传递小量状态
 # 结构: { bidding_id: { 'biddingId': int, 'analysisData': dict|None, 'directoryStructure': dict|None } }
@@ -1187,7 +1188,7 @@ def generate_bid_document():
         return jsonify({'error': f'生成投标书失败: {str(e)}'}), 500
 
 from knowledge_ingestion import ingest_knowledge_document, create_knowledge_document, update_knowledge_document_status
-from knowledge_retrieval import search_knowledge_base, generate_knowledge_answer
+from knowledge_retrieval import search_knowledge_base, generate_knowledge_answer, stream_knowledge_answer
 
 def sync_and_parse_knowledge_in_background(file_path, original_filename, parse_id, document_id):
     try:
@@ -1233,6 +1234,7 @@ def sync_and_parse_knowledge_in_background(file_path, original_filename, parse_i
         logging.exception("知识库解析入库失败")
         update_knowledge_document_status(document_id, "failed")
 
+@knowledge_bp.route('/upload', methods=['POST'])
 @bp.route('/knowledge/upload', methods=['POST'])
 def upload_knowledge():
     if 'file' not in request.files:
@@ -1275,6 +1277,7 @@ def upload_knowledge():
         logging.exception("知识库文件上传处理失败")
         return jsonify({'error': f'文件上传失败: {str(e)}'}), 500
 
+@knowledge_bp.route('/search', methods=['POST'])
 @bp.route('/knowledge/search', methods=['POST'])
 def search_knowledge():
     data = request.get_json()
@@ -1295,8 +1298,55 @@ def search_knowledge():
         logging.exception("知识库检索问答失败")
         return jsonify({'error': f'检索问答失败: {str(e)}'}), 500
 
+@knowledge_bp.route('/search/stream', methods=['POST'])
+@bp.route('/knowledge/search/stream', methods=['POST'])
+def stream_search_knowledge():
+    data = request.get_json() or {}
+    query = (data.get('query') or '').strip()
+    if not query:
+        return jsonify({'error': '缺少检索问题 query'}), 400
+
+    def is_relevant_knowledge_query(text: str) -> bool:
+        keywords = [
+            "水利", "水库", "除险", "加固", "招标", "投标", "标书", "资格", "资质", "评标",
+            "评分", "废标", "否决", "施工", "监理", "勘察", "设计", "EPC", "总承包",
+            "工期", "质量", "安全", "环保", "水保", "防汛", "度汛", "灌区", "泵站",
+            "水闸", "堤防", "河道", "合同", "报价", "工程量清单", "投标文件", "招标文件",
+            "企业知识库", "标准话术", "政策法规", "水利标准", "章节", "正文",
+        ]
+        lowered = text.lower()
+        ascii_keywords = ["bid", "tender", "rag", "qualification", "water", "reservoir"]
+        return any(keyword in text for keyword in keywords) or any(keyword in lowered for keyword in ascii_keywords)
+
+    def emit(payload: dict) -> str:
+        return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    @stream_with_context
+    def generate():
+        yield emit({"type": "start"})
+        try:
+            if not is_relevant_knowledge_query(query):
+                yield emit({"type": "status", "message": "正在判断问题是否属于当前知识库范围..."})
+                yield emit({
+                    "type": "chunk",
+                    "content": "抱歉，当前企业知识库主要服务于水利招投标、标书编制、政策法规、资格材料、施工组织设计和废标风险等问题。这个问题与当前知识库范围不太相关，我暂时不能基于本知识库给出可靠回答。你可以换成类似“水库除险加固投标需要准备哪些资格材料？”这样的问题。",
+                })
+                yield emit({"type": "done"})
+                return
+            yield emit({"type": "status", "message": "正在检索知识库资料..."})
+            contexts = search_knowledge_base(query, match_threshold=0.3, match_count=8)
+            yield emit({"type": "status", "message": f"已召回 {len(contexts)} 条相关资料，正在生成回答..."})
+            for event in stream_knowledge_answer(query, contexts):
+                yield emit(event)
+        except Exception as e:
+            logging.exception("知识库流式检索问答失败")
+            yield emit({"type": "error", "error": f"检索问答失败: {str(e)}"})
+
+    return Response(generate(), mimetype='text/event-stream')
+
 from db_supabase import list_knowledge_documents
 
+@knowledge_bp.route('/documents', methods=['GET'])
 @bp.route('/knowledge/documents', methods=['GET'])
 def get_knowledge_documents():
     try:

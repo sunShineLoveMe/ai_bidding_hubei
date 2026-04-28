@@ -101,6 +101,62 @@ flowchart TD
 
 系统使用 Supabase PostgreSQL + pgvector 作为企业知识库主链路。ChromaDB 仍保留为本地兼容能力，便于早期测试和离线验证。
 
+### RAG 技术框架与模型
+
+当前 RAG 知识库采用“Supabase 业务库 + pgvector 向量检索 + DashScope Embedding + LLM 流式问答”的实现方式。
+
+| 层级 | 技术/模型 | 作用 |
+| --- | --- | --- |
+| 业务数据库 | Supabase PostgreSQL | 保存知识文档元数据、文档分片、解析状态和业务表 |
+| 向量检索 | pgvector | 在 PostgreSQL 内保存 embedding 向量并执行相似度检索 |
+| 对象存储 | Supabase Storage | 保存原始知识库文件、招标文件和生成文档 |
+| 向量模型 | DashScope `text-embedding-v3` | 将用户问题和知识分片转换为向量 |
+| 问答模型 | DashScope / OpenAI-compatible Chat Model，默认使用 `qwen-long` 做知识库回答 | 基于召回片段生成最终回答 |
+| 流式输出 | DashScope SSE / Flask `text/event-stream` | 支持 RAG 回答逐段返回，降低首屏等待体感 |
+| 文本抽取 | PyPDF2 / Mammoth / Markdown 读取 | 处理普通 PDF、DOCX 和 Markdown 文档 |
+| OCR/版面解析 | MinerU，可选 | 处理扫描版 PDF、复杂表格、图片型招标文件 |
+| 本地兼容向量库 | ChromaDB | 早期 MVP 兼容保留，主链路已转向 Supabase pgvector |
+
+当前核心代码：
+
+| 文件 | 说明 |
+| --- | --- |
+| `knowledge_ingestion.py` | 上传知识库资料后的解析、图片上下文提取、embedding 和 `document_chunks` 写入 |
+| `knowledge_retrieval.py` | 用户问题向量化、调用 Supabase RPC 检索、组装 Prompt、生成 RAG 回答 |
+| `rag_seed/water_resources/_scripts/ingest_water_rag_seed.py` | 水利行业种子资料批量入库脚本 |
+| `file_to_chroma.py` | DashScope embedding 封装与 ChromaDB 兼容逻辑 |
+| `routes.py` | `/api/knowledge/search` 和 `/api/knowledge/search/stream` API |
+
+RAG 检索链路：
+
+```text
+用户问题
+→ text-embedding-v3 生成 query embedding
+→ Supabase RPC: match_knowledge_chunks
+→ pgvector 相似度检索 document_chunks
+→ 召回 top-k 文档分片
+→ 组装带来源信息的 Prompt
+→ qwen-long / 兼容模型生成回答
+→ SSE 流式返回答案
+→ 前端展示答案与参考资料来源
+```
+
+分片与元数据策略：
+
+- 文本分片默认按段落和长度切分，水利种子库入库脚本使用约 `1800` 字符的 chunk，并保留少量上下文重叠。
+- 每个分片写入 `document_chunks.content`，向量写入 `document_chunks.embedding`。
+- `document_chunks.metadata` 保存资料分类、文档类型、来源单位、原始 URL、文件路径、标签和 hash。
+- 前端 RAG 回答完成后展示参考资料来源，帮助用户核对答案依据。
+- 当前水利种子库主要是文本 RAG；图片召回能力保留在 `knowledge_ingestion.py` 的图文节点逻辑中，需上传图文资料并完成 MinerU 解析后使用。
+
+当前已验证的水利种子库入库结果：
+
+- 有效资料：26 份
+- 向量分片：558 条
+- 分类：水利招标文件、水利政策法规、水利标准规范、水利标准话术
+- 检索接口：`POST /api/knowledge/search`
+- 流式检索接口：`POST /api/knowledge/search/stream`
+
 ### RAG 数据流
 
 ```mermaid

@@ -75,6 +75,7 @@ import users
 
 # 注册蓝图
 app.register_blueprint(routes.bp, url_prefix='/api/bidding')
+app.register_blueprint(routes.knowledge_bp, url_prefix='/api/knowledge')
 app.register_blueprint(users.bp, url_prefix='/api/users')
 
 @app.route('/api/outputs/<path:filename>')
