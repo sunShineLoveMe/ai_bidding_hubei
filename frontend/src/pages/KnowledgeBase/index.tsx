@@ -1,4 +1,4 @@
-import { Button, Empty, Progress, Space, Table, Tag, Upload, message } from 'antd';
+import { Button, Descriptions, Empty, Modal, Progress, Space, Table, Tag, Upload, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { BookOpen, Database, FileText, RefreshCw, UploadCloud } from 'lucide-react';
 import { useState, useEffect, useMemo } from 'react';
@@ -17,12 +17,32 @@ interface KnowledgeFile {
   created_at: string;
 }
 
+interface KnowledgeChunk {
+  id: string;
+  chunk_index: number;
+  content: string;
+  metadata?: Record<string, unknown>;
+}
+
+interface KnowledgeDetail {
+  document: KnowledgeFile & {
+    bucket?: string;
+    object_path?: string;
+  };
+  chunks: KnowledgeChunk[];
+}
+
 const categoryLabel: Record<string, string> = {
   general: '通用资料',
   water_tender_documents: '水利招标文件',
   water_policy_regulations: '水利政策法规',
   water_standards_specs: '水利标准规范',
   water_standard_phrases: '水利标准话术',
+  water_capability_library: '水利能力资料',
+  water_company_profiles: '企业画像资料',
+  water_product_library: '水利产品资料',
+  water_qualification_library: '企业资信资料',
+  water_upload_workflow: '上传流程样例',
 };
 
 const statusColor: Record<string, string> = {
@@ -41,6 +61,9 @@ export function KnowledgeBasePage(): JSX.Element {
   const [activeCategory, setActiveCategory] = useState('全部资料');
   const [files, setFiles] = useState<KnowledgeFile[]>([]);
   const [loading, setLoading] = useState(false);
+  const [detailVisible, setDetailVisible] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detail, setDetail] = useState<KnowledgeDetail | null>(null);
 
   const fetchDocuments = async () => {
     try {
@@ -110,6 +133,23 @@ export function KnowledgeBasePage(): JSX.Element {
 
   const dataSource = activeCategory === '全部资料' ? files : files.filter(file => file.category === activeCategory);
 
+  const handleView = async (record: KnowledgeFile) => {
+    try {
+      setDetailVisible(true);
+      setDetailLoading(true);
+      setDetail(null);
+      const { data } = await apiClient.get<KnowledgeDetail>(`/api/knowledge/documents/${record.id}`, {
+        skipGlobalLoading: true,
+      });
+      setDetail(data);
+    } catch (error: any) {
+      message.error(error.message || '获取文档详情失败');
+      setDetailVisible(false);
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
   const columns: ColumnsType<KnowledgeFile> = [
     { title: '文件名称', dataIndex: 'title', ellipsis: true },
     { title: '分类', dataIndex: 'category', width: 140, render: value => <Tag color="blue">{categoryLabel[value] || value}</Tag> },
@@ -119,9 +159,9 @@ export function KnowledgeBasePage(): JSX.Element {
     {
       title: '操作',
       width: 130,
-      render: () => (
+      render: (_, record) => (
         <Space size={4}>
-          <Button type="link" size="small">查看</Button>
+          <Button type="link" size="small" onClick={() => handleView(record)}>查看</Button>
         </Space>
       ),
     },
@@ -183,6 +223,49 @@ export function KnowledgeBasePage(): JSX.Element {
           </div>
         </section>
       </div>
+      <Modal
+        title="知识库文档详情"
+        open={detailVisible}
+        onCancel={() => setDetailVisible(false)}
+        footer={<Button onClick={() => setDetailVisible(false)}>关闭</Button>}
+        width={920}
+        loading={detailLoading}
+      >
+        {detail ? (
+          <div className="space-y-4">
+            <Descriptions size="small" bordered column={2}>
+              <Descriptions.Item label="文件名称" span={2}>{detail.document.title}</Descriptions.Item>
+              <Descriptions.Item label="分类">
+                <Tag color="blue">{categoryLabel[detail.document.category] || detail.document.category}</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="类型">{detail.document.source_type?.toUpperCase()}</Descriptions.Item>
+              <Descriptions.Item label="索引状态">
+                <Tag color={statusColor[detail.document.status] || 'default'}>{statusLabel[detail.document.status] || detail.document.status}</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="更新时间">{dayjs(detail.document.created_at).format('YYYY-MM-DD HH:mm')}</Descriptions.Item>
+              {detail.document.object_path && (
+                <Descriptions.Item label="存储路径" span={2}>{detail.document.object_path}</Descriptions.Item>
+              )}
+            </Descriptions>
+
+            <div>
+              <h3 className="mb-3 text-base font-bold text-slate-900">解析内容预览</h3>
+              <div className="max-h-[420px] space-y-3 overflow-y-auto rounded-xl border border-slate-100 bg-slate-50 p-3">
+                {detail.chunks.length > 0 ? detail.chunks.map(chunk => (
+                  <div key={chunk.id} className="rounded-lg bg-white p-3 shadow-sm">
+                    <div className="mb-2 text-xs font-bold text-blue-600">片段 {chunk.chunk_index + 1}</div>
+                    <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-6 text-slate-600">
+                      {chunk.content}
+                    </pre>
+                  </div>
+                )) : (
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可预览的解析片段" />
+                )}
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </Modal>
     </div>
   );
 }

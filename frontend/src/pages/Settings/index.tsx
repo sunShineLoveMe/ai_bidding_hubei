@@ -11,6 +11,8 @@ interface RuntimeSettings {
   knowledge_model: string;
   embedding_model: string;
   request_timeout_seconds: number;
+  stream_connect_timeout_seconds: number;
+  stream_read_timeout_seconds: number;
   upload_dir: string;
   output_dir: string;
   vector_store: string;
@@ -114,6 +116,12 @@ export function SettingsPage(): JSX.Element {
                     </Form.Item>
                     <Form.Item label="请求超时时间" name="request_timeout_seconds">
                       <InputNumber className="w-full" min={10} max={600} addonAfter="秒" />
+                    </Form.Item>
+                    <Form.Item label="流式连接超时" name="stream_connect_timeout_seconds">
+                      <InputNumber className="w-full" min={5} max={120} addonAfter="秒" />
+                    </Form.Item>
+                    <Form.Item label="流式读取超时" name="stream_read_timeout_seconds">
+                      <InputNumber className="w-full" min={30} max={900} addonAfter="秒" />
                     </Form.Item>
                   </Form>
                   <div className="settings-note">

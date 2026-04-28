@@ -306,3 +306,59 @@ def list_knowledge_documents() -> list[dict[str, Any]]:
     client = get_supabase_client()
     response = client.table("knowledge_documents").select("*").order("created_at", desc=True).execute()
     return response.data or []
+
+
+def get_knowledge_document_detail(document_id: str) -> dict[str, Any] | None:
+    client = get_supabase_client()
+    document_response = (
+        client.table("knowledge_documents")
+        .select("*")
+        .eq("id", document_id)
+        .limit(1)
+        .execute()
+    )
+    documents = document_response.data or []
+    if not documents:
+        return None
+
+    chunks_response = (
+        client.table("document_chunks")
+        .select("id,chunk_index,content,metadata")
+        .eq("document_id", document_id)
+        .order("chunk_index")
+        .limit(20)
+        .execute()
+    )
+
+    return {
+        "document": documents[0],
+        "chunks": chunks_response.data or [],
+    }
+
+
+def list_knowledge_assets(asset_type: str | None = None, category: str | None = None) -> list[dict[str, Any]]:
+    client = get_supabase_client()
+    query = (
+        client.table("knowledge_assets")
+        .select("*")
+        .order("created_at", desc=True)
+    )
+    if asset_type:
+        query = query.eq("asset_type", asset_type)
+    if category:
+        query = query.eq("category", category)
+    response = query.execute()
+    return response.data or []
+
+
+def get_knowledge_asset_detail(asset_id: str) -> dict[str, Any] | None:
+    client = get_supabase_client()
+    response = (
+        client.table("knowledge_assets")
+        .select("*")
+        .eq("id", asset_id)
+        .limit(1)
+        .execute()
+    )
+    rows = response.data or []
+    return rows[0] if rows else None

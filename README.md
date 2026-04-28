@@ -110,8 +110,8 @@ flowchart TD
 | 业务数据库 | Supabase PostgreSQL | 保存知识文档元数据、文档分片、解析状态和业务表 |
 | 向量检索 | pgvector | 在 PostgreSQL 内保存 embedding 向量并执行相似度检索 |
 | 对象存储 | Supabase Storage | 保存原始知识库文件、招标文件和生成文档 |
-| 向量模型 | DashScope `text-embedding-v3` | 将用户问题和知识分片转换为向量 |
-| 问答模型 | DashScope / OpenAI-compatible Chat Model，默认使用 `qwen-long` 做知识库回答 | 基于召回片段生成最终回答 |
+| 向量模型 | 默认 DashScope `text-embedding-v3`，可在系统设置中调整 | 将用户问题和知识分片转换为向量 |
+| 问答模型 | 默认 `qwen-long`，可在系统设置中调整 | 基于召回片段生成最终回答 |
 | 流式输出 | DashScope SSE / Flask `text/event-stream` | 支持 RAG 回答逐段返回，降低首屏等待体感 |
 | 文本抽取 | PyPDF2 / Mammoth / Markdown 读取 | 处理普通 PDF、DOCX 和 Markdown 文档 |
 | OCR/版面解析 | MinerU，可选 | 处理扫描版 PDF、复杂表格、图片型招标文件 |
@@ -131,12 +131,12 @@ RAG 检索链路：
 
 ```text
 用户问题
-→ text-embedding-v3 生成 query embedding
+→ 系统配置的 Embedding 模型生成 query embedding
 → Supabase RPC: match_knowledge_chunks
 → pgvector 相似度检索 document_chunks
 → 召回 top-k 文档分片
 → 组装带来源信息的 Prompt
-→ qwen-long / 兼容模型生成回答
+→ 系统配置的知识库问答模型生成回答
 → SSE 流式返回答案
 → 前端展示答案与参考资料来源
 ```
@@ -328,6 +328,12 @@ cp .env.example .env
 ```ini
 # LLM / Embedding
 DASHSCOPE_API_KEY=your_dashscope_api_key
+DASHSCOPE_MODEL=qwen-turbo-latest
+DASHSCOPE_KNOWLEDGE_MODEL=qwen-long
+DASHSCOPE_EMBEDDING_MODEL=text-embedding-v3
+DASHSCOPE_REQUEST_TIMEOUT_SECONDS=120
+DASHSCOPE_STREAM_CONNECT_TIMEOUT_SECONDS=15
+DASHSCOPE_STREAM_READ_TIMEOUT_SECONDS=180
 
 # Supabase
 SUPABASE_URL=https://your-project.supabase.co
@@ -354,6 +360,8 @@ MAX_UPLOAD_MB=200
 ONLYOFFICE_DOCS_API_URL=http://127.0.0.1:8080/web-apps/apps/api/documents/api.js
 ONLYOFFICE_JWT_SECRET=replace_with_a_strong_secret
 ```
+
+模型、Embedding、超时时间、OnlyOffice 地址、存储目录等非敏感配置也可以在「系统设置」页面调整。页面保存后会写入本地 `config/runtime_settings.json`，后端在下一次模型请求时读取该配置；该文件已加入 `.gitignore`，开源时只保留 `config/runtime_settings.example.json`。API Key、Supabase service role 等敏感项仍必须通过 `.env` 配置，不会保存在前端。
 
 ### 4. 启动后端
 

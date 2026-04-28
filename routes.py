@@ -1380,7 +1380,12 @@ def stream_search_knowledge():
 
     return Response(generate(), mimetype='text/event-stream')
 
-from db_supabase import list_knowledge_documents
+from db_supabase import (
+    get_knowledge_asset_detail,
+    get_knowledge_document_detail,
+    list_knowledge_assets,
+    list_knowledge_documents,
+)
 
 @knowledge_bp.route('/documents', methods=['GET'])
 @bp.route('/knowledge/documents', methods=['GET'])
@@ -1390,4 +1395,43 @@ def get_knowledge_documents():
         return jsonify(docs), 200
     except Exception as e:
         logging.exception("查询知识库文档列表失败")
+        return jsonify({'error': f'查询失败: {str(e)}'}), 500
+
+
+@knowledge_bp.route('/documents/<document_id>', methods=['GET'])
+@bp.route('/knowledge/documents/<document_id>', methods=['GET'])
+def get_knowledge_document(document_id):
+    try:
+        detail = get_knowledge_document_detail(document_id)
+        if not detail:
+            return jsonify({'error': '知识库文档不存在'}), 404
+        return jsonify(detail), 200
+    except Exception as e:
+        logging.exception("查询知识库文档详情失败")
+        return jsonify({'error': f'查询失败: {str(e)}'}), 500
+
+
+@knowledge_bp.route('/assets', methods=['GET'])
+@bp.route('/knowledge/assets', methods=['GET'])
+def get_knowledge_assets():
+    try:
+        asset_type = request.args.get('asset_type')
+        category = request.args.get('category')
+        assets = list_knowledge_assets(asset_type=asset_type, category=category)
+        return jsonify(assets), 200
+    except Exception as e:
+        logging.exception("查询知识资产列表失败")
+        return jsonify({'error': f'查询失败: {str(e)}'}), 500
+
+
+@knowledge_bp.route('/assets/<asset_id>', methods=['GET'])
+@bp.route('/knowledge/assets/<asset_id>', methods=['GET'])
+def get_knowledge_asset(asset_id):
+    try:
+        asset = get_knowledge_asset_detail(asset_id)
+        if not asset:
+            return jsonify({'error': '知识资产不存在'}), 404
+        return jsonify(asset), 200
+    except Exception as e:
+        logging.exception("查询知识资产详情失败")
         return jsonify({'error': f'查询失败: {str(e)}'}), 500
