@@ -301,3 +301,8 @@ def get_project_interpretation(project_id: str) -> dict[str, Any]:
         "documentChunks": select_many("document_chunks", "chunk_index", 80),
         "sections": sections,
     }
+
+def list_knowledge_documents() -> list[dict[str, Any]]:
+    client = get_supabase_client()
+    response = client.table("knowledge_documents").select("*").order("created_at", desc=True).execute()
+    return response.data or []

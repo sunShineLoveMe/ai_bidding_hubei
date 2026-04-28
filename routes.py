@@ -1185,3 +1185,123 @@ def generate_bid_document():
     except Exception as e:
         logging.exception(f"生成投标书过程出错: {e}")
         return jsonify({'error': f'生成投标书失败: {str(e)}'}), 500
+
+from knowledge_ingestion import ingest_knowledge_document, create_knowledge_document, update_knowledge_document_status
+from knowledge_retrieval import search_knowledge_base, generate_knowledge_answer
+
+def sync_and_parse_knowledge_in_background(file_path, original_filename, parse_id, document_id):
+    try:
+        write_parse_status(parse_id, {
+            "parse_status": "mineru_submitted",
+            "parser": "mineru",
+            "source_file": file_path,
+            "file_name": original_filename,
+        })
+        # For simplicity, we directly call mineru tasks here
+        # Assuming parse_and_index_tender_file creates the mineru batch, but we want our own ingestion logic
+        # So we can use the same run mineru logic but with custom ingestion
+        from document_parser import _run_mineru_parse_and_index, has_mineru_token, _should_use_mineru_first
+        from mineru_client import download_and_extract_zip, wait_for_batch_file_result, create_local_file_batch_task
+        
+        output_dir = Path("parsed_outputs") / parse_id
+        
+        task = create_local_file_batch_task(
+            local_file_path=file_path,
+            file_name=original_filename,
+            data_id=parse_id,
+        )
+        
+        def on_progress(result: dict) -> None:
+            pass
+            
+        result = wait_for_batch_file_result(batch_id=task.batch_id, data_id=parse_id, on_progress=on_progress)
+        full_zip_url = result.get("full_zip_url")
+        if not full_zip_url:
+            raise RuntimeError(f"MinerU finished without full_zip_url")
+            
+        artifacts = download_and_extract_zip(full_zip_url, output_dir)
+        
+        # Now call our custom ingestion
+        ingest_knowledge_document(
+            document_id=document_id,
+            original_filename=original_filename,
+            markdown_path=artifacts.get("markdown_path"),
+            extract_dir=str(output_dir)
+        )
+        
+    except Exception as e:
+        logging.exception("知识库解析入库失败")
+        update_knowledge_document_status(document_id, "failed")
+
+@bp.route('/knowledge/upload', methods=['POST'])
+def upload_knowledge():
+    if 'file' not in request.files:
+        return jsonify({'error': '未接收到知识库文件'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': '未选择知识库文件'}), 400
+
+    try:
+        original_filename = file.filename
+        safe_filename = secure_filename(original_filename)
+        unique_filename = f"{uuid.uuid4()}-{safe_filename}"
+        file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], unique_filename)
+        file.save(file_path)
+
+        # 1. Create Knowledge Document DB Record
+        document_id = create_knowledge_document(
+            title=original_filename,
+            category="general",
+            bucket="knowledge",
+            object_path=f"temp/{unique_filename}",
+            source_type=Path(original_filename).suffix.lstrip(".")
+        )
+
+        parse_id = str(uuid.uuid4())
+        
+        threading.Thread(
+            target=sync_and_parse_knowledge_in_background,
+            args=(file_path, original_filename, parse_id, document_id),
+            daemon=True,
+        ).start()
+
+        return jsonify({
+            'message': '知识文档已上传，正在后台提取图文特征',
+            'documentId': document_id
+        }), 201
+
+    except Exception as e:
+        logging.exception("知识库文件上传处理失败")
+        return jsonify({'error': f'文件上传失败: {str(e)}'}), 500
+
+@bp.route('/knowledge/search', methods=['POST'])
+def search_knowledge():
+    data = request.get_json()
+    query = data.get('query')
+    if not query:
+        return jsonify({'error': '缺少检索问题 query'}), 400
+        
+    try:
+        # 1. 向量化并检索 Supabase
+        contexts = search_knowledge_base(query, match_threshold=0.3, match_count=8)
+        
+        # 2. RAG 生成回答
+        result = generate_knowledge_answer(query, contexts)
+        
+        return jsonify(result), 200
+        
+    except Exception as e:
+        logging.exception("知识库检索问答失败")
+        return jsonify({'error': f'检索问答失败: {str(e)}'}), 500
+
+from db_supabase import list_knowledge_documents
+
+@bp.route('/knowledge/documents', methods=['GET'])
+def get_knowledge_documents():
+    try:
+        docs = list_knowledge_documents()
+        return jsonify(docs), 200
+    except Exception as e:
+        logging.exception("查询知识库文档列表失败")
+        return jsonify({'error': f'查询失败: {str(e)}'}), 500
