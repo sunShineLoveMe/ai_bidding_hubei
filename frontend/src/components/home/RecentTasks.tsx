@@ -1,5 +1,6 @@
 import { Button, Empty, Table, Tag } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import { useNavigate } from 'react-router-dom';
 import { useBidProjectStore } from '../../stores/bidProjectStore';
 import type { RecentTask } from '../../types/bid';
 
@@ -12,6 +13,7 @@ const statusColor: Record<RecentTask['status'], string> = {
 };
 
 export function RecentTasks(): JSX.Element {
+  const navigate = useNavigate();
   const recentTasks = useBidProjectStore(state => state.recentTasks);
 
   const columns: ColumnsType<RecentTask> = [
@@ -36,7 +38,7 @@ export function RecentTasks(): JSX.Element {
     <section className="panel-card">
       <div className="mb-2 flex items-center justify-between">
         <h2 className="panel-title mb-0">最近任务</h2>
-        <Button type="link">查看全部 &gt;</Button>
+        <Button type="link" onClick={() => navigate('/history')}>查看全部 &gt;</Button>
       </div>
       <Table
         rowKey="id"

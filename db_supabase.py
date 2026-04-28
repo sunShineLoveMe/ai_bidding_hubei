@@ -264,6 +264,76 @@ def list_recent_bid_projects(limit: int = 20) -> list[dict[str, Any]]:
     return response.data or []
 
 
+def list_bid_history(limit: int = 100) -> list[dict[str, Any]]:
+    client = get_supabase_client()
+    projects = (
+        client.table("bid_projects")
+        .select("*")
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+        .data
+        or []
+    )
+    if not projects:
+        return []
+
+    project_ids = [project["id"] for project in projects]
+
+    def count_by_project(table: str) -> dict[str, int]:
+        rows = (
+            client.table(table)
+            .select("project_id")
+            .in_("project_id", project_ids)
+            .execute()
+            .data
+            or []
+        )
+        counts: dict[str, int] = {}
+        for row in rows:
+            project_id = row.get("project_id")
+            if project_id:
+                counts[project_id] = counts.get(project_id, 0) + 1
+        return counts
+
+    analysis_counts = count_by_project("bid_analysis")
+    requirement_counts = count_by_project("bid_requirements")
+    risk_counts = count_by_project("bid_risks")
+    section_counts = count_by_project("bid_sections")
+    chunk_counts = count_by_project("document_chunks")
+
+    history = []
+    for project in projects:
+        project_id = project["id"]
+        has_analysis = analysis_counts.get(project_id, 0) > 0
+        section_count = section_counts.get(project_id, 0)
+        if section_count > 0:
+            stage = "标书编制"
+            action = "继续编制"
+        elif has_analysis:
+            stage = "解读完成"
+            action = "查看解读"
+        elif chunk_counts.get(project_id, 0) > 0:
+            stage = "解析完成"
+            action = "查看解读"
+        else:
+            stage = project.get("status") or "已上传"
+            action = "查看"
+
+        history.append({
+            **project,
+            "stage": stage,
+            "action": action,
+            "analysis_count": analysis_counts.get(project_id, 0),
+            "requirement_count": requirement_counts.get(project_id, 0),
+            "risk_count": risk_counts.get(project_id, 0),
+            "section_count": section_count,
+            "chunk_count": chunk_counts.get(project_id, 0),
+        })
+
+    return history
+
+
 def get_project_interpretation(project_id: str) -> dict[str, Any]:
     client = get_supabase_client()
 

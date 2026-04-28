@@ -19,7 +19,7 @@ from md_to_word import convert_md_to_word
 from ai_chapter_planner import generate_bid_outline, stream_bid_outline
 from ai_section_writer import stream_bid_section
 from ai_interpreter import generate_ai_interpretation_report
-from db_supabase import delete_bid_section, get_bid_file, get_project_interpretation, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, sync_uploaded_tender_to_supabase, update_bid_section_content, upsert_bid_section
+from db_supabase import delete_bid_section, get_bid_file, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, sync_uploaded_tender_to_supabase, update_bid_section_content, upsert_bid_section
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import shutil
@@ -470,6 +470,16 @@ def get_latest_interpretation():
     except Exception as e:
         logging.exception("查询最新招标解读失败")
         return jsonify({'error': f'查询最新招标解读失败: {str(e)}'}), 500
+
+
+@bp.route('/history', methods=['GET'])
+def get_bid_history():
+    try:
+        limit = int(request.args.get("limit", 100))
+        return jsonify({"items": list_bid_history(limit=limit)}), 200
+    except Exception as e:
+        logging.exception("查询历史记录失败")
+        return jsonify({'error': f'查询历史记录失败: {str(e)}'}), 500
 
 @bp.route('/interpretations/<project_id>', methods=['GET'])
 def get_interpretation(project_id):
