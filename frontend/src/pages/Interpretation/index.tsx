@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Descriptions, Drawer, Empty, List, Progress, Space, Table, Tabs, Tag, Typography, message } from 'antd';
+import { Alert, Button, Descriptions, Drawer, Dropdown, Empty, List, Progress, Space, Table, Tabs, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { AlertTriangle, BrainCircuit, CheckCircle2, ClipboardCheck, Eye, FileSearch, FileText, ListChecks, RefreshCw, ShieldAlert, XCircle } from 'lucide-react';
+import { AlertTriangle, BrainCircuit, CheckCircle2, ClipboardCheck, Database, Eye, FileSearch, FileText, ListChecks, MoreHorizontal, RefreshCw, ShieldAlert, XCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { generateAIInterpretation, getLatestInterpretation } from '../../api/bidProject';
+import { generateAIInterpretation, getComplianceCheck, getLatestInterpretation } from '../../api/bidProject';
 import { MetricCards } from '../../components/common/MetricCards';
 import { ModuleHeader } from '../../components/common/ModuleHeader';
 import type {
   ChapterSuggestion,
   BidOutline,
-  BidOutlineChapter,
+  ComplianceReport,
+  ComplianceRow,
   DocumentChunk,
   AIInterpretationReport,
   InterpretationResponse,
@@ -92,14 +93,25 @@ function SourceButton({ onClick }: { onClick: () => void }): JSX.Element {
 export function InterpretationPage(): JSX.Element {
   const navigate = useNavigate();
   const [data, setData] = useState<InterpretationResponse | null>(null);
+  const [complianceReport, setComplianceReport] = useState<ComplianceReport | null>(null);
   const [generatingAI, setGeneratingAI] = useState(false);
   const [generatingOutline, setGeneratingOutline] = useState(false);
   const [sourceTrace, setSourceTrace] = useState<SourceTrace | null>(null);
+  const [advancedPanel, setAdvancedPanel] = useState<'chunks' | 'mineru' | null>(null);
 
   async function load(): Promise<void> {
     try {
       const result = await getLatestInterpretation();
       setData(result);
+      if (result.project?.id) {
+        try {
+          setComplianceReport(await getComplianceCheck(result.project.id));
+        } catch (error) {
+          setComplianceReport(null);
+        }
+      } else {
+        setComplianceReport(null);
+      }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       message.error(reason);
@@ -121,15 +133,59 @@ export function InterpretationPage(): JSX.Element {
     }
     return data.documentChunks.filter(chunk => chunk.source_page === sourceTrace.sourcePage).slice(0, 8);
   }, [data?.documentChunks, sourceTrace?.sourcePage]);
+
+  const complianceRows = complianceReport?.rows || [];
+  const complianceSummary = complianceReport?.summary || {
+    total: 0,
+    covered: 0,
+    partial: 0,
+    missing: 0,
+    percent: 0,
+    highRiskMissing: 0,
+  };
+
   const metrics = useMemo(
     () => [
       { title: '要求条款', value: data?.requirements.length ?? 0, desc: '资格/商务/技术/文件', icon: ListChecks, colorClass: 'bg-blue-50 text-blue-600' },
       { title: '风险条款', value: data?.risks.length ?? 0, desc: '否决/无效/合规风险', icon: ShieldAlert, colorClass: 'bg-rose-50 text-rose-600' },
       { title: '评分项', value: data?.scoringItems.length ?? 0, desc: '评分办法初步拆解', icon: ClipboardCheck, colorClass: 'bg-emerald-50 text-emerald-600' },
-      { title: '标书章节', value: bidOutline?.chapters?.length ?? 0, desc: '目录与章节大纲', icon: FileText, colorClass: 'bg-violet-50 text-violet-600' },
+      { title: '章节大纲', value: bidOutline?.chapters?.length ?? 0, desc: '进入编制后继续编辑', icon: FileText, colorClass: 'bg-violet-50 text-violet-600' },
     ],
     [bidOutline?.chapters?.length, data],
   );
+
+  const complianceColumns: ColumnsType<ComplianceRow> = [
+    { title: '类别', dataIndex: 'category', width: 92, render: value => <Tag color={value === '风险项' ? 'red' : value === '评分项' ? 'green' : 'blue'}>{value}</Tag> },
+    { title: '重要性', dataIndex: 'importance', width: 92, render: value => <Tag color={riskColor[String(value)] || priorityColor[String(value)] || 'default'}>{value || '-'}</Tag> },
+    { title: '检查内容', dataIndex: 'content', ellipsis: true },
+    {
+      title: '覆盖状态',
+      dataIndex: 'status',
+      width: 110,
+      render: value => {
+        if (value === 'covered') return <Tag color="green">已覆盖</Tag>;
+        if (value === 'partial') return <Tag color="orange">待补强</Tag>;
+        return <Tag color="red">未覆盖</Tag>;
+      },
+    },
+    { title: '对应章节', dataIndex: 'matchedChapter', width: 210, ellipsis: true, render: value => value || '需补充章节/正文' },
+    { title: '页码', dataIndex: 'sourcePage', width: 78, render: pageText },
+    {
+      title: '依据',
+      width: 78,
+      render: (_, record) => (
+        <SourceButton
+          onClick={() => openSourceTrace({
+            title: record.content,
+            category: record.category,
+            sourcePage: record.sourcePage,
+            sourceSection: record.matchedChapter || '合规检查',
+            sourceText: record.sourceText || record.content,
+          })}
+        />
+      ),
+    },
+  ];
 
   function openSourceTrace(trace: SourceTrace): void {
     setSourceTrace(trace);
@@ -270,121 +326,117 @@ export function InterpretationPage(): JSX.Element {
     }
   }
 
-  function renderOutlineList(items?: string[]): JSX.Element {
-    if (!items?.length) {
-      return <span className="muted-text">暂无</span>;
-    }
-    return (
-      <ul>
-        {items.slice(0, 6).map((item, index) => (
-          <li key={`${item}-${index}`}>{item}</li>
-        ))}
-      </ul>
-    );
-  }
-
-  function renderBidOutline(outline: BidOutline | null): JSX.Element {
-    if (!outline?.chapters?.length) {
+  function renderAdvancedContent(): JSX.Element | null {
+    if (advancedPanel === 'chunks') {
       return (
-        <div className="outline-empty">
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无标书章节大纲" />
-          <Button type="primary" icon={<FileText size={16} />} loading={generatingOutline} onClick={() => void generateOutline()}>
-            生成章节大纲
-          </Button>
+        <Table
+          rowKey="id"
+          size="small"
+          pagination={{ pageSize: 8 }}
+          columns={chunkColumns}
+          dataSource={data?.documentChunks || []}
+          className="compact-table"
+          locale={{ emptyText: emptyText('暂无原文分片') }}
+        />
+      );
+    }
+
+    if (advancedPanel === 'mineru') {
+      return (
+        <div className="mineru-check-grid">
+          <section className="quality-card">
+            <div className="quality-score">
+              <Progress type="circle" percent={mineruQuality.quality_score ?? 0} size={92} />
+              <div>
+                <h3>解析质量分</h3>
+                <p>用于快速判断 OCR、分片、页码和结构识别是否需要人工复核。</p>
+              </div>
+            </div>
+            <Descriptions size="small" column={2} bordered>
+              <Descriptions.Item label="Markdown 字符">{mineruQuality.markdown_chars ?? 0}</Descriptions.Item>
+              <Descriptions.Item label="内容块">{mineruQuality.content_blocks ?? 0}</Descriptions.Item>
+              <Descriptions.Item label="页数">{mineruQuality.page_count ?? 0}</Descriptions.Item>
+              <Descriptions.Item label="平均块长">{mineruQuality.avg_text_block_length ?? 0}</Descriptions.Item>
+            </Descriptions>
+          </section>
+          <section className="quality-card">
+            <h3>校验清单</h3>
+            <List
+              size="small"
+              dataSource={mineruQuality.checklist || []}
+              renderItem={item => (
+                <List.Item>
+                  <span className="inline-flex items-center gap-2 text-sm font-bold text-slate-700">
+                    {item.ok ? <CheckCircle2 size={16} className="text-emerald-500" /> : <XCircle size={16} className="text-rose-500" />}
+                    {item.label}
+                  </span>
+                </List.Item>
+              )}
+            />
+          </section>
+          <section className="quality-card">
+            <h3>内容块类型</h3>
+            <div className="quality-tags">
+              {Object.entries(mineruQuality.block_type_counts || {}).map(([name, count]) => (
+                <Tag key={name} color="blue">{name}: {count}</Tag>
+              ))}
+            </div>
+          </section>
+          <section className="quality-card">
+            <h3>解析产物路径</h3>
+            <div className="artifact-list">
+              {Object.entries(mineruQuality.artifacts || {}).map(([name, value]) => (
+                <div key={name}>
+                  <strong>{name}</strong>
+                  <span>{value || '-'}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+          <section className="quality-card quality-wide">
+            <h3>可疑解析片段</h3>
+            <Table
+              rowKey={(_, index) => String(index)}
+              size="small"
+              pagination={{ pageSize: 6 }}
+              columns={suspiciousColumns}
+              dataSource={mineruQuality.suspicious_blocks || []}
+              className="compact-table"
+              locale={{ emptyText: emptyText('未发现明显可疑片段') }}
+            />
+          </section>
         </div>
       );
     }
 
-    return (
-      <div className="outline-panel">
-        <section className="outline-summary">
-          <div>
-            <span>标书章节大纲</span>
-            <h3>{outline.project_name || String(projectMeta.project_name || data?.project?.project_name || '投标文件')}</h3>
-            <p>{outline.summary || '基于招标解读结果生成的投标文件章节目录和章节编写要点。'}</p>
-          </div>
-          <Space size={8} wrap>
-            <Tag color="blue">{outline.version || 'v1'}</Tag>
-            <Tag>{outline.generated_at || '未记录时间'}</Tag>
-          </Space>
-        </section>
-        <div className="outline-chapters">
-          {outline.chapters.map((chapter: BidOutlineChapter, index) => (
-            <article className="outline-chapter-card" key={`${chapter.order || index}-${chapter.title}`}>
-              <header>
-                <div>
-                  <span>{String(chapter.order || index + 1).padStart(2, '0')}</span>
-                  <h3>{chapter.title || '未命名章节'}</h3>
-                </div>
-                <Tag color={priorityColor[String(chapter.priority)] || 'default'}>{chapter.priority || 'medium'}</Tag>
-              </header>
-              <p>{chapter.purpose || '需人工补充章节目标。'}</p>
-              <div className="outline-detail-grid">
-                <section>
-                  <h4>响应要点</h4>
-                  {renderOutlineList(chapter.response_points)}
-                </section>
-                <section>
-                  <h4>关联要求</h4>
-                  {renderOutlineList(chapter.mapped_requirements)}
-                </section>
-                <section>
-                  <h4>评分/风险</h4>
-                  {renderOutlineList([...(chapter.mapped_scoring_items || []), ...(chapter.mapped_risks || [])])}
-                </section>
-                <section>
-                  <h4>准备资料</h4>
-                  {renderOutlineList(chapter.required_materials)}
-                </section>
-              </div>
-              <footer>
-                <Space size={6} wrap>
-                  {(chapter.source_pages || []).slice(0, 8).map(page => <Tag key={page}>{pageText(page)}</Tag>)}
-                  {!chapter.source_pages?.length ? <Tag>来源需复核</Tag> : null}
-                </Space>
-                <Button
-                  size="small"
-                  icon={<Eye size={14} />}
-                  onClick={() => openSourceTrace({
-                    title: chapter.title || '标书章节大纲',
-                    category: '标书章节',
-                    sourcePage: chapter.source_pages?.[0],
-                    sourceSection: '章节大纲引用',
-                    sourceText: [
-                      chapter.purpose,
-                      ...(chapter.response_points || []),
-                      ...(chapter.mapped_requirements || []),
-                      ...(chapter.writing_notes || []),
-                    ].filter(Boolean).join('\n'),
-                  })}
-                >
-                  查看依据
-                </Button>
-              </footer>
-            </article>
-          ))}
-        </div>
-        <section className="report-section report-wide">
-          <h3>后续动作</h3>
-          {renderOutlineList(outline.next_steps)}
-        </section>
-      </div>
-    );
+    return null;
   }
 
   return (
     <div className="interpretation-shell">
       <ModuleHeader
-        title="招标文件解读"
-        description="基于 MinerU 解析产物和 Supabase 结构化数据，展示项目概况、要求条款、评分项、风险项和建议章节。"
+        title="招标项目"
+        description="集中查看当前招标文件的项目概况、资格要求、评分办法、风险检查和章节建议。"
         actions={
           <>
             <Button icon={<BrainCircuit size={16} />} loading={generatingAI} disabled={!data?.analysis} onClick={() => void generateAIReport()}>
-              生成AI深度解读
+              生成AI解读
             </Button>
             <Button icon={<FileText size={16} />} loading={generatingOutline} disabled={!data?.analysis} onClick={() => void generateOutline()}>
               生成章节大纲
             </Button>
+            <Dropdown
+              disabled={!data?.analysis}
+              menu={{
+                items: [
+                  { key: 'chunks', label: '查看原文分片', icon: <Database size={14} /> },
+                  { key: 'mineru', label: 'MinerU 解析校验', icon: <FileSearch size={14} /> },
+                ],
+                onClick: info => setAdvancedPanel(info.key as 'chunks' | 'mineru'),
+              }}
+            >
+              <Button icon={<MoreHorizontal size={16} />}>高级信息</Button>
+            </Dropdown>
             <Button type="primary" icon={<RefreshCw size={16} />} onClick={() => void load()}>
               刷新解读
             </Button>
@@ -434,7 +486,7 @@ export function InterpretationPage(): JSX.Element {
               items={[
                 {
                   key: 'report',
-                  label: aiReport ? 'AI深度解读' : 'AI解读报告',
+                  label: '解读总览',
                   children: (
                     <div className="report-grid">
                       <section className="report-hero">
@@ -597,8 +649,43 @@ export function InterpretationPage(): JSX.Element {
                   ),
                 },
                 {
+                  key: 'compliance',
+                  label: '合规覆盖',
+                  children: (
+                    <div className="space-y-4">
+                      <Alert
+                        type={complianceSummary.missing ? 'warning' : 'success'}
+                        showIcon
+                        message={`当前覆盖度 ${complianceSummary.percent}%`}
+                        description={`共检查 ${complianceSummary.total} 项，其中已覆盖 ${complianceSummary.covered} 项、待补强 ${complianceSummary.partial} 项、未覆盖 ${complianceSummary.missing} 项，高风险未覆盖 ${complianceSummary.highRiskMissing || 0} 项。请优先处理未覆盖的资格要求、否决风险和高分评分项。`}
+                      />
+                      {complianceReport?.recommendations?.length ? (
+                        <div className="rounded-md bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-800">
+                          {complianceReport.recommendations.map((item, index) => (
+                            <p key={`compliance-rec-${index}`} className="mb-1 last:mb-0">{item}</p>
+                          ))}
+                        </div>
+                      ) : null}
+                      <Progress
+                        percent={complianceSummary.percent}
+                        status={complianceSummary.missing ? 'active' : 'success'}
+                        strokeColor={complianceSummary.missing ? '#f59e0b' : '#22c55e'}
+                      />
+                      <Table
+                        rowKey="id"
+                        size="small"
+                        pagination={{ pageSize: 10 }}
+                        columns={complianceColumns}
+                        dataSource={complianceRows}
+                        className="compact-table"
+                        locale={{ emptyText: emptyText('暂无可检查的合规项，请先完成招标文件解析和章节大纲生成') }}
+                      />
+                    </div>
+                  ),
+                },
+                {
                   key: 'requirements',
-                  label: '要求条款',
+                  label: '资格与要求',
                   children: (
                     <Table rowKey="id" size="small" pagination={{ pageSize: 10 }} columns={requirementColumns} dataSource={data.requirements} className="compact-table" locale={{ emptyText: emptyText('暂无要求条款') }} />
                   ),
@@ -608,104 +695,20 @@ export function InterpretationPage(): JSX.Element {
                   label: (
                     <span className="inline-flex items-center gap-1">
                       <AlertTriangle size={14} />
-                      风险项
+                      风险检查
                     </span>
                   ),
                   children: <Table rowKey="id" size="small" pagination={{ pageSize: 10 }} columns={riskColumns} dataSource={data.risks} className="compact-table" locale={{ emptyText: emptyText('暂无风险项') }} />,
                 },
                 {
                   key: 'scoring',
-                  label: '评分项',
+                  label: '评分办法',
                   children: <Table rowKey="id" size="small" pagination={{ pageSize: 10 }} columns={scoringColumns} dataSource={data.scoringItems} className="compact-table" locale={{ emptyText: emptyText('暂无评分项') }} />,
                 },
                 {
                   key: 'chapters',
-                  label: '建议章节',
+                  label: '章节建议',
                   children: <Table rowKey="id" size="small" pagination={{ pageSize: 10 }} columns={chapterColumns} dataSource={data.chapterSuggestions} className="compact-table" locale={{ emptyText: emptyText('暂无建议章节') }} />,
-                },
-                {
-                  key: 'bid-outline',
-                  label: (
-                    <span className="inline-flex items-center gap-1">
-                      <FileText size={14} />
-                      标书章节
-                    </span>
-                  ),
-                  children: renderBidOutline(bidOutline),
-                },
-                {
-                  key: 'chunks',
-                  label: '原文分片',
-                  children: <Table rowKey="id" size="small" pagination={{ pageSize: 8 }} columns={chunkColumns} dataSource={data.documentChunks} className="compact-table" locale={{ emptyText: emptyText('暂无原文分片') }} />,
-                },
-                {
-                  key: 'mineru',
-                  label: 'MinerU校验',
-                  children: (
-                    <div className="mineru-check-grid">
-                      <section className="quality-card">
-                        <div className="quality-score">
-                          <Progress type="circle" percent={mineruQuality.quality_score ?? 0} size={92} />
-                          <div>
-                            <h3>解析质量分</h3>
-                            <p>用于快速判断 OCR、分片、页码和结构识别是否需要人工复核。</p>
-                          </div>
-                        </div>
-                        <Descriptions size="small" column={2} bordered>
-                          <Descriptions.Item label="Markdown 字符">{mineruQuality.markdown_chars ?? 0}</Descriptions.Item>
-                          <Descriptions.Item label="内容块">{mineruQuality.content_blocks ?? 0}</Descriptions.Item>
-                          <Descriptions.Item label="页数">{mineruQuality.page_count ?? 0}</Descriptions.Item>
-                          <Descriptions.Item label="平均块长">{mineruQuality.avg_text_block_length ?? 0}</Descriptions.Item>
-                        </Descriptions>
-                      </section>
-                      <section className="quality-card">
-                        <h3>校验清单</h3>
-                        <List
-                          size="small"
-                          dataSource={mineruQuality.checklist || []}
-                          renderItem={item => (
-                            <List.Item>
-                              <span className="inline-flex items-center gap-2 text-sm font-bold text-slate-700">
-                                {item.ok ? <CheckCircle2 size={16} className="text-emerald-500" /> : <XCircle size={16} className="text-rose-500" />}
-                                {item.label}
-                              </span>
-                            </List.Item>
-                          )}
-                        />
-                      </section>
-                      <section className="quality-card">
-                        <h3>内容块类型</h3>
-                        <div className="quality-tags">
-                          {Object.entries(mineruQuality.block_type_counts || {}).map(([name, count]) => (
-                            <Tag key={name} color="blue">{name}: {count}</Tag>
-                          ))}
-                        </div>
-                      </section>
-                      <section className="quality-card">
-                        <h3>解析产物路径</h3>
-                        <div className="artifact-list">
-                          {Object.entries(mineruQuality.artifacts || {}).map(([name, value]) => (
-                            <div key={name}>
-                              <strong>{name}</strong>
-                              <span>{value || '-'}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </section>
-                      <section className="quality-card quality-wide">
-                        <h3>可疑解析片段</h3>
-                        <Table
-                          rowKey={(_, index) => String(index)}
-                          size="small"
-                          pagination={{ pageSize: 6 }}
-                          columns={suspiciousColumns}
-                          dataSource={mineruQuality.suspicious_blocks || []}
-                          className="compact-table"
-                          locale={{ emptyText: emptyText('未发现明显可疑片段') }}
-                        />
-                      </section>
-                    </div>
-                  ),
                 },
               ]}
             />
@@ -714,11 +717,19 @@ export function InterpretationPage(): JSX.Element {
           <section className="panel-card interpretation-note">
             <Typography.Text strong>当前说明</Typography.Text>
             <Typography.Text type="secondary">
-              当前解读已支持原文溯源。业务人员可从要求、风险、评分项和 AI 报告中打开依据，核对页码、章节和 MinerU 原文分片。
+              当前解读已支持原文溯源。业务人员可从资格要求、风险检查、评分办法和解读总览中打开依据；原文分片与 MinerU 校验已收纳到右上角“高级信息”。
             </Typography.Text>
           </section>
         </>
       )}
+      <Drawer
+        title={advancedPanel === 'chunks' ? '原文分片' : 'MinerU 解析校验'}
+        width={advancedPanel === 'mineru' ? 980 : 820}
+        open={Boolean(advancedPanel)}
+        onClose={() => setAdvancedPanel(null)}
+      >
+        {renderAdvancedContent()}
+      </Drawer>
       <Drawer
         title="原文依据"
         width={640}

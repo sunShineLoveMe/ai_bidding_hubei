@@ -58,7 +58,7 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
   const runTokenRef = useRef(0);
   const activeStepRef = useRef(0);
   const [file, setFile] = useState<File | null>(null);
-  const [userId, setUserId] = useState<number | null>(null);
+  const [userId, setUserId] = useState<string | number | null>(null);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [current, setCurrent] = useState(0);
@@ -73,7 +73,7 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
     onReady?.(openFilePicker);
   }, [onReady, openFilePicker]);
 
-  async function getUserId(): Promise<number> {
+  async function getUserId(): Promise<string | number> {
     if (userId) return userId;
     const fingerprintId = localStorage.getItem('enshiBiddingFingerprint') || `enshi-bidding-${Date.now()}`;
     localStorage.setItem('enshiBiddingFingerprint', fingerprintId);

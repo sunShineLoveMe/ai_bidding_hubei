@@ -1,17 +1,10 @@
 import json
-import re
 from typing import Any
 
+from app_config import build_enterprise_context
 from db_supabase import get_project_interpretation, get_supabase_client
+from llm_json_utils import strip_llm_json
 from qwen_client import call_dashscope_api
-
-
-def _strip_llm_json(content: str) -> dict[str, Any]:
-    clean = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-    match = re.search(r"```(?:json)?\s*(.*?)\s*```", clean, flags=re.DOTALL)
-    if match:
-        clean = match.group(1).strip()
-    return json.loads(clean)
 
 
 def _compact_items(items: list[dict[str, Any]], fields: list[str], limit: int) -> list[dict[str, Any]]:
@@ -61,9 +54,12 @@ def _build_prompt(payload: dict[str, Any]) -> str:
         ),
     }
 
+    enterprise_context = build_enterprise_context()
+
     return f"""
-你是资深水利工程招投标顾问，服务对象是湖北恩施清江峡能精密制造企业。
-企业业务包括水轮机叶片、螺母、紧固件、金属结构件、设备配套加工、质量检验、交付保障和现场服务。
+你是资深水利工程招投标顾问，熟悉国内水利工程招投标、资质审查、技术响应、商务响应和评分规则。
+企业画像：
+{enterprise_context}
 
 请基于下方已经结构化的招标文件信息，生成一份给非技术业务人员阅读的深度招标解读报告。
 要求：
@@ -115,7 +111,7 @@ def generate_ai_interpretation_report(project_id: str) -> dict[str, Any]:
     prompt = _build_prompt(payload)
     response = call_dashscope_api([{"role": "user", "content": prompt}], json_mode=True)
     content = response["output"]["choices"][0]["message"]["content"]
-    ai_report = _strip_llm_json(content)
+    ai_report = strip_llm_json(content)
 
     project_meta = analysis.get("project_meta") or {}
     project_meta["ai_report"] = ai_report

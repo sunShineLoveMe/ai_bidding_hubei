@@ -1,5 +1,5 @@
 import { Button, Form, Input, InputNumber, Select, Switch, Tabs, Tag, message } from 'antd';
-import { Bot, Database, FileText, HardDrive, KeyRound, RotateCcw, Save, ServerCog } from 'lucide-react';
+import { Bot, Building2, Database, FileText, HardDrive, KeyRound, RotateCcw, Save, ServerCog } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { apiClient } from '../../api/client';
 import { MetricCards } from '../../components/common/MetricCards';
@@ -25,6 +25,13 @@ interface RuntimeSettings {
   auto_backup_enabled: boolean;
   backup_frequency: string;
   backup_dir: string;
+  enterprise_name: string;
+  enterprise_region: string;
+  enterprise_industry: string;
+  enterprise_business_scope: string;
+  enterprise_advantages: string;
+  enterprise_target_customers: string;
+  enterprise_response_style: string;
 }
 
 export function SettingsPage(): JSX.Element {
@@ -75,7 +82,7 @@ export function SettingsPage(): JSX.Element {
     <div className="module-shell">
       <ModuleHeader
         title="系统设置"
-        description="配置模型服务、文件存储、向量库、Word 模板、OnlyOffice 地址和本地数据备份策略。"
+        description="配置模型服务、企业画像、文件存储、向量库、Word 模板、OnlyOffice 地址和本地数据备份策略。"
         actions={
           <>
             <Button icon={<RotateCcw size={16} />} onClick={restoreDefaults} disabled={loading}>恢复默认</Button>
@@ -132,6 +139,46 @@ export function SettingsPage(): JSX.Element {
                     <Tag color="purple">DASHSCOPE_MODEL</Tag>
                     <Tag color="cyan">DASHSCOPE_KNOWLEDGE_MODEL</Tag>
                     <Tag color="green">DASHSCOPE_EMBEDDING_MODEL</Tag>
+                  </div>
+                </div>
+              ),
+            },
+            {
+              key: 'enterprise',
+              label: '企业画像',
+              children: (
+                <div className="settings-grid">
+                  <Form form={form} layout="vertical" size="middle" className="compact-form" disabled={loading}>
+                    <Form.Item label="企业名称" name="enterprise_name" rules={[{ required: true, message: '请输入企业名称或脱敏名称' }]}>
+                      <Input placeholder="例如：某水利工程建设企业" />
+                    </Form.Item>
+                    <Form.Item label="所在区域" name="enterprise_region">
+                      <Input placeholder="例如：华中地区" />
+                    </Form.Item>
+                    <Form.Item label="行业定位" name="enterprise_industry">
+                      <Input placeholder="例如：水利水电工程建设与工程配套服务" />
+                    </Form.Item>
+                    <Form.Item label="业务范围" name="enterprise_business_scope">
+                      <Input.TextArea rows={3} placeholder="例如：水利工程施工、机电设备配套、金属结构件、质量检验、现场服务" />
+                    </Form.Item>
+                    <Form.Item label="核心能力" name="enterprise_advantages">
+                      <Input.TextArea rows={3} placeholder="例如：项目响应、质量安全管理、资料编制、供应链协同和现场履约能力" />
+                    </Form.Item>
+                    <Form.Item label="目标客户" name="enterprise_target_customers">
+                      <Input.TextArea rows={2} placeholder="例如：建设单位、总承包单位、监理单位和设备供应链配套单位" />
+                    </Form.Item>
+                    <Form.Item label="AI 写作约束" name="enterprise_response_style">
+                      <Input.TextArea rows={3} placeholder="例如：专业、严谨、合规；不得编造证书编号、人员姓名、合同金额和未提供的企业业绩" />
+                    </Form.Item>
+                  </Form>
+                  <div className="settings-note">
+                    <Building2 size={22} />
+                    <strong>企业画像会参与 AI 生成</strong>
+                    <p>招标解读、章节大纲、章节正文和旧版标书流程都会读取这里的企业画像，避免代码里写死某一家企业信息。</p>
+                    <Tag color="blue">招标解读</Tag>
+                    <Tag color="green">章节大纲</Tag>
+                    <Tag color="purple">正文生成</Tag>
+                    <Tag color="orange">开源脱敏</Tag>
                   </div>
                 </div>
               ),

@@ -98,6 +98,58 @@ def get_bid_file(file_id: str) -> dict[str, Any] | None:
     return response.data[0] if response.data else None
 
 
+def identify_app_user(fingerprint_id: str) -> tuple[str, bool]:
+    """Create or return a lightweight local-app user in Supabase."""
+    client = get_supabase_client()
+    response = (
+        client.table("app_users")
+        .select("*")
+        .eq("fingerprint_id", fingerprint_id)
+        .limit(1)
+        .execute()
+    )
+    if response.data:
+        return response.data[0]["id"], False
+
+    created = client.table("app_users").insert({"fingerprint_id": fingerprint_id}).execute()
+    if not created.data:
+        raise RuntimeError("Supabase app_users insert returned no data")
+    return created.data[0]["id"], True
+
+
+def save_onlyoffice_document(
+    *,
+    document_key: str,
+    project_id: str,
+    title: str,
+    file_path: str,
+    download_url: str,
+) -> dict[str, Any]:
+    payload = {
+        "document_key": document_key,
+        "project_id": project_id,
+        "title": title,
+        "file_path": file_path,
+        "download_url": download_url,
+    }
+    response = get_supabase_client().table("onlyoffice_documents").upsert(payload, on_conflict="document_key").execute()
+    if not response.data:
+        raise RuntimeError("Supabase onlyoffice_documents upsert returned no data")
+    return response.data[0]
+
+
+def get_onlyoffice_document(document_key: str) -> dict[str, Any] | None:
+    response = (
+        get_supabase_client()
+        .table("onlyoffice_documents")
+        .select("*")
+        .eq("document_key", document_key)
+        .limit(1)
+        .execute()
+    )
+    return response.data[0] if response.data else None
+
+
 def replace_project_rows(table: str, project_id: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     client = get_supabase_client()
     client.table(table).delete().eq("project_id", project_id).execute()

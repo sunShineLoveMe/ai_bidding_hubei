@@ -12,8 +12,10 @@
 - 招标文件结构化解读：项目概况、资格要求、商务要求、技术要求、评分项、风险项
 - AI 深度解读报告生成
 - 标书章节大纲生成，支持多级章节树
+- 合规覆盖检查：要求条款、评分项、风险项与标书章节的覆盖度核查
 - 标书编制工作台：章节树、目录模式、章节正文生成、章节维护
 - 企业知识库 RAG 检索问答
+- 系统设置：模型参数、企业画像、文档服务、存储路径和备份策略
 - 水利行业种子知识库采集与入库脚本
 - Word 文档生成与下载
 - ONLYOFFICE 终稿编辑集成预留
@@ -93,9 +95,30 @@ flowchart TD
     F --> G[项目概况/要求/评分/风险落库]
     G --> H[AI 深度解读]
     H --> I[生成标书章节大纲]
-    I --> J[章节正文生成]
-    J --> K[Word 导出/在线编辑]
+    I --> J[合规覆盖检查]
+    J --> K[章节正文生成]
+    K --> L[Word 导出/在线编辑]
 ```
+
+## 合规检查
+
+招标项目页提供第一版合规覆盖检查，用于在生成章节大纲后快速判断投标文件是否承接了关键条款。
+
+当前检查范围：
+
+| 检查对象 | 核查逻辑 | 输出 |
+| --- | --- | --- |
+| 要求条款 | 将 `bid_requirements` 与 `bid_sections.mapped_requirements`、章节标题、章节正文做匹配 | 已覆盖 / 未覆盖 |
+| 评分项 | 将 `bid_scoring_items` 与 `bid_sections.mapped_scoring_items`、章节内容做匹配 | 已覆盖 / 待补强 |
+| 风险项 | 将 `bid_risks` 与 `bid_sections.mapped_risks`、章节内容做匹配 | 已覆盖 / 未覆盖 |
+
+后端已提供统一接口：
+
+```text
+GET /api/bidding/interpretations/{project_id}/compliance-check
+```
+
+返回内容包括总检查项、覆盖项、待补强项、未覆盖项、高风险未覆盖数量、明细列表和处理建议。该功能目前是轻量规则版，适合业务人员优先发现“未覆盖的资格要求、否决风险和高分评分项”。后续可升级为 LLM 复核版，进一步检查正文质量、证据材料完整性和格式合规性。
 
 ## RAG 知识库架构
 
@@ -356,12 +379,42 @@ APP_HOST=127.0.0.1:3012
 APP_PUBLIC_BASE_URL=http://127.0.0.1:3012
 MAX_UPLOAD_MB=200
 
+# 企业画像，可选；也可在系统设置页面维护
+ENTERPRISE_NAME=某水利工程建设企业
+ENTERPRISE_REGION=华中地区
+ENTERPRISE_INDUSTRY=水利水电工程建设与工程配套服务
+ENTERPRISE_BUSINESS_SCOPE=水利工程施工、金属结构件、机电设备配套、质量检验、交付保障和现场服务
+ENTERPRISE_ADVANTAGES=水利工程项目响应、质量安全管理、资料编制、供应链协同和现场履约能力
+ENTERPRISE_TARGET_CUSTOMERS=水利工程建设单位、总承包单位、监理单位和设备供应链配套单位
+ENTERPRISE_RESPONSE_STYLE=专业、严谨、合规、可落地；不得编造证书编号、人员姓名、合同金额、具体日期和未提供的企业业绩
+
 # ONLYOFFICE，可选
 ONLYOFFICE_DOCS_API_URL=http://127.0.0.1:8080/web-apps/apps/api/documents/api.js
 ONLYOFFICE_JWT_SECRET=replace_with_a_strong_secret
 ```
 
-模型、Embedding、超时时间、OnlyOffice 地址、存储目录等非敏感配置也可以在「系统设置」页面调整。页面保存后会写入本地 `config/runtime_settings.json`，后端在下一次模型请求时读取该配置；该文件已加入 `.gitignore`，开源时只保留 `config/runtime_settings.example.json`。API Key、Supabase service role 等敏感项仍必须通过 `.env` 配置，不会保存在前端。
+模型、Embedding、超时时间、OnlyOffice 地址、存储目录和企业画像等非敏感配置也可以在「系统设置」页面调整。页面保存后会写入本地 `config/runtime_settings.json`，后端在下一次模型请求时读取该配置；该文件已加入 `.gitignore`，开源时只保留 `config/runtime_settings.example.json`。API Key、Supabase service role 等敏感项仍必须通过 `.env` 配置，不会保存在前端。
+
+企业画像会参与招标解读、章节大纲、章节正文和旧版标书流程的 Prompt 组装。开源或更换企业使用时，建议先在系统设置中维护企业名称、行业定位、业务范围、核心能力、目标客户和 AI 写作约束，避免生成内容带有固定企业信息。
+
+### 3.1 Supabase 补充表
+
+当前上传链路已优先创建 Supabase 项目和文件记录，并返回 `projectId` 供前端自动执行「解析 → AI 解读 → 章节大纲」流程。轻量用户识别和 OnlyOffice 文档映射也已迁移到 Supabase，SQLite 仅作为兼容回退。
+
+请在 Supabase SQL Editor 执行：
+
+```sql
+-- sql/20260429_app_users_and_onlyoffice_documents.sql
+```
+
+该脚本会创建：
+
+| 表 | 用途 |
+| --- | --- |
+| `app_users` | 保存浏览器匿名指纹与单机版操作人员 ID，用于替代早期 SQLite `users` 表 |
+| `onlyoffice_documents` | 保存 OnlyOffice 文档 key、项目 ID、文件路径和回调下载地址，用于保存回调定位目标文件 |
+
+如果该脚本尚未执行，系统会尽量回退 SQLite；但推荐新部署直接执行 SQL，确保主链路统一到 Supabase。
 
 ### 4. 启动后端
 
@@ -479,7 +532,8 @@ docker run -d \
 ## 路线图
 
 - [ ] 提供完整 `.env.example`
-- [ ] 提供 Supabase 初始化 SQL / migration
+- [x] 提供 Supabase 补充 SQL：`app_users`、`onlyoffice_documents`
+- [ ] 整理完整 Supabase 初始化 SQL / migration
 - [ ] 增加 OpenAPI 文档
 - [ ] 增加 Docker Compose 一键启动
 - [ ] 完善企业知识库批量导入 UI

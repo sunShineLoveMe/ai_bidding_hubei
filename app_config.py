@@ -26,6 +26,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "auto_backup_enabled": True,
     "backup_frequency": "daily",
     "backup_dir": "backups/",
+    "enterprise_name": "某水利工程建设企业",
+    "enterprise_region": "华中地区",
+    "enterprise_industry": "水利水电工程建设与工程配套服务",
+    "enterprise_business_scope": "水利工程施工、金属结构件、机电设备配套、质量检验、交付保障和现场服务",
+    "enterprise_advantages": "具备水利工程项目响应、质量安全管理、资料编制、供应链协同和现场履约能力",
+    "enterprise_target_customers": "水利工程建设单位、总承包单位、监理单位和设备供应链配套单位",
+    "enterprise_response_style": "专业、严谨、合规、可落地；不得编造证书编号、人员姓名、合同金额、具体日期和未提供的企业业绩",
 }
 
 ENV_MAPPING = {
@@ -44,6 +51,13 @@ ENV_MAPPING = {
     "backend_public_url": "APP_PUBLIC_BASE_URL",
     "word_template": "WORD_TEMPLATE_PATH",
     "backup_dir": "BACKUP_DIR",
+    "enterprise_name": "ENTERPRISE_NAME",
+    "enterprise_region": "ENTERPRISE_REGION",
+    "enterprise_industry": "ENTERPRISE_INDUSTRY",
+    "enterprise_business_scope": "ENTERPRISE_BUSINESS_SCOPE",
+    "enterprise_advantages": "ENTERPRISE_ADVANTAGES",
+    "enterprise_target_customers": "ENTERPRISE_TARGET_CUSTOMERS",
+    "enterprise_response_style": "ENTERPRISE_RESPONSE_STYLE",
 }
 
 INT_KEYS = {
@@ -105,3 +119,30 @@ def save_runtime_settings(payload: dict[str, Any]) -> dict[str, Any]:
 
 def get_setting(key: str, default: Any = None) -> Any:
     return load_runtime_settings().get(key, default)
+
+
+def get_enterprise_profile() -> dict[str, str]:
+    settings = load_runtime_settings()
+    keys = [
+        "enterprise_name",
+        "enterprise_region",
+        "enterprise_industry",
+        "enterprise_business_scope",
+        "enterprise_advantages",
+        "enterprise_target_customers",
+        "enterprise_response_style",
+    ]
+    return {key: str(settings.get(key) or DEFAULT_SETTINGS[key]).strip() for key in keys}
+
+
+def build_enterprise_context() -> str:
+    profile = get_enterprise_profile()
+    return (
+        f"服务对象：{profile['enterprise_name']}。\n"
+        f"所属区域：{profile['enterprise_region']}。\n"
+        f"行业定位：{profile['enterprise_industry']}。\n"
+        f"业务范围：{profile['enterprise_business_scope']}。\n"
+        f"核心能力：{profile['enterprise_advantages']}。\n"
+        f"目标客户：{profile['enterprise_target_customers']}。\n"
+        f"写作约束：{profile['enterprise_response_style']}。"
+    )

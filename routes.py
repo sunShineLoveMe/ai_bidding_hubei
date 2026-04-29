@@ -19,12 +19,13 @@ from md_to_word import convert_md_to_word
 from ai_chapter_planner import generate_bid_outline, stream_bid_outline
 from ai_section_writer import stream_bid_section
 from ai_interpreter import generate_ai_interpretation_report
-from db_supabase import delete_bid_section, get_bid_file, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, sync_uploaded_tender_to_supabase, update_bid_section_content, upsert_bid_section
+from compliance_checker import build_compliance_report
+from db_supabase import delete_bid_section, get_bid_file, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_section_content, upsert_bid_section
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import shutil
 from datetime import timedelta
-from app_config import DEFAULT_SETTINGS, load_runtime_settings, save_runtime_settings
+from app_config import DEFAULT_SETTINGS, build_enterprise_context, load_runtime_settings, save_runtime_settings
 
 # 操作向量数据库的函数
 from document_parser import ingest_artifacts as ingest_mineru_artifacts_to_supabase, import_mineru_result_zip, parse_and_index_tender_file, read_parse_status, retry_mineru_result_download, write_parse_status
@@ -225,6 +226,18 @@ def build_project_bid_markdown(project_id: str, focus_section_id: str | None = N
 
 
 def save_onlyoffice_document_mapping(*, document_key: str, project_id: str, title: str, file_path: str, download_url: str) -> None:
+    try:
+        save_onlyoffice_document(
+            document_key=document_key,
+            project_id=project_id,
+            title=title,
+            file_path=file_path,
+            download_url=download_url,
+        )
+        return
+    except Exception:
+        logging.exception("Supabase onlyoffice_documents 写入失败，回退 SQLite: %s", document_key)
+
     conn = get_db()
     try:
         cur = conn.cursor()
@@ -245,23 +258,23 @@ def save_onlyoffice_document_mapping(*, document_key: str, project_id: str, titl
     finally:
         conn.close()
 
-def sync_and_parse_tender_in_background(file_path, original_filename, parse_id):
-    supabase_file_id = None
-    supabase_sync = None
+def sync_and_parse_tender_in_background(file_path, original_filename, parse_id, supabase_sync=None):
+    supabase_file_id = supabase_sync.get('file', {}).get('id') if supabase_sync else None
     try:
-        write_parse_status(parse_id, {
-            "parse_status": "syncing_supabase",
-            "parser": "mineru",
-            "source_file": file_path,
-            "file_name": original_filename,
-        })
-        supabase_sync = sync_uploaded_tender_to_supabase(file_path, original_filename)
-        supabase_file_id = supabase_sync.get('file', {}).get('id') if supabase_sync else None
-        write_parse_status(parse_id, {
-            "parse_status": "supabase_synced",
-            "project_id": supabase_sync.get('project', {}).get('id') if supabase_sync else None,
-            "supabase_file_id": supabase_file_id,
-        })
+        if not supabase_sync:
+            write_parse_status(parse_id, {
+                "parse_status": "syncing_supabase",
+                "parser": "mineru",
+                "source_file": file_path,
+                "file_name": original_filename,
+            })
+            supabase_sync = sync_uploaded_tender_to_supabase(file_path, original_filename)
+            supabase_file_id = supabase_sync.get('file', {}).get('id') if supabase_sync else None
+            write_parse_status(parse_id, {
+                "parse_status": "supabase_synced",
+                "project_id": supabase_sync.get('project', {}).get('id') if supabase_sync else None,
+                "supabase_file_id": supabase_file_id,
+            })
     except Exception as e:
         logging.exception("Supabase 招标文件后台同步失败，继续走本地 MinerU 解析: %s", file_path)
         write_parse_status(parse_id, {
@@ -307,44 +320,36 @@ def upload_bidding():
             "file_name": original_filename,
         })
 
-        # 生成 document_key 并写入 DB
-        document_key = str(uuid.uuid4())
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO bidding (user_id, original_filename, storage_path, document_key, status)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (user_id, original_filename, file_path, document_key, '已上传'))
-        bidding_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
+        supabase_sync = sync_uploaded_tender_to_supabase(file_path, original_filename)
+        project_id = supabase_sync.get('project', {}).get('id')
+        supabase_file_id = supabase_sync.get('file', {}).get('id')
+        if not project_id or not supabase_file_id:
+            return jsonify({'error': 'Supabase 项目或文件记录创建失败，请检查数据库配置。'}), 500
 
-        # 在内存临时存储中记录初始条目，analysisData 和 directoryStructure 先为空
-        try:
-            with _temp_store_lock:
-                temp_analysis_store[bidding_id] = {
-                    'biddingId': bidding_id,
-                    'analysisData': None,
-                    'directoryStructure': None,
-                }
-        except Exception:
-            logging.exception('初始化 temp_analysis_store 失败')
+        write_parse_status(parse_id, {
+            "parse_status": "supabase_synced",
+            "parser": "mineru",
+            "source_file": file_path,
+            "file_name": original_filename,
+            "project_id": project_id,
+            "supabase_file_id": supabase_file_id,
+        })
 
-        # Supabase 同步和 MinerU 解析都放入后台，避免上传接口被外部网络超时拖住。
+        # 项目和文件记录已同步到 Supabase；后台只负责 MinerU/OCR 解析和结构化入库。
         threading.Thread(
             target=sync_and_parse_tender_in_background,
-            args=(file_path, original_filename, parse_id),
+            args=(file_path, original_filename, parse_id, supabase_sync),
             daemon=True,
         ).start()
 
-        # 返回 minimal 信息（前端随后调用 /generate-bid-document）
         return jsonify({
-            'message': '招标文件已上传，正在后台同步 Supabase 并解析。',
-            'biddingId': bidding_id,
+            'message': '招标文件已上传，正在后台解析并生成结构化数据。',
+            'biddingId': None,
             'originalFilename': original_filename,
-            'projectId': None,
+            'projectId': project_id,
             'fileId': parse_id,
-            'supabaseSynced': False,
+            'supabaseFileId': supabase_file_id,
+            'supabaseSynced': True,
             'supabaseSyncError': None
         }), 201
 
@@ -526,6 +531,18 @@ def generate_interpretation_bid_outline(project_id):
     except Exception as e:
         logging.exception("生成标书章节大纲失败: %s", project_id)
         return jsonify({'error': f'生成标书章节大纲失败: {str(e)}'}), 500
+
+@bp.route('/interpretations/<project_id>/compliance-check', methods=['GET'])
+def get_interpretation_compliance_check(project_id):
+    """基于结构化条款和标书章节输出合规覆盖检查。"""
+    try:
+        uuid.UUID(project_id)
+        return jsonify(build_compliance_report(project_id))
+    except ValueError:
+        return jsonify({'error': 'project_id 不是合法 UUID。'}), 400
+    except Exception as e:
+        logging.exception("生成合规覆盖检查失败: %s", project_id)
+        return jsonify({'error': f'生成合规覆盖检查失败: {str(e)}'}), 500
 
 @bp.route('/interpretations/<project_id>/bid-outline/stream', methods=['GET'])
 def stream_interpretation_bid_outline(project_id):
@@ -769,13 +786,18 @@ def save_callback():
                 logging.warning(f'No download URL provided for key {document_key}')
                 return jsonify({'error': 0})
 
-            conn = get_db()
+            doc_row = None
             try:
-                cursor = conn.cursor()
-                cursor.execute('SELECT * FROM onlyoffice_documents WHERE document_key = ?', (document_key,))
-                doc_row = cursor.fetchone()
-            finally:
-                conn.close()
+                doc_row = get_onlyoffice_document(document_key)
+            except Exception:
+                logging.exception("Supabase onlyoffice_documents 查询失败，回退 SQLite: %s", document_key)
+                conn = get_db()
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute('SELECT * FROM onlyoffice_documents WHERE document_key = ?', (document_key,))
+                    doc_row = cursor.fetchone()
+                finally:
+                    conn.close()
 
             if doc_row:
                 target_path = doc_row['file_path']
@@ -842,8 +864,12 @@ def pre_analysis_bid():
         # 读取文件内容
         bid_content = read_tender_file(bidding_id)
 
+        enterprise_context = build_enterprise_context()
         pre_analysis_prompt =  f'''
-        你是服务于湖北恩施清江峡能精密制造企业的资深招投标文件分析师。该企业长期承接三峡集团及其水利工程供应链相关配套业务，产品和服务范围包括水轮机叶片、螺母、紧固件、金属结构件、设备配套加工、质量检验、交付保障与现场配合。请根据以下招标书内容，提炼出完整信息，并严格按照下面的JSON格式返回你的分析结果，不要有任何多余的解释，只返回以下json内容。
+        你是资深招投标文件分析师，熟悉水利工程、设备配套、质量、安全、交付和商务响应要求。
+        企业画像：
+        {enterprise_context}
+        请根据以下招标书内容，提炼出完整信息，并严格按照下面的JSON格式返回你的分析结果，不要有任何多余的解释，只返回以下json内容。
         {{
             "bidding_requirements":"...",
             "bidding_summary":"...",
@@ -917,8 +943,12 @@ def chapter_analysis_bid():
             return jsonify({'error': '招标书不存在'}), 404
         # 读取文件内容
         bid_content = read_tender_file(bidding_id)
+        enterprise_context = build_enterprise_context()
         post_analysis_prompt = f'''
-        你是服务于湖北恩施清江峡能精密制造企业的资深招投标文件结构分析师，熟悉三峡集团及水利工程供应链投标文件的技术、商务、资质、质量、安全、交付和售后响应要求。请根据以下招标书内容，输出投标书其他响应文件的格式章节内容（除封面章节），并严格按照下面的JSON格式返回你的分析结果，不要有任何多余的解释。
+        你是资深招投标文件结构分析师，熟悉水利工程投标文件的技术、商务、资质、质量、安全、交付和售后响应要求。
+        企业画像：
+        {enterprise_context}
+        请根据以下招标书内容，输出投标书其他响应文件的格式章节内容（除封面章节），并严格按照下面的JSON格式返回你的分析结果，不要有任何多余的解释。
         {{
             "chapter_format":"..."
         }}
@@ -973,13 +1003,16 @@ def chapter_design():
     bidding_meta = analysis_data.get('bidding_meta', '')
 
     # 构建提示词
+    enterprise_context = build_enterprise_context()
     chapter_design_prompt = (
-        f"你是服务于湖北恩施清江峡能精密制造企业的资深投标文件目录结构设计专家，熟悉三峡集团及水利工程配套产品供应链投标规范。请根据以下信息，整理出最终的标书章节结构：\n\n"
+        f"你是资深投标文件目录结构设计专家，熟悉水利工程施工、设备配套和供应链项目投标规范。\n"
+        f"企业画像：\n{enterprise_context}\n\n"
+        f"请根据以下信息，整理出最终的标书章节结构：\n\n"
         f"必须包含的文件和材料：{bidding_requirements}\n"
         f"招标书内容总结：{bidding_summary}\n"
         f"招标书具体要求和评分标准：{bidding_meta}\n"
         f"投标书章节大纲：{directory_structure}\n\n"
-        "基于以上招标文件要求、企业水电装备精密制造经验和三峡集团供应链响应习惯，请补充章节的子节目录，确保投标文件完整、严谨、可执行且符合要求。\n"
+        "基于以上招标文件要求和企业画像，请补充章节的子节目录，确保投标文件完整、严谨、可执行且符合要求。\n"
         "要求：\n"
         "1、输出的投标书章节结构必须遵循目录结构，并包含所有必要的子章节。\n"
         "2、章节大纲中某一章如果是xxx表、xxx函、xxx清单、封面等，则该章下不需要再细分子节，返回原本的章节内容。\n"

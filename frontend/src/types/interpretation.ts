@@ -182,6 +182,33 @@ export interface ChapterSuggestion {
   priority?: string | null;
 }
 
+export interface ComplianceRow {
+  id: string;
+  category: '要求条款' | '评分项' | '风险项' | string;
+  importance: string;
+  content: string;
+  status: 'covered' | 'partial' | 'missing';
+  matchedChapter?: string | null;
+  matchedChapterId?: string | null;
+  sourcePage?: number | null;
+  sourceText?: string | null;
+}
+
+export interface ComplianceReport {
+  projectId: string;
+  projectName?: string | null;
+  summary: {
+    total: number;
+    covered: number;
+    partial: number;
+    missing: number;
+    percent: number;
+    highRiskMissing?: number;
+  };
+  rows: ComplianceRow[];
+  recommendations: string[];
+}
+
 export interface DocumentChunk {
   id: string;
   chunk_index: number;

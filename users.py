@@ -1,6 +1,8 @@
 from flask import Blueprint, request, jsonify
 import sqlite3
 import json
+import logging
+from db_supabase import identify_app_user
 
 # 创建蓝图
 bp = Blueprint('users', __name__)
@@ -21,6 +23,12 @@ def identify_user():
         return jsonify({'error': '未获取到当前操作人员身份，请刷新页面后重试。'}), 400
     
     try:
+        user_id, is_new = identify_app_user(fingerprint_id)
+        return jsonify({'userId': user_id, 'isNew': is_new, 'storage': 'supabase'})
+    except Exception:
+        logging.exception("Supabase 操作人员身份识别失败，回退 SQLite")
+
+    try:
         conn = get_db()
         cursor = conn.cursor()
         
@@ -31,12 +39,12 @@ def identify_user():
         if user:
             # 用户已存在
             conn.close()
-            return jsonify({'userId': user['id'], 'isNew': False})
+            return jsonify({'userId': user['id'], 'isNew': False, 'storage': 'sqlite_fallback'})
         cursor.execute('INSERT INTO users (fingerprint_id) VALUES (?)', (fingerprint_id,))
         conn.commit()
         user_id = cursor.lastrowid
         conn.close()
-        return jsonify({'userId': user_id, 'isNew': True})
+        return jsonify({'userId': user_id, 'isNew': True, 'storage': 'sqlite_fallback'})
             
     except Exception as e:
         print(f'[ERROR] 操作人员身份识别失败: {str(e)}')

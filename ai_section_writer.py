@@ -1,6 +1,7 @@
 import re
 from typing import Any, Iterator
 
+from app_config import build_enterprise_context
 from db_supabase import get_project_interpretation
 from qwen_client import call_dashscope_api, stream_dashscope_api
 
@@ -51,8 +52,12 @@ def build_section_prompt(project_id: str, chapter: dict[str, Any]) -> str:
         "writing_notes": chapter.get("writing_notes") or [],
     }
 
+    enterprise_context = build_enterprise_context()
+
     return f"""
-你是湖北恩施清江峡能精密制造企业的资深投标文件撰写专家，熟悉水利水电工程总承包、设备配套、质量管理和招投标文件格式要求。
+你是资深投标文件撰写专家，熟悉水利水电工程总承包、设备配套、质量管理和招投标文件格式要求。
+企业画像：
+{enterprise_context}
 
 请为当前投标章节生成可直接放入标书的正文草稿。
 

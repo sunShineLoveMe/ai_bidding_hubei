@@ -7,7 +7,7 @@ from unidecode import unidecode
 from werkzeug.utils import secure_filename
 import logging
 import json
-from app_config import get_setting
+from app_config import build_enterprise_context, get_setting
 
 # 通义千问API配置
 DASHSCOPE_API_KEY = os.getenv('DASHSCOPE_API_KEY')
@@ -108,8 +108,12 @@ def stream_dashscope_api(messages, model=None):
 
 def generate_bid_section(section_title, section_content, tender_content):
     """按小节生成投标文件内容"""
+    enterprise_context = build_enterprise_context()
     prompt = f'''
-    你是湖北恩施清江峡能精密制造企业的专业投标书撰写专家，熟悉三峡集团及水利工程供应链项目的投标要求。企业业务聚焦水轮机叶片、螺母、紧固件、金属结构件、设备配套加工、质量检验、交付保障和现场服务。请结合企业制造能力、质量管理、内网资料库和招标文件要求，直接输出专业、严谨、可落地的正文内容。
+    你是专业投标书撰写专家，熟悉水利工程、设备配套、质量管理和供应链项目投标要求。
+    企业画像：
+    {enterprise_context}
+    请结合企业能力、质量管理、内网资料库和招标文件要求，直接输出专业、严谨、可落地的正文内容。
     请根据以下小节标题、小节描述并参考招标书相关内容，生成投标书某一小节的完整内容。如果小节需要表格描述，请用Markdown格式生成表格。
     需要填写的表格内容请参考招标书原文中进行填写。
     仅输出小节正文内容，禁止包含任何自然语言解释或额外文。字数要求1000-1500字。

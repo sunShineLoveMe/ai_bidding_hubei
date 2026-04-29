@@ -1,21 +1,13 @@
 import json
 import logging
-import re
 import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
 from db_supabase import get_project_interpretation, get_supabase_client, replace_bid_sections_from_outline
+from llm_json_utils import strip_llm_json
 from qwen_client import call_dashscope_api
-
-
-def _strip_llm_json(content: str) -> dict[str, Any]:
-    clean = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-    match = re.search(r"```(?:json)?\s*(.*?)\s*```", clean, flags=re.DOTALL)
-    if match:
-        clean = match.group(1).strip()
-    return json.loads(clean)
 
 
 def _compact_items(items: list[dict[str, Any]], fields: list[str], limit: int) -> list[dict[str, Any]]:
@@ -318,7 +310,7 @@ def _generate_outline_from_ai_or_rule(payload: dict[str, Any]) -> dict[str, Any]
         prompt = _build_prompt(payload)
         response = call_dashscope_api([{"role": "user", "content": prompt}], json_mode=True)
         content = response["output"]["choices"][0]["message"]["content"]
-        ai_outline = _strip_llm_json(content)
+        ai_outline = strip_llm_json(content)
     except Exception as exc:
         ai_outline = fallback_outline
         ai_outline["version"] = "rule-v1-fallback"

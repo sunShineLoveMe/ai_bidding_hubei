@@ -9,7 +9,7 @@ import { KnowledgeSearchDrawer } from '../../pages/KnowledgeBase/KnowledgeSearch
 
 const navItems = [
   { path: '/', label: '主页', icon: Home },
-  { path: '/interpretation', label: '招标解读', icon: FileSearch },
+  { path: '/interpretation', label: '招标项目', icon: FileSearch },
   { path: '/knowledge', label: '企业知识库', icon: BookOpen },
   { path: '/qualification', label: '企业资信库', icon: ShieldCheck },
   { path: '/products', label: '企业产品库', icon: Box },
@@ -78,7 +78,7 @@ export function AppLayout({ children }: PropsWithChildren): JSX.Element {
       />
 
       <footer className="fixed bottom-0 left-0 right-0 z-30 flex h-12 items-center justify-between border-t border-slate-200 bg-white px-7 text-sm font-semibold text-slate-500">
-        <span>企业单机部署版 · 招标解读 · 知识库问答 · 标书编制</span>
+        <span>企业单机部署版 · 招标项目 · 知识库问答 · 标书编制</span>
         <span>数据本地可控 · 支持内网部署 · 面向水利招投标场景</span>
       </footer>
     </div>

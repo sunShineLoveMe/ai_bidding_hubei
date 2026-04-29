@@ -1,9 +1,10 @@
 export interface UploadResponse {
   message: string;
-  biddingId: number;
+  biddingId?: number | null;
   originalFilename: string;
   projectId?: string | null;
   fileId?: string | null;
+  supabaseFileId?: string | null;
   supabaseSynced?: boolean;
   supabaseSyncError?: string | null;
 }

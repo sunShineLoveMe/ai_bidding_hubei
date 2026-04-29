@@ -1,13 +1,13 @@
 import { apiClient } from './client';
 import type { GenerateBidDocumentResponse, OnlyOfficeConfigResponse, ParseStatusResponse, UploadResponse } from '../types/bid';
-import type { BidSection, InterpretationResponse } from '../types/interpretation';
+import type { BidSection, ComplianceReport, InterpretationResponse } from '../types/interpretation';
 
-export async function identifyUser(fingerprintId: string): Promise<{ userId: number; isNew: boolean }> {
+export async function identifyUser(fingerprintId: string): Promise<{ userId: string | number; isNew: boolean; storage?: string }> {
   const response = await apiClient.post('/api/users/identify', { fingerprintId });
   return response.data;
 }
 
-export async function uploadTenderFile(file: File, userId: number): Promise<UploadResponse> {
+export async function uploadTenderFile(file: File, userId: string | number): Promise<UploadResponse> {
   const form = new FormData();
   form.append('file', file);
   form.append('userId', String(userId));
@@ -27,6 +27,13 @@ export async function getLatestInterpretation(): Promise<InterpretationResponse>
 
 export async function getInterpretation(projectId: string): Promise<InterpretationResponse> {
   const response = await apiClient.get(`/api/bidding/interpretations/${projectId}`);
+  return response.data;
+}
+
+export async function getComplianceCheck(projectId: string): Promise<ComplianceReport> {
+  const response = await apiClient.get(`/api/bidding/interpretations/${projectId}/compliance-check`, {
+    skipGlobalLoading: true,
+  });
   return response.data;
 }
 
