@@ -176,6 +176,154 @@ def _section_markdown_heading(level: int, title: str) -> str:
     return f'{"#" * depth} {title}\n\n'
 
 
+def _clean_section_title(title: str, order: str | int | None = None) -> str:
+    clean_title = (title or "未命名章节").strip()
+    if not order:
+        return clean_title
+    order_text = str(order).strip()
+    return re.sub(rf"^{re.escape(order_text)}\.?\s*", "", clean_title).strip() or clean_title
+
+
+def _section_display_title(section: dict) -> str:
+    order = section.get("order")
+    title = _clean_section_title(section.get("title") or "未命名章节", order)
+    if not order:
+        return title
+    order_text = str(order).strip()
+    prefix = f"{order_text} " if "." in order_text else f"{order_text}. "
+    return f"{prefix}{title}"
+
+
+def _asset_text(asset: dict) -> str:
+    parts = [
+        asset.get("title"),
+        asset.get("description"),
+        asset.get("category"),
+        asset.get("asset_type"),
+        asset.get("searchable_text"),
+    ]
+    parts.extend(asset.get("tags") or [])
+    parts.extend(asset.get("applicable_sections") or [])
+    return " ".join(str(item) for item in parts if item).lower()
+
+
+def _section_text(section: dict) -> str:
+    metadata = section.get("metadata") or {}
+    plan = metadata.get("writing_plan") or {}
+    parts = [
+        _section_display_title(section),
+        section.get("title"),
+        section.get("content"),
+        section.get("purpose"),
+        plan.get("chapter_type"),
+        plan.get("importance"),
+    ]
+    for key in ("response_points", "required_materials", "evidence_needs", "mapped_requirements"):
+        value = section.get(key) or plan.get(key)
+        if isinstance(value, list):
+            parts.extend(value)
+        elif value:
+            parts.append(value)
+    return " ".join(str(item) for item in parts if item).lower()
+
+
+def _section_needs_image(section: dict) -> bool:
+    metadata = section.get("metadata") or {}
+    plan = metadata.get("writing_plan") or {}
+    if plan.get("needs_image"):
+        return True
+    text = _section_text(section)
+    keywords = [
+        "资质", "证书", "营业执照", "许可", "业绩", "产品", "设备", "材料", "施工",
+        "水库", "泵站", "闸门", "大坝", "渠道", "除险", "加固", "组织实施", "工程范围",
+    ]
+    return any(keyword in text for keyword in keywords)
+
+
+def _score_asset_for_section(asset: dict, section: dict) -> int:
+    asset_text = _asset_text(asset)
+    section_text = _section_text(section)
+    score = 0
+
+    for token in re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,}", section_text):
+        if token in asset_text:
+            score += 2 if len(token) >= 4 else 1
+
+    category = str(asset.get("category") or "")
+    asset_type = str(asset.get("asset_type") or "")
+    if any(keyword in section_text for keyword in ["资质", "证书", "营业执照", "许可"]):
+        if any(keyword in asset_text for keyword in ["资质", "证书", "营业执照", "许可", "脱敏"]):
+            score += 18
+    if any(keyword in section_text for keyword in ["产品", "设备", "材料", "报价", "清单"]):
+        if any(keyword in asset_text for keyword in ["产品", "设备", "材料", "参数", "水轮机", "螺母", "叶片"]):
+            score += 14
+    if any(keyword in section_text for keyword in ["施工", "组织", "工程", "水库", "大坝", "渠道", "泵站", "除险", "加固"]):
+        if any(keyword in asset_text for keyword in ["施工", "工程", "水库", "泵站", "渠道", "现场", "项目"]):
+            score += 12
+    if category and category.lower() in section_text:
+        score += 6
+    if asset_type and asset_type.lower() in section_text:
+        score += 4
+    return score
+
+
+def _asset_image_ref(asset: dict) -> str:
+    public_url = str(asset.get("public_url") or "").strip()
+    if public_url.startswith(("http://", "https://")):
+        return public_url
+
+    local_path = str(asset.get("local_path") or "").strip()
+    if local_path:
+        candidate = Path(local_path)
+        if not candidate.is_absolute():
+            candidate = Path.cwd() / candidate
+        if candidate.exists() and candidate.is_file():
+            return str(candidate)
+
+    storage_path = str(asset.get("storage_path") or "").strip()
+    if storage_path.startswith(("http://", "https://")):
+        return storage_path
+    return ""
+
+
+def _asset_caption(asset: dict) -> str:
+    title = str(asset.get("title") or "知识库图片资产").strip()
+    category = str(asset.get("category") or "水利行业资料").strip()
+    sensitive_note = "，脱敏示意图，不替代正式资质文件" if asset.get("is_sensitive") else ""
+    return f"图示：{title}（{category}{sensitive_note}）"
+
+
+def _build_section_image_markdown(section: dict, assets: list[dict], used_asset_ids: set[str]) -> str:
+    if not assets or not _section_needs_image(section):
+        return ""
+
+    candidates: list[tuple[int, dict]] = []
+    for asset in assets:
+        image_ref = _asset_image_ref(asset)
+        if not image_ref:
+            continue
+        asset_id = str(asset.get("id") or image_ref)
+        score = _score_asset_for_section(asset, section)
+        if asset_id in used_asset_ids:
+            score -= 8
+        if score > 0:
+            candidates.append((score, asset))
+
+    if not candidates:
+        return ""
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    max_images = 2 if any(keyword in _section_text(section) for keyword in ["资质", "证书", "产品", "设备"]) else 1
+    snippets: list[str] = []
+    for _, asset in candidates[:max_images]:
+        image_ref = _asset_image_ref(asset)
+        asset_id = str(asset.get("id") or image_ref)
+        used_asset_ids.add(asset_id)
+        alt = re.sub(r"[\[\]\(\)]", "", str(asset.get("title") or "水利行业配图")).strip()
+        snippets.append(f"\n\n![{alt}]({image_ref})\n\n{_asset_caption(asset)}\n\n")
+    return "".join(snippets)
+
+
 def _section_with_descendants(sections: list[dict], section_id: str) -> list[dict]:
     selected_ids = {section_id}
     changed = True
@@ -188,7 +336,7 @@ def _section_with_descendants(sections: list[dict], section_id: str) -> list[dic
     return [section for section in sections if section.get("id") in selected_ids]
 
 
-def build_project_bid_markdown(project_id: str, focus_section_id: str | None = None) -> tuple[Path, str]:
+def build_project_bid_markdown(project_id: str, focus_section_id: str | None = None, with_images: bool = False) -> tuple[Path, str]:
     payload = get_project_interpretation(project_id)
     project = payload.get("project") or {}
     sections = list_bid_sections(project_id)
@@ -210,17 +358,34 @@ def build_project_bid_markdown(project_id: str, focus_section_id: str | None = N
     file_suffix = ""
     if focus_section:
         file_suffix = f"-section-{_slug_filename(focus_section.get('title') or 'section', 'section')}-{focus_section_id[:8]}"
+    if with_images:
+        file_suffix = f"{file_suffix}-illustrated"
     markdown_path = output_dir / f"{folder_name}{file_suffix}.md"
 
+    image_assets: list[dict] = []
+    if with_images:
+        try:
+            image_assets = [
+                asset for asset in list_knowledge_assets()
+                if _asset_image_ref(asset)
+                and str(asset.get("asset_type") or "").lower() not in {"document", "markdown", "text"}
+            ]
+        except Exception:
+            logging.exception("加载知识库图片资产失败，继续生成无配图 DOCX: %s", project_id)
+            image_assets = []
+
     chunks: list[str] = [f"# {project_name}\n\n"]
+    used_asset_ids: set[str] = set()
     for section in sections:
-        title = section.get("title") or "未命名章节"
+        title = _section_display_title(section)
         content = (section.get("content") or "").strip()
         if content:
             chunks.append(f"{content}\n\n" if content.endswith("\n") else f"{content}\n\n")
         else:
             chunks.append(_section_markdown_heading(int(section.get("level") or 1), title))
             chunks.append("待补充章节正文。\n\n")
+        if with_images:
+            chunks.append(_build_section_image_markdown(section, image_assets, used_asset_ids))
 
     markdown_path.write_text("".join(chunks), encoding="utf-8")
     return markdown_path, project_name
@@ -783,13 +948,14 @@ def download_bid_docx(project_id):
     try:
         request_payload = request.get_json(silent=True) or {}
         section_id = request_payload.get("sectionId")
+        with_images = bool(request_payload.get("withImages"))
         if section_id:
             try:
                 uuid.UUID(section_id)
             except ValueError:
                 section_id = None
 
-        markdown_path, project_name = build_project_bid_markdown(project_id, section_id)
+        markdown_path, project_name = build_project_bid_markdown(project_id, section_id, with_images=with_images)
         generated_docx_path = convert_md_to_word(markdown_path)
         if not generated_docx_path or not Path(generated_docx_path).exists():
             raise RuntimeError("DOCX 生成失败，未找到输出文件。")
@@ -801,6 +967,7 @@ def download_bid_docx(project_id):
             'message': 'DOCX 已生成。',
             'projectId': project_id,
             'sectionId': section_id,
+            'withImages': with_images,
             'projectName': project_name,
             'fileName': generated_docx_path.name,
             'downloadUrl': f"/api/outputs/{relative_path.as_posix()}",

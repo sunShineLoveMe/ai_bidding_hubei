@@ -148,6 +148,22 @@ function numericOrderIndex(value: string | number | undefined, fallback: number)
   return fallback;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function chapterDisplayTitle(chapter: Pick<ChapterDraft, 'order' | 'title'>): string {
+  const title = (chapter.title || '未命名章节').trim();
+  if (!chapter.order) {
+    return title;
+  }
+  const order = String(chapter.order).trim();
+  const duplicateOrder = new RegExp(`^${escapeRegExp(order)}\\.?\\s*`);
+  const cleanTitle = title.replace(duplicateOrder, '').trim() || title;
+  const orderPrefix = order.includes('.') ? `${order} ` : `${order}. `;
+  return `${orderPrefix}${cleanTitle}`;
+}
+
 export function BidEditorPage(): JSX.Element {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -166,6 +182,7 @@ export function BidEditorPage(): JSX.Element {
   const [downloadGenerating, setDownloadGenerating] = useState<'full' | 'section' | null>(null);
   const [batchGenerating, setBatchGenerating] = useState(false);
   const [batchTasks, setBatchTasks] = useState<Record<string, BatchTask>>({});
+  const [withImages, setWithImages] = useState(false);
   const streamStartedRef = useRef(false);
   const batchCancelRequestedRef = useRef(false);
   const batchAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
@@ -665,10 +682,13 @@ export function BidEditorPage(): JSX.Element {
     }
     setDownloadGenerating(sectionId ? 'section' : 'full');
     try {
-      const result = await generateBidDocxDownload(data.project.id, sectionId);
+      const result = await generateBidDocxDownload(data.project.id, {
+        sectionId,
+        withImages: !sectionId && withImages,
+      });
       setDownloadUrl(result.downloadUrl);
       window.open(result.downloadUrl, '_blank');
-      message.success(sectionId ? '本章 DOCX 已生成' : '全文 DOCX 已生成');
+      message.success(sectionId ? '本章 DOCX 已生成' : withImages ? '图文并茂版全文 DOCX 已生成' : '全文 DOCX 已生成');
     } catch (error) {
       message.error(error instanceof Error ? error.message : String(error));
     } finally {
@@ -959,7 +979,7 @@ export function BidEditorPage(): JSX.Element {
       return;
     }
     const targetWords = targetChapterWords(chapter);
-    const chapterHeader = `## ${chapter.title || '未命名章节'}\n\n`;
+    const chapterHeader = `## ${chapterDisplayTitle(chapter)}\n\n`;
     const controller = new AbortController();
     batchAbortControllersRef.current.set(chapter.id, controller);
     updateBatchTask(chapter.id, {
@@ -1164,7 +1184,11 @@ export function BidEditorPage(): JSX.Element {
                   <span>批量操作</span>
                 </label>
                 <label className="outline-switch">
-                  <input type="checkbox" />
+                  <input
+                    type="checkbox"
+                    checked={withImages}
+                    onChange={event => setWithImages(event.target.checked)}
+                  />
                   <span>全篇图文并茂</span>
                 </label>
                 <Button size="small" icon={<SlidersHorizontal size={14} />}>全文设置</Button>
@@ -1199,7 +1223,7 @@ export function BidEditorPage(): JSX.Element {
                         setSelectedId(chapter.id);
                       }}
                     >
-                      <span>{chapter.order ? `${chapter.order}. ` : ''}{chapter.title}</span>
+                      <span>{chapterDisplayTitle(chapter)}</span>
                     </button>
                     <Tooltip title={wordMeta.tooltip}>
                       <div className={`outline-word-pill ${wordMeta.generated ? 'done' : 'pending'}`}>
@@ -1291,15 +1315,15 @@ export function BidEditorPage(): JSX.Element {
         <Space size={10} wrap>
           <Button onClick={() => navigate('/interpretation')}>返回解读</Button>
           <Button icon={<BookOpen size={16} />}>关联资料</Button>
-            <Button
-              type="primary"
-              icon={<Download size={17} />}
-              loading={downloadGenerating === 'full'}
-              disabled={!chapters.length || !!downloadGenerating}
-              onClick={() => void downloadDocx()}
-            >
-              标书下载
-            </Button>
+          <Button
+            type="primary"
+            icon={<Download size={17} />}
+            loading={downloadGenerating === 'full'}
+            disabled={!chapters.length || !!downloadGenerating}
+            onClick={() => void downloadDocx()}
+          >
+            标书下载
+          </Button>
         </Space>
       </header>
 
@@ -1363,7 +1387,7 @@ export function BidEditorPage(): JSX.Element {
                   <Tooltip title={batchTasks[chapter.id]?.status ? batchStatusLabel(batchTasks[chapter.id].status) : isChapterGenerated(chapter) ? '已完成' : '未完成'}>
                     <span className={`chapter-status ${chapterStatusClass(chapter)}`} />
                   </Tooltip>
-                  <span className="chapter-title">{chapter.order ? `${chapter.order}. ` : ''}{chapter.title}</span>
+                  <span className="chapter-title">{chapterDisplayTitle(chapter)}</span>
                   <Dropdown
                     trigger={['click']}
                     menu={{
@@ -1409,7 +1433,7 @@ export function BidEditorPage(): JSX.Element {
       <main className="bid-editor-main">
         <section className="editor-title-row">
           <div>
-            <h1>{selectedChapter?.title || '未选择章节'}</h1>
+            <h1>{selectedChapter ? chapterDisplayTitle(selectedChapter) : '未选择章节'}</h1>
             <p>{streaming ? streamText : selectedChapter?.purpose || '使用 AI 编辑器编写章节正文，支持标题、列表、表格和 Markdown 存储。'}</p>
           </div>
           <Space>
@@ -1442,7 +1466,7 @@ export function BidEditorPage(): JSX.Element {
         </section>
 
         <footer className="editor-statusbar">
-          <span>当前章节：{selectedChapter?.title || '-'}</span>
+          <span>当前章节：{selectedChapter ? chapterDisplayTitle(selectedChapter) : '-'}</span>
           <span>来源页码：{selectedChapter?.source_pages?.join('、') || '需复核'}</span>
           <span>Tiptap AI 编辑器</span>
         </footer>

@@ -13,6 +13,8 @@ import docx.oxml.shared
 from docx.oxml import OxmlElement
 import shutil
 import uuid
+import requests
+from urllib.parse import urlparse, unquote
 
 
 def apply_run_font(run, *, east_asia='宋体', latin='Times New Roman', size=None, bold=None):
@@ -121,6 +123,70 @@ def process_mermaid(doc, mermaid_code):
         finally:
             # 清理临时图片文件
             os.unlink(png_file)
+
+
+def _image_suffix_from_response(image_ref, response=None):
+    path_suffix = Path(unquote(urlparse(image_ref).path)).suffix.lower()
+    if path_suffix in {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}:
+        return path_suffix
+    content_type = response.headers.get('content-type', '').lower() if response is not None else ''
+    if 'jpeg' in content_type or 'jpg' in content_type:
+        return '.jpg'
+    if 'png' in content_type:
+        return '.png'
+    if 'gif' in content_type:
+        return '.gif'
+    if 'bmp' in content_type:
+        return '.bmp'
+    if 'webp' in content_type:
+        return '.webp'
+    return '.png'
+
+
+def _resolve_markdown_image(image_ref):
+    image_ref = (image_ref or '').strip().strip('"').strip("'")
+    if not image_ref:
+        return None, False
+    if image_ref.startswith(('http://', 'https://')):
+        response = requests.get(image_ref, timeout=30, stream=True)
+        response.raise_for_status()
+        suffix = _image_suffix_from_response(image_ref, response)
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    temp.write(chunk)
+            return temp.name, True
+
+    local_path = Path(image_ref)
+    if not local_path.is_absolute():
+        local_path = Path.cwd() / local_path
+    if local_path.exists() and local_path.is_file():
+        return str(local_path), False
+    return None, False
+
+
+def process_markdown_image(doc, alt_text, image_ref):
+    """处理 Markdown 图片语法，插入居中图片和中文图注。"""
+    image_path = None
+    cleanup = False
+    try:
+        image_path, cleanup = _resolve_markdown_image(image_ref)
+        if not image_path:
+            return False
+        doc.add_picture(image_path, width=Inches(5.8))
+        image_para = doc.paragraphs[-1]
+        image_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        return True
+    except Exception as e:
+        print(f"插入图片失败: {image_ref}, {e}")
+        return False
+    finally:
+        if cleanup and image_path and os.path.exists(image_path):
+            try:
+                os.unlink(image_path)
+            except Exception:
+                pass
 
 def set_document_styles(doc):
     """设置文档样式"""
@@ -303,7 +369,8 @@ def convert_md_to_word(md_file):
     set_document_language(doc)
     
     # 设置文档格式
-    project_name = Path(md_file).parent.name
+    title_match = re.search(r'^\s*#\s+(.+?)\s*$', md_content, re.MULTILINE)
+    project_name = title_match.group(1).strip() if title_match else Path(md_file).stem
     set_document_format(doc, project_name)
     
     # 处理Markdown内容
@@ -312,6 +379,12 @@ def convert_md_to_word(md_file):
     while i < len(lines):
         line = lines[i].strip()
         if re.match(r'^(-{3,}|\*{3,}|_{3,})$', line):
+            i += 1
+            continue
+
+        image_match = re.match(r'^!\[(.*?)\]\((.*?)\)\s*$', line)
+        if image_match:
+            process_markdown_image(doc, image_match.group(1), image_match.group(2))
             i += 1
             continue
         
