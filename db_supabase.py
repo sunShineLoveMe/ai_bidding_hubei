@@ -300,6 +300,44 @@ def update_bid_section_content(project_id: str, section_id: str, content: str, s
     return response.data[0]
 
 
+def reset_bid_sections_generation(project_id: str, clear_content: bool = False) -> list[dict[str, Any]]:
+    rows = list_bid_sections(project_id)
+    if not rows:
+        return []
+
+    payloads: list[dict[str, Any]] = []
+    generation_meta_keys = {
+        "actual_words",
+        "error",
+        "generated_at",
+        "generation_status",
+        "progress",
+        "word_count",
+        "writing_error",
+        "writing_progress",
+        "writing_status",
+    }
+    for row in rows:
+        metadata = dict(row.get("metadata") or {})
+        for key in generation_meta_keys:
+            metadata.pop(key, None)
+        payload = {
+            key: value
+            for key, value in row.items()
+            if key not in {"created_at", "updated_at"}
+        }
+        payload.update({
+            "project_id": project_id,
+            "status": "draft",
+            "content": "" if clear_content else row.get("content", ""),
+            "metadata": metadata,
+        })
+        payloads.append(payload)
+
+    response = get_supabase_client().table("bid_sections").upsert(payloads).execute()
+    return response.data or []
+
+
 def delete_bid_section(project_id: str, section_id: str) -> None:
     get_supabase_client().table("bid_sections").delete().eq("id", section_id).eq("project_id", project_id).execute()
 

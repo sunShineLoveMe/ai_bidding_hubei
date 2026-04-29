@@ -20,7 +20,7 @@ from ai_chapter_planner import generate_bid_outline, stream_bid_outline
 from ai_section_writer import stream_bid_section
 from ai_interpreter import generate_ai_interpretation_report
 from compliance_checker import build_compliance_report
-from db_supabase import delete_bid_section, get_bid_file, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_section_content, upsert_bid_section
+from db_supabase import delete_bid_section, get_bid_file, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_section_content, upsert_bid_section
 from llm_json_utils import strip_llm_json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
@@ -815,6 +815,27 @@ def reorder_bid_sections_api(project_id):
     except Exception as e:
         logging.exception("批量排序标书章节失败: %s", project_id)
         return jsonify({'error': f'批量排序标书章节失败: {str(e)}'}), 500
+
+
+@bp.route('/interpretations/<project_id>/sections/reset-generation', methods=['POST'])
+def reset_bid_sections_generation_api(project_id):
+    """重置标书章节生成状态，可选清空正文内容。"""
+    try:
+        uuid.UUID(project_id)
+        payload = request.get_json(silent=True) or {}
+        clear_content = bool(payload.get("clearContent"))
+        sections = reset_bid_sections_generation(project_id, clear_content=clear_content)
+        return jsonify({
+            "message": "章节生成状态已重置。",
+            "clearContent": clear_content,
+            "sections": sections,
+        })
+    except ValueError:
+        return jsonify({'error': 'project_id 不是合法 UUID。'}), 400
+    except Exception as e:
+        logging.exception("重置标书章节生成状态失败: %s", project_id)
+        return jsonify({'error': f'重置标书章节生成状态失败: {str(e)}'}), 500
+
 
 @bp.route('/interpretations/<project_id>/sections/<section_id>', methods=['DELETE'])
 def remove_bid_section(project_id, section_id):

@@ -76,6 +76,13 @@ export async function reorderBidSections(projectId: string, sections: Partial<Bi
   return response.data.sections || [];
 }
 
+export async function resetBidSectionsGeneration(projectId: string, clearContent = false): Promise<BidSection[]> {
+  const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/sections/reset-generation`, { clearContent }, {
+    skipGlobalLoading: true,
+  });
+  return response.data.sections || [];
+}
+
 export async function generateOnlyOfficeConfig(projectId: string, sectionId?: string): Promise<OnlyOfficeConfigResponse> {
   const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/onlyoffice-config`, sectionId ? { sectionId } : undefined, {
     skipGlobalLoading: true,

@@ -18,9 +18,10 @@ import {
   Eye,
   Trash2,
   SlidersHorizontal,
+  RotateCcw,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { deleteBidSection, generateBidDocxDownload, getInterpretation, getLatestInterpretation, reorderBidSections, saveBidSection } from '../../api/bidProject';
+import { deleteBidSection, generateBidDocxDownload, getInterpretation, getLatestInterpretation, reorderBidSections, resetBidSectionsGeneration, saveBidSection } from '../../api/bidProject';
 import { BrandMark } from '../../components/common/BrandMark';
 import { TiptapBidEditor } from '../../components/editor/TiptapBidEditor';
 import type { BidOutline, BidOutlineChapter, BidSection, ChapterWritingPlan, InterpretationResponse } from '../../types/interpretation';
@@ -183,6 +184,9 @@ export function BidEditorPage(): JSX.Element {
   const [batchGenerating, setBatchGenerating] = useState(false);
   const [batchTasks, setBatchTasks] = useState<Record<string, BatchTask>>({});
   const [withImages, setWithImages] = useState(false);
+  const [resetModalOpen, setResetModalOpen] = useState(false);
+  const [resetClearContent, setResetClearContent] = useState(false);
+  const [resettingGeneration, setResettingGeneration] = useState(false);
   const streamStartedRef = useRef(false);
   const batchCancelRequestedRef = useRef(false);
   const batchAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
@@ -696,6 +700,35 @@ export function BidEditorPage(): JSX.Element {
     }
   }
 
+  async function resetGenerationStatus(): Promise<void> {
+    if (!data?.project?.id) {
+      message.warning('当前项目不存在，无法重置');
+      return;
+    }
+    setResettingGeneration(true);
+    try {
+      const saved = await resetBidSectionsGeneration(data.project.id, resetClearContent);
+      const savedById = new Map(saved.map(section => [section.id, section]));
+      setChapters(items => normalizeChapterHierarchy(items.map(item => {
+        const savedItem = savedById.get(item.id);
+        return {
+          ...item,
+          ...(savedItem || {}),
+          status: 'draft',
+          content: resetClearContent ? '' : (savedItem?.content ?? item.content),
+        };
+      })));
+      setBatchTasks({});
+      setDownloadUrl('');
+      setResetModalOpen(false);
+      message.success(resetClearContent ? '已重置全部章节状态，并清空正文' : '已重置全部章节生成状态');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setResettingGeneration(false);
+    }
+  }
+
   function appendChapterContent(chapterId: string, value: string): void {
     setChapters(items => items.map(item => item.id === chapterId ? { ...item, content: `${item.content}${value}` } : item));
   }
@@ -1192,6 +1225,18 @@ export function BidEditorPage(): JSX.Element {
                   <span>全篇图文并茂</span>
                 </label>
                 <Button size="small" icon={<SlidersHorizontal size={14} />}>全文设置</Button>
+                <Button
+                  size="small"
+                  danger
+                  icon={<RotateCcw size={14} />}
+                  disabled={!chapters.length || batchGenerating || sectionStreaming}
+                  onClick={() => {
+                    setResetClearContent(false);
+                    setResetModalOpen(true);
+                  }}
+                >
+                  重置生成状态
+                </Button>
                 <Button size="small" icon={<Download size={14} />}>下载目录</Button>
               </Space>
             </div>
@@ -1301,6 +1346,32 @@ export function BidEditorPage(): JSX.Element {
             <span />
           </footer>
         </main>
+
+        <Modal
+          title="重置章节生成状态"
+          open={resetModalOpen}
+          okText={resetClearContent ? '重置并清空正文' : '仅重置状态'}
+          cancelText="取消"
+          okButtonProps={{ danger: resetClearContent, loading: resettingGeneration }}
+          onOk={() => void resetGenerationStatus()}
+          onCancel={() => setResetModalOpen(false)}
+          destroyOnClose
+        >
+          <Alert
+            type="warning"
+            showIcon
+            message="该操作会把全部章节恢复为未完成状态，用于重新测试或重新生成全文。"
+            description={resetClearContent ? '当前已勾选清空正文，确认后所有章节正文会被清空。' : '默认只重置状态、进度和本地生成任务，保留已经生成的正文内容。'}
+          />
+          <label className="reset-content-option">
+            <input
+              type="checkbox"
+              checked={resetClearContent}
+              onChange={event => setResetClearContent(event.target.checked)}
+            />
+            <span>同时清空全部章节正文内容</span>
+          </label>
+        </Modal>
       </div>
     );
   }

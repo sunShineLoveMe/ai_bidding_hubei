@@ -266,6 +266,21 @@ textarea {
   transform: translateX(16px);
 }
 
+.reset-content-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  color: #334155;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.reset-content-option input {
+  width: 16px;
+  height: 16px;
+}
+
 .outline-table {
   min-height: 0;
   overflow: auto;
