@@ -1,43 +1,70 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, message, Segmented, Steps, Upload } from 'antd';
+import { Button, Progress, Steps, Tag, Upload, message } from 'antd';
 import type { UploadProps } from 'antd';
-import { FileUp, PlayCircle } from 'lucide-react';
+import { CheckCircle2, FileSearch, FileUp, Loader2, RotateCcw, SquarePen } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import {
-  analyzeChapters,
-  designChapters,
-  generateBidDocument,
+  generateAIInterpretation,
+  generateBidOutline,
   getParseStatus,
   identifyUser,
-  preAnalyzeBid,
   uploadTenderFile,
 } from '../../api/bidProject';
 import { useBidProjectStore } from '../../stores/bidProjectStore';
-import { formatJson } from '../../utils/format';
 
-type ResultTab = '运行结果' | '预分析' | '章节格式' | '章节设计';
+type StepStatus = 'wait' | 'process' | 'finish' | 'error';
 
 interface BidWorkflowProps {
   onReady?: (openFilePicker: () => void) => void;
   onTaskChanged?: () => void;
 }
 
-const steps = ['上传招标文件', 'AI 预分析', '提取章节格式', '生成章节设计', '生成 Word'];
+const workflowSteps = [
+  {
+    title: '上传招标文件',
+    description: '创建投标任务',
+  },
+  {
+    title: '解析招标文件',
+    description: '文本 / 表格 / OCR',
+  },
+  {
+    title: '生成招标解读',
+    description: '资格 / 评分 / 风险',
+  },
+  {
+    title: '生成章节大纲',
+    description: '匹配知识库资料',
+  },
+  {
+    title: '进入标书编制',
+    description: '编辑并导出 Word',
+  },
+] as const;
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function initialStatuses(): StepStatus[] {
+  return workflowSteps.map(() => 'wait');
+}
 
 export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.Element {
-  const [current, setCurrent] = useState(0);
-  const [busy, setBusy] = useState(false);
+  const navigate = useNavigate();
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const runTokenRef = useRef(0);
+  const activeStepRef = useRef(0);
   const [file, setFile] = useState<File | null>(null);
   const [userId, setUserId] = useState<number | null>(null);
-  const [biddingId, setBiddingId] = useState<number | null>(null);
-  const [analysis, setAnalysis] = useState<unknown>(null);
-  const [chapter, setChapter] = useState<unknown>(null);
-  const [design, setDesign] = useState<unknown>(null);
-  const [tab, setTab] = useState<ResultTab>('运行结果');
-  const [log, setLog] = useState('请选择招标文件，并按左侧步骤生成标书。');
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const parseTimerRef = useRef<number | null>(null);
-  const parsePollCountRef = useRef(0);
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [current, setCurrent] = useState(0);
+  const [statuses, setStatuses] = useState<StepStatus[]>(initialStatuses);
+  const [summary, setSummary] = useState('请选择招标文件。上传后系统会自动完成解析、招标解读和章节大纲生成。');
+  const [detail, setDetail] = useState('支持 Word、PDF、TXT。扫描版 PDF 会自动进入 MinerU/OCR 解析流程。');
   const addTask = useBidProjectStore(state => state.addTask);
 
   const openFilePicker = useCallback(() => inputRef.current?.click(), []);
@@ -45,54 +72,6 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
   useEffect(() => {
     onReady?.(openFilePicker);
   }, [onReady, openFilePicker]);
-
-  useEffect(() => {
-    return () => {
-      if (parseTimerRef.current) {
-        window.clearInterval(parseTimerRef.current);
-      }
-    };
-  }, []);
-
-  function stopParsePolling(): void {
-    if (parseTimerRef.current) {
-      window.clearInterval(parseTimerRef.current);
-      parseTimerRef.current = null;
-    }
-  }
-
-  function startParsePolling(nextFileId: string): void {
-    stopParsePolling();
-    parsePollCountRef.current = 0;
-
-    const poll = async (): Promise<void> => {
-      parsePollCountRef.current += 1;
-      try {
-        const data = await getParseStatus(nextFileId);
-        const status = data.parseStatus || 'pending';
-        setLog(formatJson({ ...data, tip: '后台正在解析招标文件，完成 indexed 后可继续做招标解读。' }));
-        if (['indexed', 'mineru_failed', 'index_failed'].includes(status) || parsePollCountRef.current >= 90) {
-          stopParsePolling();
-        }
-      } catch (error) {
-        if (parsePollCountRef.current >= 3) {
-          stopParsePolling();
-        }
-      }
-    };
-
-    void poll();
-    parseTimerRef.current = window.setInterval(() => void poll(), 5000);
-  }
-
-  const uploadProps: UploadProps = {
-    showUploadList: false,
-    beforeUpload: selectedFile => {
-      setFile(selectedFile);
-      setLog(`已选择文件：${selectedFile.name}`);
-      return false;
-    },
-  };
 
   async function getUserId(): Promise<number> {
     if (userId) return userId;
@@ -103,154 +82,211 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
     return data.userId;
   }
 
-  async function runAction(index: number): Promise<void> {
+  function updateStep(index: number, status: StepStatus, nextSummary?: string, nextDetail?: string): void {
+    activeStepRef.current = index;
+    setCurrent(index);
+    setStatuses(prev => prev.map((item, itemIndex) => (itemIndex === index ? status : item)));
+    if (nextSummary) setSummary(nextSummary);
+    if (nextDetail) setDetail(nextDetail);
+  }
+
+  function finishStep(index: number): void {
+    setStatuses(prev => prev.map((item, itemIndex) => (itemIndex === index ? 'finish' : item)));
+  }
+
+  async function waitForParseIndexed(fileId: string, token: number): Promise<void> {
+    for (let count = 1; count <= 90; count += 1) {
+      if (runTokenRef.current !== token) return;
+      const data = await getParseStatus(fileId);
+      const parseStatus = data.parseStatus || 'pending';
+      setDetail(`解析状态：${parseStatus}。系统正在抽取文本、表格和图片信息，第 ${count} 次检查。`);
+
+      if (parseStatus === 'indexed') {
+        return;
+      }
+      if (parseStatus === 'mineru_failed' || parseStatus === 'index_failed') {
+        throw new Error('招标文件解析失败，请检查文件是否可读，或稍后重试 MinerU/OCR 解析。');
+      }
+      await delay(5000);
+    }
+    throw new Error('招标文件解析等待超时，请到招标解读页查看后台解析状态。');
+  }
+
+  async function runWorkflow(selectedFile: File): Promise<void> {
+    if (busy) {
+      message.info('当前任务正在处理中，请等待完成后再上传新文件。');
+      return;
+    }
+
+    const token = runTokenRef.current + 1;
+    runTokenRef.current = token;
+    setFile(selectedFile);
+    setProjectId(null);
     setBusy(true);
-    setTab('运行结果');
+    setCurrent(0);
+    activeStepRef.current = 0;
+    setStatuses(initialStatuses());
+    setSummary('正在上传招标文件...');
+    setDetail(`已选择：${selectedFile.name}`);
+
     try {
-      if (index === 0) {
-        if (!file) {
-          message.warning('请先选择招标文件');
-          return;
-        }
-        const resolvedUserId = await getUserId();
-        const data = await uploadTenderFile(file, resolvedUserId);
-        setBiddingId(data.biddingId);
-        setCurrent(1);
-        setLog(formatJson(data));
-        if (data.fileId) {
-          startParsePolling(data.fileId);
-        }
-        addTask({
-          projectName: file.name.replace(/\.[^.]+$/, ''),
-          tenderUnit: '本地上传',
-          status: '已上传',
-          action: '查看',
-        });
-        onTaskChanged?.();
-        message.success('上传完成');
-        return;
-      }
+      updateStep(0, 'process', '正在上传招标文件...', '系统正在创建项目任务并同步文件到知识库。');
+      const resolvedUserId = await getUserId();
+      const uploadResult = await uploadTenderFile(selectedFile, resolvedUserId);
+      if (runTokenRef.current !== token) return;
 
-      if (!biddingId) {
-        message.warning('请先上传招标文件');
-        return;
-      }
+      addTask({
+        projectName: selectedFile.name.replace(/\.[^.]+$/, ''),
+        tenderUnit: '本地上传',
+        status: '已上传',
+        action: '查看',
+      });
+      onTaskChanged?.();
+      finishStep(0);
 
-      if (index === 1) {
-        const data = await preAnalyzeBid(biddingId);
-        setAnalysis(data);
-        setCurrent(2);
-        setLog(formatJson(data));
-        message.success('AI 预分析完成');
-        return;
+      if (!uploadResult.projectId) {
+        throw new Error('上传成功，但未返回项目 ID，无法继续自动生成招标解读。');
       }
+      setProjectId(uploadResult.projectId);
 
-      if (index === 2) {
-        const data = await analyzeChapters(biddingId);
-        setChapter(data);
-        setCurrent(3);
-        setLog(formatJson(data));
-        message.success('章节格式提取完成');
-        return;
+      updateStep(1, 'process', '正在解析招标文件...', '系统正在识别正文、表格、图片和扫描页，完成后会自动进入招标解读。');
+      if (uploadResult.fileId) {
+        await waitForParseIndexed(uploadResult.fileId, token);
       }
+      if (runTokenRef.current !== token) return;
+      finishStep(1);
 
-      if (index === 3) {
-        const data = await designChapters(biddingId);
-        setDesign(data);
-        setCurrent(4);
-        setLog(formatJson(data));
-        message.success('章节设计完成');
-        return;
-      }
+      updateStep(2, 'process', '正在生成招标解读...', '正在提取项目概况、资格要求、评分标准、废标风险和关键时间节点。');
+      await generateAIInterpretation(uploadResult.projectId);
+      if (runTokenRef.current !== token) return;
+      finishStep(2);
 
-      if (index === 4) {
-        if (!design) {
-          message.warning('请先生成章节设计');
-          return;
-        }
-        const data = await generateBidDocument(biddingId, design);
-        setDownloadUrl(data.downloadUrl);
-        setLog(formatJson(data));
-        addTask({
-          projectName: file?.name.replace(/\.[^.]+$/, '') || '新建标书任务',
-          tenderUnit: '本地上传',
-          status: '已导出',
-          action: '查看',
-        });
-        onTaskChanged?.();
-        message.success('Word 已生成');
-      }
+      updateStep(3, 'process', '正在生成章节大纲...', '正在结合招标解读、企业知识库、资信库和产品库规划标书章节。');
+      await generateBidOutline(uploadResult.projectId);
+      if (runTokenRef.current !== token) return;
+      finishStep(3);
+
+      updateStep(4, 'finish', '章节大纲已生成，可以进入标书编制。', '后续可在标书编制工作台中编辑章节正文、引用资料并导出 Word。');
+      message.success('招标解读和章节大纲已生成');
+      onTaskChanged?.();
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      setLog(reason);
+      setCurrent(activeStepRef.current);
+      setStatuses(prev => prev.map((item, index) => (index === activeStepRef.current ? 'error' : item)));
+      setSummary('自动流程执行失败');
+      setDetail(reason);
       message.error(reason);
     } finally {
       setBusy(false);
     }
   }
 
-  const resultMap: Record<ResultTab, string> = {
-    运行结果: log,
-    预分析: formatJson(analysis),
-    章节格式: formatJson(chapter),
-    章节设计: formatJson(design),
+  const uploadProps: UploadProps = {
+    showUploadList: false,
+    disabled: busy,
+    beforeUpload: selectedFile => {
+      void runWorkflow(selectedFile);
+      return false;
+    },
   };
 
+  const completedCount = statuses.filter(status => status === 'finish').length;
+  const progressPercent = Math.round((completedCount / workflowSteps.length) * 100);
+
   return (
-    <section className="grid min-h-[620px] grid-cols-[380px_1fr] gap-4 max-[1500px]:grid-cols-1">
-      <div className="panel-card">
-        <h2 className="panel-title">标书生成流程</h2>
-        <Upload.Dragger {...uploadProps} className="compact-uploader">
-          <div className="flex h-24 flex-col items-center justify-center gap-2">
-            <FileUp className="text-blue-500" size={26} />
-            <strong className="text-blue-600">{file ? file.name : '选择招标文件'}</strong>
-            <span className="text-xs font-semibold text-slate-500">支持 Word、PDF、TXT</span>
-          </div>
-        </Upload.Dragger>
-        <input ref={inputRef} hidden type="file" accept=".doc,.docx,.pdf,.txt" onChange={event => setFile(event.target.files?.[0] ?? null)} />
+    <section className="panel-card">
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div>
+          <h2 className="panel-title mb-1">标书生成流程</h2>
+          <p className="m-0 text-sm font-semibold text-slate-500">
+            上传一次招标文件，系统自动完成解析、解读和章节大纲生成，减少重复点击。
+          </p>
+        </div>
+        <Tag color={busy ? 'processing' : progressPercent === 100 ? 'success' : 'default'}>
+          {busy ? '自动执行中' : progressPercent === 100 ? '已完成' : '等待上传'}
+        </Tag>
+      </div>
+
+      <Upload.Dragger {...uploadProps} className="compact-uploader">
+        <div className="flex h-24 flex-col items-center justify-center gap-2">
+          <FileUp className="text-blue-500" size={26} />
+          <strong className="text-blue-600">{file ? file.name : '选择或拖拽招标文件'}</strong>
+          <span className="text-xs font-semibold text-slate-500">支持 Word、PDF、TXT；上传后自动执行后续流程</span>
+        </div>
+      </Upload.Dragger>
+      <input
+        ref={inputRef}
+        hidden
+        type="file"
+        accept=".doc,.docx,.pdf,.txt"
+        onChange={event => {
+          const selectedFile = event.target.files?.[0];
+          if (selectedFile) {
+            void runWorkflow(selectedFile);
+          }
+          event.target.value = '';
+        }}
+      />
+
+      <div className="mt-5 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-5">
         <Steps
-          className="mt-3 compact-steps"
           size="small"
-          direction="vertical"
           current={current}
-          items={steps.map((title, index) => ({
-            title,
-            description: (
-              <Button
-                size="small"
-                type={index === current ? 'primary' : 'default'}
-                icon={<PlayCircle size={14} />}
-                loading={busy && index === current}
-                disabled={busy || index > current}
-                onClick={() => void runAction(index)}
-              >
-                执行
-              </Button>
-            ),
+          status={statuses[current] === 'error' ? 'error' : busy ? 'process' : 'wait'}
+          items={workflowSteps.map((step, index) => ({
+            title: step.title,
+            description: step.description,
+            status: statuses[index],
           }))}
         />
       </div>
 
-      <div className="panel-card">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="panel-title mb-0">生成结果</h2>
-          <Segmented<ResultTab>
-            size="small"
-            value={tab}
-            options={['运行结果', '预分析', '章节格式', '章节设计']}
-            onChange={setTab}
-          />
+      <div className="mt-4 grid grid-cols-[1fr_260px] gap-4 max-[1500px]:grid-cols-1">
+        <div className="rounded-2xl border border-slate-100 bg-white px-5 py-4">
+          <div className="mb-3 flex items-center gap-3">
+            {busy ? (
+              <Loader2 className="animate-spin text-blue-600" size={22} />
+            ) : progressPercent === 100 ? (
+              <CheckCircle2 className="text-emerald-500" size={22} />
+            ) : (
+              <FileSearch className="text-blue-600" size={22} />
+            )}
+            <div>
+              <h3 className="m-0 text-base font-black text-slate-950">{summary}</h3>
+              <p className="m-0 mt-1 text-sm font-semibold leading-6 text-slate-500">{detail}</p>
+            </div>
+          </div>
+          <Progress percent={progressPercent} showInfo={false} strokeColor="#3267ff" />
         </div>
-        <pre className="result-box">{resultMap[tab]}</pre>
-        <div className="mt-3 flex items-center gap-3">
-          {downloadUrl ? (
-            <Button type="primary" href={downloadUrl} target="_blank">
-              下载生成的 Word 文件
-            </Button>
-          ) : (
-            <Button disabled>等待 Word 生成</Button>
-          )}
-          <span className="text-xs font-semibold text-slate-500">在线编辑器仍由后端返回的 OnlyOffice 配置接入，后续放入编辑器页。</span>
+
+        <div className="flex flex-col justify-center gap-3 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-4">
+          <Button
+            type="primary"
+            icon={<SquarePen size={16} />}
+            disabled={!projectId || progressPercent < 100}
+            onClick={() => {
+              if (projectId) window.location.href = `/bid-editor?projectId=${projectId}`;
+            }}
+          >
+            进入标书编制
+          </Button>
+          <Button
+            disabled={!projectId}
+            onClick={() => {
+              if (projectId) navigate(`/interpretation?projectId=${projectId}`);
+            }}
+          >
+            查看招标解读
+          </Button>
+          <Button
+            icon={<RotateCcw size={16} />}
+            disabled={!file || busy}
+            onClick={() => {
+              if (file) void runWorkflow(file);
+            }}
+          >
+            重新执行流程
+          </Button>
         </div>
       </div>
     </section>
