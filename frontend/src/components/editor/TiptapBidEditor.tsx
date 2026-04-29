@@ -13,6 +13,7 @@ import {
   Undo2,
 } from 'lucide-react';
 import { EditorContent, JSONContent, useEditor } from '@tiptap/react';
+import { mergeAttributes, Node } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import Underline from '@tiptap/extension-underline';
@@ -56,6 +57,32 @@ function splitTableRow(line: string): string[] {
     .split('|')
     .map(cell => cell.trim());
 }
+
+const BidImage = Node.create({
+  name: 'bidImage',
+  group: 'block',
+  atom: true,
+  draggable: true,
+  addAttributes() {
+    return {
+      src: {
+        default: null,
+      },
+      alt: {
+        default: null,
+      },
+      title: {
+        default: null,
+      },
+    };
+  },
+  parseHTML() {
+    return [{ tag: 'img[src]' }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ['img', mergeAttributes(HTMLAttributes, { 'data-bid-image': 'true' })];
+  },
+});
 
 function markdownToHtml(markdown: string): string {
   const lines = (markdown || '').replace(/\r\n/g, '\n').split('\n');
@@ -102,6 +129,14 @@ function markdownToHtml(markdown: string): string {
     if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
       closeParagraph(paragraph);
       html.push('<hr>');
+      i += 1;
+      continue;
+    }
+
+    const image = /^!\[(.*?)\]\((.*?)\)\s*$/.exec(trimmed);
+    if (image) {
+      closeParagraph(paragraph);
+      html.push(`<img data-bid-image="true" src="${escapeHtml(image[2])}" alt="${escapeHtml(image[1] || '标书配图')}" />`);
       i += 1;
       continue;
     }
@@ -179,6 +214,11 @@ function nodeToMarkdown(node: JSONContent): string {
   if (node.type === 'paragraph') {
     return nodeText(node);
   }
+  if (node.type === 'bidImage') {
+    const src = String(node.attrs?.src || '').trim();
+    const alt = String(node.attrs?.alt || '标书配图').trim();
+    return src ? `![${alt}](${src})` : '';
+  }
   if (node.type === 'bulletList') {
     return (node.content || []).map(item => `- ${listItemText(item)}`).join('\n');
   }
@@ -221,6 +261,7 @@ export function TiptapBidEditor({ content, onChange, placeholder }: TiptapBidEdi
       heading: { levels: [1, 2, 3, 4, 5, 6] },
     }),
     Underline,
+    BidImage,
     Placeholder.configure({ placeholder: placeholder || '开始编写标书章节内容...' }),
     Table.configure({ resizable: true }),
     TableRow,

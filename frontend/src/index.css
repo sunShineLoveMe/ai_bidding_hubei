@@ -372,6 +372,11 @@ textarea {
   color: #f59e0b;
 }
 
+.outline-word-pill.failed {
+  background: #fff1f2;
+  color: #ef4444;
+}
+
 .outline-plan-tags {
   min-width: 0;
   display: inline-flex;
@@ -965,6 +970,17 @@ textarea {
 .tiptap-bid-content table th {
   background: #f9fafb;
   font-weight: 800;
+}
+
+.tiptap-bid-content img {
+  display: block;
+  max-width: 86%;
+  max-height: 420px;
+  object-fit: contain;
+  margin: 18px auto 10px;
+  border: 1px solid #d8e0ec;
+  border-radius: 6px;
+  background: #ffffff;
 }
 
 .tiptap-bid-content .selectedCell:after {

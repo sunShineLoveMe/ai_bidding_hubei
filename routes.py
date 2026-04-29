@@ -310,7 +310,17 @@ def _build_section_image_markdown(section: dict, assets: list[dict], used_asset_
             candidates.append((score, asset))
 
     if not candidates:
-        return ""
+        section_text = _section_text(section)
+        fallback_keywords = ["产品", "设备", "施工", "工程", "水库", "泵站", "渠道", "现场", "资质", "证书", "营业执照"]
+        for asset in assets:
+            image_ref = _asset_image_ref(asset)
+            if not image_ref:
+                continue
+            asset_text = _asset_text(asset)
+            if any(keyword in asset_text for keyword in fallback_keywords) or any(keyword in section_text for keyword in fallback_keywords):
+                candidates.append((1, asset))
+        if not candidates:
+            return ""
 
     candidates.sort(key=lambda item: item[0], reverse=True)
     max_images = 2 if any(keyword in _section_text(section) for keyword in ["资质", "证书", "产品", "设备"]) else 1
@@ -384,7 +394,7 @@ def build_project_bid_markdown(project_id: str, focus_section_id: str | None = N
         else:
             chunks.append(_section_markdown_heading(int(section.get("level") or 1), title))
             chunks.append("待补充章节正文。\n\n")
-        if with_images:
+        if with_images and "![" not in content:
             chunks.append(_build_section_image_markdown(section, image_assets, used_asset_ids))
 
     markdown_path.write_text("".join(chunks), encoding="utf-8")
@@ -752,17 +762,41 @@ def stream_interpretation_bid_section(project_id):
 
     def event_stream():
         full_content = f"## {chapter.get('title') or '未命名章节'}\n\n"
+        with_images = bool(chapter.get("withImages"))
         try:
             for event in stream_bid_section(project_id, chapter):
                 event_type = event.pop("type", "message")
                 if event_type == "chunk":
                     full_content += event.get("content", "")
                 if event_type == "done" and chapter.get("id"):
+                    if with_images:
+                        try:
+                            image_assets = [
+                                asset for asset in list_knowledge_assets()
+                                if _asset_image_ref(asset)
+                                and str(asset.get("asset_type") or "").lower() not in {"document", "markdown", "text"}
+                            ]
+                            image_markdown = _build_section_image_markdown(
+                                {**chapter, "content": full_content},
+                                image_assets,
+                                set(),
+                            )
+                            if image_markdown:
+                                full_content += image_markdown
+                                yield "event: chunk\n"
+                                yield f"data: {json.dumps({'content': image_markdown}, ensure_ascii=False)}\n\n"
+                        except Exception:
+                            logging.exception("章节图文配图失败，继续保存纯文本章节: %s", chapter.get("id"))
                     update_bid_section_content(project_id, chapter["id"], full_content, "generated")
                 yield f"event: {event_type}\n"
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as e:
             logging.exception("流式生成章节正文失败: %s", project_id)
+            if chapter.get("id"):
+                try:
+                    update_bid_section_content(project_id, chapter["id"], "", "failed")
+                except Exception:
+                    logging.exception("写入章节失败状态失败: %s", chapter.get("id"))
             yield "event: error\n"
             yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
 

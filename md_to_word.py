@@ -16,6 +16,11 @@ import uuid
 import requests
 from urllib.parse import urlparse, unquote
 
+MARKDOWN_IMAGE_CONNECT_TIMEOUT = 4
+MARKDOWN_IMAGE_READ_TIMEOUT = 8
+MARKDOWN_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+MARKDOWN_IMAGE_MAX_COUNT = int(os.getenv("DOCX_MAX_IMAGES", "24"))
+
 
 def apply_run_font(run, *, east_asia='宋体', latin='Times New Roman', size=None, bold=None):
     run.font.name = latin
@@ -143,34 +148,50 @@ def _image_suffix_from_response(image_ref, response=None):
     return '.png'
 
 
-def _resolve_markdown_image(image_ref):
+def _resolve_markdown_image(image_ref, image_cache=None):
     image_ref = (image_ref or '').strip().strip('"').strip("'")
     if not image_ref:
         return None, False
+    if image_cache is not None and image_ref in image_cache:
+        return image_cache[image_ref]
     if image_ref.startswith(('http://', 'https://')):
-        response = requests.get(image_ref, timeout=30, stream=True)
+        response = requests.get(
+            image_ref,
+            timeout=(MARKDOWN_IMAGE_CONNECT_TIMEOUT, MARKDOWN_IMAGE_READ_TIMEOUT),
+            stream=True,
+        )
         response.raise_for_status()
         suffix = _image_suffix_from_response(image_ref, response)
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp:
+            total = 0
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
+                    total += len(chunk)
+                    if total > MARKDOWN_IMAGE_MAX_BYTES:
+                        raise ValueError(f"图片超过大小限制: {image_ref}")
                     temp.write(chunk)
-            return temp.name, True
+            result = (temp.name, True)
+            if image_cache is not None:
+                image_cache[image_ref] = result
+            return result
 
     local_path = Path(image_ref)
     if not local_path.is_absolute():
         local_path = Path.cwd() / local_path
     if local_path.exists() and local_path.is_file():
-        return str(local_path), False
+        result = (str(local_path), False)
+        if image_cache is not None:
+            image_cache[image_ref] = result
+        return result
     return None, False
 
 
-def process_markdown_image(doc, alt_text, image_ref):
+def process_markdown_image(doc, alt_text, image_ref, image_cache=None):
     """处理 Markdown 图片语法，插入居中图片和中文图注。"""
     image_path = None
     cleanup = False
     try:
-        image_path, cleanup = _resolve_markdown_image(image_ref)
+        image_path, cleanup = _resolve_markdown_image(image_ref, image_cache=image_cache)
         if not image_path:
             return False
         doc.add_picture(image_path, width=Inches(5.8))
@@ -181,12 +202,6 @@ def process_markdown_image(doc, alt_text, image_ref):
     except Exception as e:
         print(f"插入图片失败: {image_ref}, {e}")
         return False
-    finally:
-        if cleanup and image_path and os.path.exists(image_path):
-            try:
-                os.unlink(image_path)
-            except Exception:
-                pass
 
 def set_document_styles(doc):
     """设置文档样式"""
@@ -376,6 +391,8 @@ def convert_md_to_word(md_file):
     # 处理Markdown内容
     lines = md_content.split('\n')
     i = 0
+    image_cache = {}
+    inserted_image_count = 0
     while i < len(lines):
         line = lines[i].strip()
         if re.match(r'^(-{3,}|\*{3,}|_{3,})$', line):
@@ -384,7 +401,9 @@ def convert_md_to_word(md_file):
 
         image_match = re.match(r'^!\[(.*?)\]\((.*?)\)\s*$', line)
         if image_match:
-            process_markdown_image(doc, image_match.group(1), image_match.group(2))
+            if inserted_image_count < MARKDOWN_IMAGE_MAX_COUNT:
+                if process_markdown_image(doc, image_match.group(1), image_match.group(2), image_cache=image_cache):
+                    inserted_image_count += 1
             i += 1
             continue
         
@@ -482,6 +501,12 @@ def convert_md_to_word(md_file):
         print(f"已生成 Word 文档：{saved_path}")
         return Path(saved_path)
     finally:
+        for image_path, cleanup in set(image_cache.values()):
+            if cleanup and image_path and os.path.exists(image_path):
+                try:
+                    os.unlink(image_path)
+                except Exception:
+                    pass
         # 清理残留临时文件（如果存在）
         try:
             if temp_path and temp_path.exists():

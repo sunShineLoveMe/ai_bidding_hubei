@@ -97,7 +97,7 @@ export async function generateBidDocxDownload(
 ): Promise<{ downloadUrl: string; fileName: string }> {
   const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/download-docx`, options || undefined, {
     skipGlobalLoading: true,
-    timeout: 180000,
+    timeout: 600000,
   });
   return response.data;
 }

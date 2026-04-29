@@ -412,19 +412,36 @@ export function BidEditorPage(): JSX.Element {
     return typeof targetWords === 'number' && Number.isFinite(targetWords) ? targetWords : fallbackChapterWords(chapter);
   }
 
-  function chapterWordMeta(chapter: ChapterDraft): { label: string; tooltip: string; generated: boolean } {
+  function isChapterFailed(chapter: ChapterDraft): boolean {
+    const task = batchTasks[chapter.id];
+    if (['generated', 'edited', 'completed'].includes(chapter.status || '')) return false;
+    if (task?.status === 'queued' || task?.status === 'running' || task?.status === 'done') return false;
+    return task?.status === 'failed' || chapter.status === 'failed';
+  }
+
+  function chapterWordMeta(chapter: ChapterDraft): { label: string; tooltip: string; generated: boolean; failed: boolean } {
+    if (isChapterFailed(chapter)) {
+      return {
+        label: '生成失败',
+        tooltip: '本章节正文生成失败，请点击“重写正文”重新生成。',
+        generated: false,
+        failed: true,
+      };
+    }
     const generated = isChapterGenerated(chapter);
     if (generated) {
       return {
         label: `已完成 ${chapterActualWords(chapter)}字`,
         tooltip: `已完成字数：按当前章节正文去除空白后统计。计划目标：${targetChapterWords(chapter)}字。`,
         generated: true,
+        failed: false,
       };
     }
     return {
       label: `目标 ${targetChapterWords(chapter)}字`,
       tooltip: '目标字数：来自章节写作计划；如当前项目尚未保存计划，则按章节标题、层级和用途临时推导。',
       generated: false,
+      failed: false,
     };
   }
 
@@ -452,13 +469,17 @@ export function BidEditorPage(): JSX.Element {
   function chapterStatusClass(chapter: ChapterDraft): string {
     const task = batchTasks[chapter.id];
     if (task?.status === 'running') return 'running';
+    if (chapter.status === 'generating') return 'running';
+    if (isChapterFailed(chapter)) return 'failed';
     if (task?.status === 'done' || isChapterGenerated(chapter)) return 'done';
-    if (task?.status === 'failed') return 'failed';
     if (task?.status === 'stopped') return 'pending';
     return 'pending';
   }
 
   function isChapterGenerated(chapter: ChapterDraft): boolean {
+    if (isChapterFailed(chapter)) return false;
+    const status = chapter.status || '';
+    if (!['generated', 'edited', 'completed'].includes(status)) return false;
     const content = (chapter.content || '').trim();
     return !!content && !content.includes('请在此编写章节内容') && !content.includes('待进一步生成正文');
   }
@@ -915,7 +936,7 @@ export function BidEditorPage(): JSX.Element {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(targetChapter),
+      body: JSON.stringify({ ...targetChapter, withImages }),
       signal: options?.signal,
     });
     if (!response.ok || !response.body) {
@@ -980,9 +1001,14 @@ export function BidEditorPage(): JSX.Element {
       setMode('正文模式');
     }
     setSelectedId(targetChapter.id);
+    setBatchTasks(tasks => {
+      const next = { ...tasks };
+      delete next[targetChapter.id];
+      return next;
+    });
     setSectionStreaming(true);
     setStreamText(`正在生成章节正文：${targetChapter.title || '未命名章节'}`);
-    setChapters(items => items.map(item => item.id === targetChapter.id ? { ...item, content: `## ${targetChapter.title || '未命名章节'}\n\n` } : item));
+    setChapters(items => items.map(item => item.id === targetChapter.id ? { ...item, status: 'generating', content: `## ${targetChapter.title || '未命名章节'}\n\n` } : item));
 
     try {
       await streamSectionContent(targetChapter, {
@@ -991,11 +1017,18 @@ export function BidEditorPage(): JSX.Element {
         },
         onDone: () => {
           setStreamText('章节正文生成完成，可继续人工编辑。');
+          setChapters(items => items.map(item => item.id === targetChapter.id ? { ...item, status: 'generated' } : item));
+          setBatchTasks(tasks => {
+            const next = { ...tasks };
+            delete next[targetChapter.id];
+            return next;
+          });
         },
       });
       message.success('章节正文已生成');
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
+      setChapters(items => items.map(item => item.id === targetChapter.id ? { ...item, status: 'failed', content: '' } : item));
       message.error(reason);
     } finally {
       setSectionStreaming(false);
@@ -1022,7 +1055,7 @@ export function BidEditorPage(): JSX.Element {
       targetWords,
       message: '正在编写',
     });
-    setChapters(items => items.map(item => item.id === chapter.id ? { ...item, content: chapterHeader } : item));
+    setChapters(items => items.map(item => item.id === chapter.id ? { ...item, status: 'generating', content: chapterHeader } : item));
 
     try {
       await streamSectionContent(chapter, {
@@ -1052,6 +1085,7 @@ export function BidEditorPage(): JSX.Element {
             percent: 100,
             message: '已完成',
           });
+          setChapters(items => items.map(item => item.id === chapter.id ? { ...item, status: 'generated' } : item));
         },
       });
     } catch (error) {
@@ -1067,6 +1101,7 @@ export function BidEditorPage(): JSX.Element {
         percent: 100,
         message: error instanceof Error ? error.message : String(error),
       });
+      setChapters(items => items.map(item => item.id === chapter.id ? { ...item, status: 'failed', content: '' } : item));
     } finally {
       batchAbortControllersRef.current.delete(chapter.id);
     }
@@ -1271,7 +1306,7 @@ export function BidEditorPage(): JSX.Element {
                       <span>{chapterDisplayTitle(chapter)}</span>
                     </button>
                     <Tooltip title={wordMeta.tooltip}>
-                      <div className={`outline-word-pill ${wordMeta.generated ? 'done' : 'pending'}`}>
+                      <div className={`outline-word-pill ${wordMeta.failed ? 'failed' : wordMeta.generated ? 'done' : 'pending'}`}>
                         {wordMeta.generated ? <CheckCircle2 size={13} /> : null}
                         <span>{wordMeta.label}</span>
                       </div>
