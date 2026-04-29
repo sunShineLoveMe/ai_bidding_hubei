@@ -14,11 +14,12 @@
 - 标书章节大纲生成，支持多级章节树
 - 合规覆盖检查：要求条款、评分项、风险项与标书章节的覆盖度核查
 - 标书编制工作台：章节树、目录模式、章节正文生成、章节维护
+- 基于 Tiptap 的 AI 章节编辑器，支持标题、列表、表格和 AI 流式内容实时渲染
 - 企业知识库 RAG 检索问答
 - 系统设置：模型参数、企业画像、文档服务、存储路径和备份策略
 - 水利行业种子知识库采集与入库脚本
 - Word 文档生成与下载
-- ONLYOFFICE 终稿编辑集成预留
+- ONLYOFFICE 终稿编辑（可选）
 - Supabase PostgreSQL + pgvector + Storage 数据底座
 
 ## 技术栈
@@ -46,6 +47,7 @@
 - Zustand
 - Axios
 - lucide-react
+- Tiptap / ProseMirror（AI 章节编辑器）
 
 ### 存储与外部服务
 
@@ -54,7 +56,7 @@
 - Supabase pgvector：RAG 向量检索
 - DashScope / OpenAI-compatible LLM：文本生成、Embedding
 - MinerU：复杂 PDF / OCR 解析
-- ONLYOFFICE Docs：终稿在线编辑，可选
+- ONLYOFFICE Docs：终稿在线编辑，可选（需 Docker 部署）
 
 ## 系统架构
 
@@ -73,7 +75,8 @@ flowchart LR
 
     API --> LLM[大语言模型]
     API --> Docx[python-docx 生成 DOCX]
-    FE --> Office[ONLYOFFICE / 在线编辑器]
+    FE --> Tiptap[Tiptap AI 章节编辑器]
+    FE --> Office[ONLYOFFICE / 终稿编辑，可选]
 
     Storage --> Parser
     Parser --> DB
@@ -428,9 +431,22 @@ python main.py
 http://127.0.0.1:3012
 ```
 
-## ONLYOFFICE 可选部署
+## 在线编辑器
 
-如需在线终稿编辑，可本地启动 ONLYOFFICE Document Server：
+### 主编辑器：Tiptap（默认）
+
+标书编制工作台默认使用 Tiptap / ProseMirror 作为 AI 章节编辑器。
+
+特点：
+- 纯前端方案，无需 Docker 部署
+- 内容保存仍采用 Markdown，便于 AI 生成、RAG 引用和 Word 导出
+- AI 生成内容流式实时渲染，无延迟
+- 支持标题、列表、表格、加粗、斜体、下划线等常用标书编辑能力
+- 后续可扩展选中文字润色、续写、改写、资质图片插入和合规提示块
+
+### 终稿编辑：ONLYOFFICE（可选）
+
+如需 Word 格式终稿编辑，可本地启动 ONLYOFFICE Document Server：
 
 ```bash
 docker run -d \
@@ -444,7 +460,7 @@ docker run -d \
 
 - `JWT_SECRET` 必须与 `.env` 中 `ONLYOFFICE_JWT_SECRET` 一致。
 - `APP_PUBLIC_BASE_URL` 必须是 ONLYOFFICE 容器能够访问到的后端地址。
-- 如果仅使用 Word 下载，可以不部署 ONLYOFFICE。
+- 如果仅使用 Tiptap 编辑 + Word 下载，可以不部署 ONLYOFFICE。
 
 ## 项目目录
 
@@ -526,13 +542,16 @@ docker run -d \
 - PDF 解析质量取决于文件类型。扫描版、图片型、复杂表格建议走 MinerU/OCR。
 - 水利行业种子库目前适合作为基础 RAG，不等同于完整行业知识库。
 - 企业资质、人员、业绩、产品、财务等私有资料需要用户自行入库。
-- ONLYOFFICE 为可选终稿编辑能力，不影响 Word 下载主链路。
+- Tiptap 编辑器当前为基础版本，后续可扩展 AI 辅助编辑（续写、润色、改写）和资料引用块。
+- ONLYOFFICE 为可选终稿编辑能力，不影响 Tiptap 编辑 + Word 下载主链路。
 - 当前仍保留部分 ChromaDB 本地兼容代码，后续可逐步收敛到 Supabase pgvector。
 
 ## 路线图
 
 - [ ] 提供完整 `.env.example`
 - [x] 提供 Supabase 补充 SQL：`app_users`、`onlyoffice_documents`
+- [x] 集成 Tiptap AI 章节编辑器，替换 Milkdown 为主编辑方案
+- [ ] Tiptap AI 辅助编辑：选中文字润色、续写、改写
 - [ ] 整理完整 Supabase 初始化 SQL / migration
 - [ ] 增加 OpenAPI 文档
 - [ ] 增加 Docker Compose 一键启动

@@ -21,6 +21,7 @@ from ai_section_writer import stream_bid_section
 from ai_interpreter import generate_ai_interpretation_report
 from compliance_checker import build_compliance_report
 from db_supabase import delete_bid_section, get_bid_file, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_section_content, upsert_bid_section
+from llm_json_utils import strip_llm_json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import shutil
@@ -893,16 +894,8 @@ def pre_analysis_bid():
         except (KeyError, IndexError, TypeError):
             return jsonify({'error': 'API响应格式错误'}), 500
 
-        # 解析JSON响应
-        clean_json = re.sub(r'<think>.*?</think>', '', http_data, flags=re.DOTALL).strip()
-        json_match = re.search(r'```json\n(.*?)\n```', clean_json, re.DOTALL)
-
         try:
-            if json_match:
-                analysis_result = json.loads(json_match.group(1))
-            else:
-                clean_json = clean_json.replace('```json', '').replace('```', '').strip()
-                analysis_result = json.loads(clean_json)
+            analysis_result = strip_llm_json(http_data)
             # 将 pre-analysis 的结果写入临时存储（如果存在对应的 bidding_id）
             try:
                 with _temp_store_lock:
@@ -968,15 +961,7 @@ def chapter_analysis_bid():
              return jsonify({'error': 'API响应格式错误'}), 500
 
 
-        #解析JSON响应
-        clean_json = re.sub(r'<think>.*?</think>', '', http_data, flags=re.DOTALL).strip()
-        json_match = re.search(r'```json\n(.*?)\n```', clean_json, re.DOTALL)
-
-        if json_match:
-            analysis_result = json.loads(json_match.group(1))
-        else:
-            clean_json = clean_json.replace('```json', '').replace('```', '').strip()
-            analysis_result = json.loads(clean_json)
+        analysis_result = strip_llm_json(http_data)
         return jsonify(analysis_result)
 
     except Exception as e:
@@ -1059,23 +1044,13 @@ def chapter_design():
         except (KeyError, IndexError, TypeError):
             return jsonify({'error': 'API响应格式错误'}), 500
 
-        # 解析 JSON 响应并清理控制字符
-        clean_json = re.sub(r'<think>.*?</think>', '', http_data, flags=re.DOTALL).strip()
-        json_match = re.search(r'```json\s*(.*?)\s*```', clean_json, re.DOTALL)
-        json_text = json_match.group(1) if json_match else clean_json
-
-        # 清理非法控制字符
-        json_text = re.sub(r'[\x00-\x1F\x7F]', '', json_text)
-        json_text = json_text.replace('\r', '').replace('\t', '').strip()
-        json_text = json_text.rstrip(", \n")
-
         try:
-            analysis_result = json.loads(json_text)
+            analysis_result = strip_llm_json(http_data)
         except json.JSONDecodeError as e:
             print("------ JSON Parse Error ------")
             print(f"Error: {e}")
             print("Raw text snippet:")
-            print(json_text[:2000])
+            print(http_data[:2000])
             return jsonify({'error': f'JSON解析失败: {str(e)}'}), 500
 
         return jsonify(analysis_result)

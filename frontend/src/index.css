@@ -736,6 +736,173 @@ textarea {
   padding: 0;
 }
 
+.editor-workspace .editor-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+/* Tiptap AI Editor */
+.tiptap-bid-editor {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #eef1f6;
+}
+
+.tiptap-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  border-bottom: 1px solid #dde4ef;
+  background: #ffffff;
+  padding: 8px 16px;
+  overflow-x: auto;
+}
+
+.tiptap-toolbar .ant-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+}
+
+.tiptap-style-select {
+  width: 112px;
+  flex: 0 0 auto;
+}
+
+.tiptap-page-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 32px 28px;
+}
+
+.tiptap-page {
+  width: min(920px, 100%);
+  min-height: 980px;
+  margin: 0 auto;
+  background: #ffffff;
+  border: 1px solid #dde4ef;
+  box-shadow: 0 18px 46px rgba(15, 23, 42, 0.08);
+  padding: 54px 72px;
+}
+
+.tiptap-bid-content {
+  min-height: 860px;
+  outline: none;
+  color: #111827;
+}
+
+.tiptap-bid-content p {
+  margin: 0 0 12px;
+  font-size: 15px;
+  line-height: 1.9;
+  color: #1f2937;
+}
+
+.tiptap-bid-content h1,
+.tiptap-bid-content h2,
+.tiptap-bid-content h3 {
+  color: #111827;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.tiptap-bid-content h1 {
+  margin: 0 0 22px;
+  font-size: 26px;
+}
+
+.tiptap-bid-content h2 {
+  margin: 24px 0 14px;
+  font-size: 20px;
+}
+
+.tiptap-bid-content h3 {
+  margin: 20px 0 12px;
+  font-size: 16px;
+}
+
+.tiptap-bid-content ul,
+.tiptap-bid-content ol {
+  padding-left: 1.5em;
+  margin: 8px 0 14px;
+}
+
+.tiptap-bid-content li {
+  margin: 4px 0;
+  line-height: 1.8;
+}
+
+.tiptap-bid-content blockquote {
+  border-left: 3px solid #3b82f6;
+  padding-left: 16px;
+  margin: 12px 0;
+  color: #4b5563;
+}
+
+.tiptap-bid-content code {
+  background: #f3f4f6;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.tiptap-bid-content pre {
+  background: #1f2937;
+  color: #e5e7eb;
+  padding: 16px;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.tiptap-bid-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0;
+  table-layout: fixed;
+}
+
+.tiptap-bid-content table th,
+.tiptap-bid-content table td {
+  border: 1px solid #d1d5db;
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: top;
+  min-width: 90px;
+}
+
+.tiptap-bid-content table th {
+  background: #f9fafb;
+  font-weight: 800;
+}
+
+.tiptap-bid-content .selectedCell:after {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  background: rgba(47, 102, 255, 0.12);
+}
+
+.tiptap-bid-content p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: #94a3b8;
+  pointer-events: none;
+}
+
 .onlyoffice-embed-shell {
   position: relative;
   width: 100%;

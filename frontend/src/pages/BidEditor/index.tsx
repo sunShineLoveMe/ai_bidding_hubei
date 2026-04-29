@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Alert, Button, Dropdown, Empty, Input, Modal, Segmented, Space, Spin, Tag, message } from 'antd';
 import type { MenuProps } from 'antd';
 import {
@@ -23,6 +23,7 @@ import {
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { deleteBidSection, getInterpretation, getLatestInterpretation, reorderBidSections, saveBidSection } from '../../api/bidProject';
 import { BrandMark } from '../../components/common/BrandMark';
+import { TiptapBidEditor } from '../../components/editor/TiptapBidEditor';
 import type { BidOutline, BidOutlineChapter, BidSection, InterpretationResponse } from '../../types/interpretation';
 
 type EditorMode = '正文模式' | '目录模式';
@@ -150,17 +151,12 @@ export function BidEditorPage(): JSX.Element {
   const [sectionStreaming, setSectionStreaming] = useState(false);
   const [streamText, setStreamText] = useState('');
   const [streamingChildPlaceholders, setStreamingChildPlaceholders] = useState<StreamingChildPlaceholder[]>([]);
-  const [onlyOfficeLoading, setOnlyOfficeLoading] = useState(false);
-  const [onlyOfficeError, setOnlyOfficeError] = useState('');
   const [downloadUrl, setDownloadUrl] = useState('');
-  const [onlyOfficeFrameUrl, setOnlyOfficeFrameUrl] = useState('');
   const streamStartedRef = useRef(false);
-  const onlyOfficeDocumentRef = useRef('');
 
   async function load(): Promise<void> {
     setLoading(true);
     setDownloadUrl('');
-    setOnlyOfficeError('');
     try {
       const projectId = searchParams.get('projectId');
       const result = projectId ? await getInterpretation(projectId) : await getLatestInterpretation();
@@ -194,56 +190,20 @@ export function BidEditorPage(): JSX.Element {
     setSelectedId(current => current || drafts[0]?.id || '');
   }
 
-  function openOnlyOfficeInPanel(sectionId?: string): void {
-    const projectId = data?.project?.id || searchParams.get('projectId') || '';
-    if (!projectId) {
-      message.warning('缺少项目编号，无法打开 ONLYOFFICE。');
-      return;
-    }
-    const params = new URLSearchParams({
-      projectId,
-      embed: '1',
-      t: String(Date.now()),
-    });
-    if (sectionId && isUuid(sectionId)) {
-      params.set('sectionId', sectionId);
-    }
-    setOnlyOfficeLoading(true);
-    setOnlyOfficeError('');
-    setDownloadUrl('');
-    setOnlyOfficeFrameUrl(`/onlyoffice-editor?${params.toString()}`);
-  }
-
   useEffect(() => {
     void load();
     // searchParams is stable enough for this route-level load; it changes only when projectId changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
-  useEffect(() => {
-    const projectId = data?.project?.id || searchParams.get('projectId') || '';
-    if (mode !== '正文模式' || loading || streaming || !projectId || !chapters.length) {
-      return;
+  // 处理编辑器内容变化
+  const handleEditorChange = useCallback((markdown: string) => {
+    if (selectedId) {
+      setChapters(items => items.map(item =>
+        item.id === selectedId ? { ...item, content: markdown } : item
+      ));
     }
-    const documentKey = `${projectId}:${isUuid(selectedId) ? selectedId : 'full'}`;
-    if (onlyOfficeDocumentRef.current === documentKey) {
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      onlyOfficeDocumentRef.current = documentKey;
-      openOnlyOfficeInPanel(isUuid(selectedId) ? selectedId : undefined);
-    }, 350);
-    return () => window.clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.project?.id, loading, streaming, chapters.length, selectedId, mode, searchParams]);
-
-  useEffect(() => {
-    if (mode === '目录模式') {
-      setOnlyOfficeLoading(false);
-      setOnlyOfficeError('');
-      setOnlyOfficeFrameUrl('');
-    }
-  }, [mode]);
+  }, [selectedId]);
 
   function startOutlineStream(projectId: string): void {
     if (streamStartedRef.current) {
@@ -599,9 +559,7 @@ export function BidEditorPage(): JSX.Element {
       setChapters(items => normalizeChapterHierarchy(items.map(item => item.id === selectedChapter.id ? { ...item, ...saved } : item)));
       setSelectedId(saved.id);
       message.success('章节已保存到 Supabase');
-      onlyOfficeDocumentRef.current = '';
       setDownloadUrl('');
-      openOnlyOfficeInPanel(selectedChapter.id);
     } catch (error) {
       message.error(error instanceof Error ? error.message : String(error));
     }
@@ -1100,12 +1058,9 @@ export function BidEditorPage(): JSX.Element {
         <section className="editor-title-row">
           <div>
             <h1>{selectedChapter?.title || '未选择章节'}</h1>
-            <p>{streaming ? streamText : selectedChapter?.purpose || '右侧已嵌入 ONLYOFFICE，可直接进行 DOCX 格式定稿。'}</p>
+            <p>{streaming ? streamText : selectedChapter?.purpose || '使用 AI 编辑器编写章节正文，支持标题、列表、表格和 Markdown 存储。'}</p>
           </div>
           <Space>
-            <Tag color={onlyOfficeError ? 'red' : onlyOfficeLoading ? 'processing' : 'gold'}>
-              {onlyOfficeError ? '终稿加载失败' : onlyOfficeLoading ? '终稿加载中' : 'ONLYOFFICE 在线终稿'}
-            </Tag>
             {streaming ? <Tag color="processing">大纲生成中</Tag> : null}
             {sectionStreaming ? <Tag color="processing">正文生成中</Tag> : null}
             <Tag color="blue">{selectedChapter?.priority || 'medium'}</Tag>
@@ -1115,38 +1070,23 @@ export function BidEditorPage(): JSX.Element {
         </section>
 
         <section className="editor-workspace">
-          <div className="onlyoffice-embed-shell">
-            {onlyOfficeLoading || (!onlyOfficeError && !onlyOfficeFrameUrl) ? (
-              <div className="onlyoffice-embed-loading">
-                <BrandMark size={88} className="loading-brand" />
-                <Spin size="large" />
-                <span>{streaming ? '章节大纲生成完成后将自动加载 ONLYOFFICE...' : '正在准备 ONLYOFFICE 编辑区...'}</span>
-              </div>
-            ) : null}
-            {onlyOfficeError ? (
-              <Alert
-                type="warning"
-                showIcon
-                message="ONLYOFFICE 加载失败"
-                description={`${onlyOfficeError}。请确认 ONLYOFFICE 服务和后端 APP_PUBLIC_BASE_URL 配置可用。`}
-              />
-            ) : null}
-            {onlyOfficeFrameUrl && !onlyOfficeError ? (
-              <iframe
-                key={onlyOfficeFrameUrl}
-                className="onlyoffice-embed-frame"
-                src={onlyOfficeFrameUrl}
-                title="ONLYOFFICE 在线终稿"
-                onLoad={() => setOnlyOfficeLoading(false)}
-              />
-            ) : null}
-          </div>
+          {selectedChapter ? (
+            <TiptapBidEditor
+              content={selectedChapter.content || ''}
+              onChange={handleEditorChange}
+              placeholder="开始编写标书章节内容..."
+            />
+          ) : (
+            <div className="editor-empty">
+              <Empty description="请选择一个章节开始编辑" />
+            </div>
+          )}
         </section>
 
         <footer className="editor-statusbar">
           <span>当前章节：{selectedChapter?.title || '-'}</span>
           <span>来源页码：{selectedChapter?.source_pages?.join('、') || '需复核'}</span>
-          <span>{onlyOfficeFrameUrl ? 'ONLYOFFICE 在线终稿' : '终稿准备中'}</span>
+          <span>Tiptap AI 编辑器</span>
         </footer>
       </main>
     </div>
