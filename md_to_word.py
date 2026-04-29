@@ -206,6 +206,8 @@ def set_document_format(doc, project_name):
     # 设置页面边距
     sections = doc.sections
     for section in sections:
+        section.page_width = Cm(21)
+        section.page_height = Cm(29.7)
         section.top_margin = Cm(2.54)
         section.bottom_margin = Cm(2.54)
         section.left_margin = Cm(3.18)
@@ -309,6 +311,9 @@ def convert_md_to_word(md_file):
     i = 0
     while i < len(lines):
         line = lines[i].strip()
+        if re.match(r'^(-{3,}|\*{3,}|_{3,})$', line):
+            i += 1
+            continue
         
         # 处理表格
         if line.startswith('|'):
@@ -332,7 +337,7 @@ def convert_md_to_word(md_file):
                     apply_run_font(run, east_asia='黑体', size=22, bold=True)
             else:
                 # 其他级别的标题
-                p = doc.add_heading(text, level=level-1)
+                p = doc.add_heading(text, level=min(level - 1, 4))
                 if level == 2:
                     p.alignment = WD_ALIGN_PARAGRAPH.LEFT
                 for run in p.runs:

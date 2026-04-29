@@ -84,6 +84,14 @@ export async function generateOnlyOfficeConfig(projectId: string, sectionId?: st
   return response.data;
 }
 
+export async function generateBidDocxDownload(projectId: string, sectionId?: string): Promise<{ downloadUrl: string; fileName: string }> {
+  const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/download-docx`, sectionId ? { sectionId } : undefined, {
+    skipGlobalLoading: true,
+    timeout: 180000,
+  });
+  return response.data;
+}
+
 export async function preAnalyzeBid(biddingId: number): Promise<unknown> {
   const response = await apiClient.post('/api/bidding/pre-analysis_bid', { biddingId });
   return response.data;

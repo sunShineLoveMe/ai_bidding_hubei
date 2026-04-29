@@ -274,7 +274,7 @@ textarea {
 
 .outline-row {
   display: grid;
-  grid-template-columns: 24px minmax(280px, 1fr) 132px minmax(480px, auto);
+  grid-template-columns: 24px minmax(280px, 1fr) 132px minmax(260px, 420px) minmax(240px, auto);
   align-items: center;
   gap: 10px;
   min-height: 44px;
@@ -357,6 +357,33 @@ textarea {
   color: #f59e0b;
 }
 
+.outline-plan-tags {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.outline-plan-tags .ant-tag {
+  margin-inline-end: 0;
+  font-weight: 800;
+}
+
+.outline-task-progress {
+  width: 128px;
+  min-width: 128px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.outline-task-progress .ant-progress {
+  flex: 1;
+  min-width: 48px;
+}
+
 .outline-row-actions {
   justify-self: end;
   display: inline-flex;
@@ -378,7 +405,7 @@ textarea {
 
 .outline-footer {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: 1fr auto auto 1fr;
   align-items: center;
   gap: 18px;
   border-top: 1px solid #e2e8f0;
@@ -504,19 +531,40 @@ textarea {
   width: 8px;
   height: 8px;
   border-radius: 99px;
-  background: #60a5fa;
-}
-
-.chapter-status.high {
-  background: #22c55e;
-}
-
-.chapter-status.medium {
   background: #f59e0b;
 }
 
-.chapter-status.low {
+.chapter-status.done {
+  background: #22c55e;
+}
+
+.chapter-status.running {
+  background: #22c55e;
+  box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.55);
+  animation: chapter-running-pulse 1s ease-in-out infinite;
+}
+
+.chapter-status.failed {
+  background: #ef4444;
+}
+
+.chapter-status.pending {
   background: #94a3b8;
+}
+
+@keyframes chapter-running-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.55);
+    transform: scale(1);
+  }
+  55% {
+    box-shadow: 0 0 0 7px rgba(34, 197, 94, 0);
+    transform: scale(1.16);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+    transform: scale(1);
+  }
 }
 
 .chapter-title {
@@ -813,7 +861,10 @@ textarea {
 
 .tiptap-bid-content h1,
 .tiptap-bid-content h2,
-.tiptap-bid-content h3 {
+.tiptap-bid-content h3,
+.tiptap-bid-content h4,
+.tiptap-bid-content h5,
+.tiptap-bid-content h6 {
   color: #111827;
   font-weight: 800;
   line-height: 1.45;
@@ -832,6 +883,19 @@ textarea {
 .tiptap-bid-content h3 {
   margin: 20px 0 12px;
   font-size: 16px;
+}
+
+.tiptap-bid-content h4,
+.tiptap-bid-content h5,
+.tiptap-bid-content h6 {
+  margin: 18px 0 10px;
+  font-size: 15px;
+}
+
+.tiptap-bid-content hr {
+  border: 0;
+  border-top: 1px solid #d8e0ec;
+  margin: 18px 0;
 }
 
 .tiptap-bid-content ul,

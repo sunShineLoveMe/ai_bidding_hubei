@@ -770,6 +770,44 @@ def generate_onlyoffice_config(project_id):
     except Exception as e:
         logging.exception("生成 ONLYOFFICE 配置失败: %s", project_id)
         return jsonify({'error': f'生成 ONLYOFFICE 配置失败: {str(e)}'}), 500
+
+
+@bp.route('/interpretations/<project_id>/download-docx', methods=['POST'])
+def download_bid_docx(project_id):
+    """基于 bid_sections 生成符合国内标书排版习惯的 DOCX 下载文件。"""
+    try:
+        uuid.UUID(project_id)
+    except ValueError:
+        return jsonify({'error': 'project_id 不是合法 UUID。'}), 400
+
+    try:
+        request_payload = request.get_json(silent=True) or {}
+        section_id = request_payload.get("sectionId")
+        if section_id:
+            try:
+                uuid.UUID(section_id)
+            except ValueError:
+                section_id = None
+
+        markdown_path, project_name = build_project_bid_markdown(project_id, section_id)
+        generated_docx_path = convert_md_to_word(markdown_path)
+        if not generated_docx_path or not Path(generated_docx_path).exists():
+            raise RuntimeError("DOCX 生成失败，未找到输出文件。")
+
+        generated_docx_path = Path(generated_docx_path)
+        gen_folder = Path(current_app.config.get('GENERATED_FOLDER', 'outputs')).resolve()
+        relative_path = generated_docx_path.resolve().relative_to(gen_folder)
+        return jsonify({
+            'message': 'DOCX 已生成。',
+            'projectId': project_id,
+            'sectionId': section_id,
+            'projectName': project_name,
+            'fileName': generated_docx_path.name,
+            'downloadUrl': f"/api/outputs/{relative_path.as_posix()}",
+        }), 201
+    except Exception as e:
+        logging.exception("生成 DOCX 下载文件失败: %s", project_id)
+        return jsonify({'error': f'生成 DOCX 下载文件失败: {str(e)}'}), 500
      
 @bp.route('/save-callback', methods=['POST'])
 def save_callback():

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { Alert, Button, Dropdown, Empty, Input, Modal, Segmented, Space, Spin, Tag, Tooltip, message } from 'antd';
+import { Alert, Button, Dropdown, Empty, Input, Modal, Progress, Segmented, Space, Spin, Tag, Tooltip, message } from 'antd';
 import type { MenuProps } from 'antd';
 import {
   BookOpen,
@@ -10,9 +10,9 @@ import {
   FileText,
   MoreVertical,
   Plus,
-  Save,
   Search,
   Sparkles,
+  Square,
   ArrowUp,
   ArrowDown,
   Eye,
@@ -20,10 +20,10 @@ import {
   SlidersHorizontal,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { deleteBidSection, getInterpretation, getLatestInterpretation, reorderBidSections, saveBidSection } from '../../api/bidProject';
+import { deleteBidSection, generateBidDocxDownload, getInterpretation, getLatestInterpretation, reorderBidSections, saveBidSection } from '../../api/bidProject';
 import { BrandMark } from '../../components/common/BrandMark';
 import { TiptapBidEditor } from '../../components/editor/TiptapBidEditor';
-import type { BidOutline, BidOutlineChapter, BidSection, InterpretationResponse } from '../../types/interpretation';
+import type { BidOutline, BidOutlineChapter, BidSection, ChapterWritingPlan, InterpretationResponse } from '../../types/interpretation';
 
 type EditorMode = '正文模式' | '目录模式';
 
@@ -42,6 +42,18 @@ type StreamingChildPlaceholder = {
   parentOrder: string;
   title: string;
 };
+
+type BatchTaskStatus = 'queued' | 'running' | 'done' | 'failed' | 'stopped';
+
+type BatchTask = {
+  status: BatchTaskStatus;
+  percent: number;
+  chars: number;
+  targetWords: number;
+  message?: string;
+};
+
+const BATCH_SECTION_CONCURRENCY = 3;
 
 function asBidOutline(meta: Record<string, unknown> | undefined | null): BidOutline | null {
   return (meta?.bid_outline || null) as BidOutline | null;
@@ -151,7 +163,12 @@ export function BidEditorPage(): JSX.Element {
   const [streamText, setStreamText] = useState('');
   const [streamingChildPlaceholders, setStreamingChildPlaceholders] = useState<StreamingChildPlaceholder[]>([]);
   const [downloadUrl, setDownloadUrl] = useState('');
+  const [downloadGenerating, setDownloadGenerating] = useState<'full' | 'section' | null>(null);
+  const [batchGenerating, setBatchGenerating] = useState(false);
+  const [batchTasks, setBatchTasks] = useState<Record<string, BatchTask>>({});
   const streamStartedRef = useRef(false);
+  const batchCancelRequestedRef = useRef(false);
+  const batchAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
 
   async function load(): Promise<void> {
     setLoading(true);
@@ -332,7 +349,7 @@ export function BidEditorPage(): JSX.Element {
   const matchText = keyword ? `${filteredChapters.length} / ${chapters.length}` : `0 / ${chapters.length}`;
   const actualChars = chapters.reduce((sum, chapter) => sum + (isChapterGenerated(chapter) ? chapterActualWords(chapter) : 0), 0);
   const estimatedTotalChars = chapters.reduce((sum, chapter) => (
-    sum + (isChapterGenerated(chapter) ? chapterActualWords(chapter) : estimateChapterWords(chapter))
+    sum + (isChapterGenerated(chapter) ? chapterActualWords(chapter) : targetChapterWords(chapter))
   ), 0);
   const estimatedPages = Math.max(1, Math.ceil(estimatedTotalChars / 700));
   const generatedCount = chapters.filter(isChapterGenerated).length;
@@ -342,8 +359,36 @@ export function BidEditorPage(): JSX.Element {
     return (chapter.content || '').replace(/\s+/g, '').length;
   }
 
-  function estimateChapterWords(chapter: ChapterDraft): number {
+  function fallbackChapterWords(chapter: ChapterDraft): number {
     return Math.max(420, Math.min(1200, Math.round(((chapter.level || 1) <= 2 ? 680 : 520) / 10) * 10));
+  }
+
+  function chapterWritingPlan(chapter: ChapterDraft): ChapterWritingPlan {
+    const metadata = chapter.metadata || {};
+    const plan = metadata.writing_plan;
+    if (plan && typeof plan === 'object') {
+      return plan as ChapterWritingPlan;
+    }
+    const title = `${chapter.title || ''} ${chapter.purpose || ''}`;
+    const isTechnical = /技术|施工组织|实施方案|质量|安全|环保|进度|发包人要求|承包人建议/.test(title);
+    const isQualification = /资格|资质|证书|营业执照|人员|项目经理|技术负责人/.test(title);
+    const isFormat = /投标函|格式|授权|保证金|声明|承诺|偏离/.test(title);
+    const targetWords = isTechnical ? ((chapter.level || 1) <= 2 ? 6200 : 2800) : isQualification ? 2600 : isFormat ? 900 : fallbackChapterWords(chapter);
+    return {
+      importance: chapter.priority || (isTechnical || isQualification ? 'high' : 'medium'),
+      target_words: targetWords,
+      suggested_pages: `${Math.max(1, Math.round(targetWords / 900))}-${Math.max(1, Math.round(targetWords / 650))}`,
+      needs_table: /报价|清单|人员|业绩|偏离|进度|参数|评分/.test(title),
+      needs_image: isTechnical || /设备|产品|工艺|流程|布置/.test(title),
+      needs_qualification: isQualification,
+      needs_case: /业绩|案例|类似项目|施工组织|技术|质量|安全/.test(title),
+      generation_mode: targetWords >= 3500 ? 'multi_pass' : 'single_pass',
+    };
+  }
+
+  function targetChapterWords(chapter: ChapterDraft): number {
+    const targetWords = chapterWritingPlan(chapter).target_words;
+    return typeof targetWords === 'number' && Number.isFinite(targetWords) ? targetWords : fallbackChapterWords(chapter);
   }
 
   function chapterWordMeta(chapter: ChapterDraft): { label: string; tooltip: string; generated: boolean } {
@@ -351,15 +396,45 @@ export function BidEditorPage(): JSX.Element {
     if (generated) {
       return {
         label: `已完成 ${chapterActualWords(chapter)}字`,
-        tooltip: '已完成字数：按当前章节正文去除空白后统计。',
+        tooltip: `已完成字数：按当前章节正文去除空白后统计。计划目标：${targetChapterWords(chapter)}字。`,
         generated: true,
       };
     }
     return {
-      label: `预计 ${estimateChapterWords(chapter)}字`,
-      tooltip: '预计字数：按章节层级给出的初始写作目标，生成正文后会变为已完成字数。',
+      label: `目标 ${targetChapterWords(chapter)}字`,
+      tooltip: '目标字数：来自章节写作计划；如当前项目尚未保存计划，则按章节标题、层级和用途临时推导。',
       generated: false,
     };
+  }
+
+  function chapterImportanceLabel(plan: ChapterWritingPlan): string {
+    if (plan.importance === 'high') return '核心章节';
+    if (plan.importance === 'low') return '普通章节';
+    return '重点章节';
+  }
+
+  function batchStatusLabel(status: BatchTaskStatus): string {
+    if (status === 'queued') return '排队中';
+    if (status === 'running') return '正在编写';
+    if (status === 'done') return '已完成';
+    if (status === 'stopped') return '已停止';
+    return '失败';
+  }
+
+  function batchStatusColor(status: BatchTaskStatus): 'default' | 'processing' | 'success' | 'error' {
+    if (status === 'running') return 'processing';
+    if (status === 'done') return 'success';
+    if (status === 'failed') return 'error';
+    return 'default';
+  }
+
+  function chapterStatusClass(chapter: ChapterDraft): string {
+    const task = batchTasks[chapter.id];
+    if (task?.status === 'running') return 'running';
+    if (task?.status === 'done' || isChapterGenerated(chapter)) return 'done';
+    if (task?.status === 'failed') return 'failed';
+    if (task?.status === 'stopped') return 'pending';
+    return 'pending';
   }
 
   function isChapterGenerated(chapter: ChapterDraft): boolean {
@@ -583,8 +658,41 @@ export function BidEditorPage(): JSX.Element {
     }
   }
 
+  async function downloadDocx(sectionId?: string): Promise<void> {
+    if (!data?.project?.id) {
+      message.warning('当前项目不存在，无法下载');
+      return;
+    }
+    setDownloadGenerating(sectionId ? 'section' : 'full');
+    try {
+      const result = await generateBidDocxDownload(data.project.id, sectionId);
+      setDownloadUrl(result.downloadUrl);
+      window.open(result.downloadUrl, '_blank');
+      message.success(sectionId ? '本章 DOCX 已生成' : '全文 DOCX 已生成');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDownloadGenerating(null);
+    }
+  }
+
   function appendChapterContent(chapterId: string, value: string): void {
     setChapters(items => items.map(item => item.id === chapterId ? { ...item, content: `${item.content}${value}` } : item));
+  }
+
+  function updateBatchTask(chapterId: string, patch: Partial<BatchTask>): void {
+    setBatchTasks(tasks => ({
+      ...tasks,
+      [chapterId]: {
+        ...(tasks[chapterId] || {
+          status: 'queued',
+          percent: 0,
+          chars: 0,
+          targetWords: 800,
+        }),
+        ...patch,
+      },
+    }));
   }
 
   function renameChapter(chapter: ChapterDraft): void {
@@ -736,9 +844,83 @@ export function BidEditorPage(): JSX.Element {
     }
   }
 
+  async function streamSectionContent(
+    targetChapter: ChapterDraft,
+    options?: {
+      onStart?: (title?: string) => void;
+      onChunk?: (content: string, accumulatedContent: string) => void;
+      onDone?: () => void;
+      signal?: AbortSignal;
+    },
+  ): Promise<void> {
+    if (!data?.project?.id) {
+      throw new Error('当前项目不存在，无法生成章节正文');
+    }
+
+    const response = await fetch(`/api/bidding/interpretations/${data.project.id}/sections/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(targetChapter),
+      signal: options?.signal,
+    });
+    if (!response.ok || !response.body) {
+      throw new Error(`章节正文生成失败：${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let accumulatedContent = `## ${targetChapter.title || '未命名章节'}\n\n`;
+
+    function handleFrame(frame: string): void {
+      const eventLine = frame.split('\n').find(line => line.startsWith('event:'));
+      const dataLine = frame.split('\n').find(line => line.startsWith('data:'));
+      const eventName = eventLine?.replace('event:', '').trim() || 'message';
+      const dataText = dataLine?.replace('data:', '').trim();
+      if (!dataText) {
+        return;
+      }
+      const payload = JSON.parse(dataText) as { content?: string; error?: string; title?: string };
+      if (eventName === 'start') {
+        options?.onStart?.(payload.title);
+      }
+      if (eventName === 'chunk' && payload.content) {
+        accumulatedContent += payload.content;
+        appendChapterContent(targetChapter.id, payload.content);
+        options?.onChunk?.(payload.content, accumulatedContent);
+      }
+      if (eventName === 'done') {
+        options?.onDone?.();
+      }
+      if (eventName === 'error') {
+        throw new Error(payload.error || '章节正文生成失败');
+      }
+    }
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split('\n\n');
+      buffer = frames.pop() || '';
+      frames.forEach(handleFrame);
+    }
+    if (buffer.trim()) {
+      handleFrame(buffer);
+    }
+  }
+
   async function generateCurrentSection(targetChapter = selectedChapter, options?: { preserveMode?: boolean }): Promise<void> {
     if (!data?.project?.id || !targetChapter) {
       message.warning('请先选择需要生成正文的章节');
+      return;
+    }
+    if (batchGenerating) {
+      message.warning('全文批量编写正在执行，请等待完成后再单章重写');
       return;
     }
     if (!options?.preserveMode) {
@@ -750,57 +932,14 @@ export function BidEditorPage(): JSX.Element {
     setChapters(items => items.map(item => item.id === targetChapter.id ? { ...item, content: `## ${targetChapter.title || '未命名章节'}\n\n` } : item));
 
     try {
-      const response = await fetch(`/api/bidding/interpretations/${data.project.id}/sections/stream`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
+      await streamSectionContent(targetChapter, {
+        onStart: title => {
+          setStreamText(`AI 正在撰写：${title || targetChapter.title || '当前章节'}`);
         },
-        body: JSON.stringify(targetChapter),
-      });
-      if (!response.ok || !response.body) {
-        throw new Error(`章节正文生成失败：${response.status}`);
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      function handleFrame(frame: string): void {
-        const eventLine = frame.split('\n').find(line => line.startsWith('event:'));
-        const dataLine = frame.split('\n').find(line => line.startsWith('data:'));
-        const eventName = eventLine?.replace('event:', '').trim() || 'message';
-        const dataText = dataLine?.replace('data:', '').trim();
-        if (!dataText) {
-          return;
-        }
-        const payload = JSON.parse(dataText) as { content?: string; error?: string; title?: string };
-        if (eventName === 'start') {
-          setStreamText(`AI 正在撰写：${payload.title || targetChapter.title || '当前章节'}`);
-        }
-        if (eventName === 'chunk' && payload.content) {
-          appendChapterContent(targetChapter.id, payload.content);
-        }
-        if (eventName === 'done') {
+        onDone: () => {
           setStreamText('章节正文生成完成，可继续人工编辑。');
-        }
-        if (eventName === 'error') {
-          throw new Error(payload.error || '章节正文生成失败');
-        }
-      }
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
-        buffer += decoder.decode(value, { stream: true });
-        const frames = buffer.split('\n\n');
-        buffer = frames.pop() || '';
-        frames.forEach(handleFrame);
-      }
-      if (buffer.trim()) {
-        handleFrame(buffer);
-      }
+        },
+      });
       message.success('章节正文已生成');
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -808,6 +947,146 @@ export function BidEditorPage(): JSX.Element {
     } finally {
       setSectionStreaming(false);
     }
+  }
+
+  async function generateSectionForBatch(chapter: ChapterDraft): Promise<void> {
+    if (batchCancelRequestedRef.current) {
+      updateBatchTask(chapter.id, {
+        status: 'stopped',
+        percent: 0,
+        message: '已停止',
+      });
+      return;
+    }
+    const targetWords = targetChapterWords(chapter);
+    const chapterHeader = `## ${chapter.title || '未命名章节'}\n\n`;
+    const controller = new AbortController();
+    batchAbortControllersRef.current.set(chapter.id, controller);
+    updateBatchTask(chapter.id, {
+      status: 'running',
+      percent: 2,
+      chars: 0,
+      targetWords,
+      message: '正在编写',
+    });
+    setChapters(items => items.map(item => item.id === chapter.id ? { ...item, content: chapterHeader } : item));
+
+    try {
+      await streamSectionContent(chapter, {
+        signal: controller.signal,
+        onChunk: (_content, accumulatedContent) => {
+          if (batchCancelRequestedRef.current) {
+            return;
+          }
+          const chars = accumulatedContent.replace(/\s+/g, '').length;
+          updateBatchTask(chapter.id, {
+            status: 'running',
+            chars,
+            percent: Math.min(98, Math.max(3, Math.round((chars / Math.max(targetWords, 1)) * 100))),
+            message: '正在编写',
+          });
+        },
+        onDone: () => {
+          if (batchCancelRequestedRef.current) {
+            updateBatchTask(chapter.id, {
+              status: 'stopped',
+              message: '已停止',
+            });
+            return;
+          }
+          updateBatchTask(chapter.id, {
+            status: 'done',
+            percent: 100,
+            message: '已完成',
+          });
+        },
+      });
+    } catch (error) {
+      if (controller.signal.aborted || batchCancelRequestedRef.current) {
+        updateBatchTask(chapter.id, {
+          status: 'stopped',
+          message: '已停止',
+        });
+        return;
+      }
+      updateBatchTask(chapter.id, {
+        status: 'failed',
+        percent: 100,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      batchAbortControllersRef.current.delete(chapter.id);
+    }
+  }
+
+  async function generateAllSectionsInBatch(): Promise<void> {
+    if (!data?.project?.id || !chapters.length) {
+      message.warning('当前没有可编写的章节');
+      return;
+    }
+    if (sectionStreaming || batchGenerating) {
+      message.warning('已有章节生成任务正在执行');
+      return;
+    }
+
+    const targets = chapters.filter(chapter => !isChapterGenerated(chapter));
+    if (!targets.length) {
+      message.info('当前章节都已生成，如需重写请点击单章重写正文');
+      return;
+    }
+
+    setMode('目录模式');
+    setBatchGenerating(true);
+    batchCancelRequestedRef.current = false;
+    batchAbortControllersRef.current.clear();
+    setDownloadUrl('');
+    setBatchTasks(Object.fromEntries(targets.map(chapter => [chapter.id, {
+      status: 'queued' as BatchTaskStatus,
+      percent: 0,
+      chars: 0,
+      targetWords: targetChapterWords(chapter),
+      message: '排队中',
+    }])));
+
+    let cursor = 0;
+    async function worker(): Promise<void> {
+      while (cursor < targets.length && !batchCancelRequestedRef.current) {
+        const current = targets[cursor];
+        cursor += 1;
+        await generateSectionForBatch(current);
+      }
+    }
+
+    try {
+      await Promise.all(Array.from({ length: Math.min(BATCH_SECTION_CONCURRENCY, targets.length) }, () => worker()));
+      if (batchCancelRequestedRef.current) {
+        setBatchTasks(tasks => Object.fromEntries(Object.entries(tasks).map(([id, task]) => [
+          id,
+          task.status === 'queued' || task.status === 'running'
+            ? { ...task, status: 'stopped' as BatchTaskStatus, message: '已停止' }
+            : task,
+        ])));
+        message.info('全文批量编写已停止');
+      } else {
+        message.success('全文批量编写任务已完成');
+      }
+    } finally {
+      setBatchGenerating(false);
+    }
+  }
+
+  function stopBatchGeneration(): void {
+    if (!batchGenerating) {
+      return;
+    }
+    batchCancelRequestedRef.current = true;
+    batchAbortControllersRef.current.forEach(controller => controller.abort());
+    setBatchTasks(tasks => Object.fromEntries(Object.entries(tasks).map(([id, task]) => [
+      id,
+      task.status === 'queued' || task.status === 'running'
+        ? { ...task, status: 'stopped' as BatchTaskStatus, message: '已停止' }
+        : task,
+    ])));
   }
 
   if (loading) {
@@ -844,9 +1123,9 @@ export function BidEditorPage(): JSX.Element {
             <Button
               type="primary"
               icon={<Download size={17} />}
-              href={downloadUrl || undefined}
-              target={downloadUrl ? '_blank' : undefined}
-              disabled={!downloadUrl}
+              loading={downloadGenerating === 'full'}
+              disabled={!chapters.length || !!downloadGenerating}
+              onClick={() => void downloadDocx()}
             >
               标书下载
             </Button>
@@ -869,6 +1148,7 @@ export function BidEditorPage(): JSX.Element {
               <span>已完成字数：{actualChars}</span>
               <span>预计总字数：{estimatedTotalChars}（约{estimatedPages}页）</span>
               <span>进度：{generationProgress}%</span>
+              {batchGenerating ? <span>批量并发：{BATCH_SECTION_CONCURRENCY} 路</span> : null}
             </div>
           </section>
 
@@ -895,6 +1175,8 @@ export function BidEditorPage(): JSX.Element {
             <div className="outline-table">
               {visibleChapters.map(chapter => {
                 const wordMeta = chapterWordMeta(chapter);
+                const plan = chapterWritingPlan(chapter);
+                const task = batchTasks[chapter.id];
                 const active = chapter.id === selectedChapter?.id;
                 return (
                   <div
@@ -925,8 +1207,29 @@ export function BidEditorPage(): JSX.Element {
                         <span>{wordMeta.label}</span>
                       </div>
                     </Tooltip>
+                    <div className="outline-plan-tags">
+                      {task ? (
+                        <div className="outline-task-progress">
+                          <Tag color={batchStatusColor(task.status)}>{batchStatusLabel(task.status)}</Tag>
+                          <Progress percent={task.percent} size="small" showInfo={false} status={task.status === 'failed' ? 'exception' : undefined} />
+                        </div>
+                      ) : null}
+                      <Tag color={plan.importance === 'high' ? 'red' : plan.importance === 'low' ? 'default' : 'blue'}>{chapterImportanceLabel(plan)}</Tag>
+                      <Tag color="geekblue">建议 {plan.suggested_pages || '1-2'} 页</Tag>
+                      {plan.needs_table ? <Tag color="cyan">需表格</Tag> : null}
+                      {plan.needs_image ? <Tag color="purple">需图文</Tag> : null}
+                      {plan.needs_qualification ? <Tag color="orange">需资质</Tag> : null}
+                      {plan.needs_case ? <Tag color="green">需业绩</Tag> : null}
+                    </div>
                     <div className="outline-row-actions">
-                      <Button type="link" size="small" icon={<Sparkles size={14} />} loading={sectionStreaming && selectedId === chapter.id} onClick={() => void generateCurrentSection(chapter, { preserveMode: true })}>
+                      <Button
+                        type="link"
+                        size="small"
+                        icon={<Sparkles size={14} />}
+                        loading={(sectionStreaming && selectedId === chapter.id) || task?.status === 'running'}
+                        disabled={batchGenerating}
+                        onClick={() => void generateCurrentSection(chapter)}
+                      >
                         {wordMeta.generated ? '重写正文' : '生成正文'}
                       </Button>
                       <Button type="link" size="small" icon={<Eye size={14} />} onClick={() => previewChapter(chapter)}>预览</Button>
@@ -955,16 +1258,22 @@ export function BidEditorPage(): JSX.Element {
               type="primary"
               size="large"
               icon={<Sparkles size={18} />}
+              loading={batchGenerating}
               disabled={!chapters.length || sectionStreaming}
-              onClick={() => {
-                const next = chapters.find(chapter => !isChapterGenerated(chapter)) || chapters[0];
-                if (next) {
-                  void generateCurrentSection(next, { preserveMode: true });
-                }
-              }}
+              onClick={() => void generateAllSectionsInBatch()}
             >
               一键编写全文
             </Button>
+            {batchGenerating ? (
+              <Button
+                danger
+                size="large"
+                icon={<Square size={16} />}
+                onClick={stopBatchGeneration}
+              >
+                停止生成
+              </Button>
+            ) : null}
             <span />
           </footer>
         </main>
@@ -982,15 +1291,15 @@ export function BidEditorPage(): JSX.Element {
         <Space size={10} wrap>
           <Button onClick={() => navigate('/interpretation')}>返回解读</Button>
           <Button icon={<BookOpen size={16} />}>关联资料</Button>
-          <Button
-            type="primary"
-            icon={<Download size={17} />}
-            href={downloadUrl || undefined}
-            target={downloadUrl ? '_blank' : undefined}
-            disabled={!downloadUrl}
-          >
-            标书下载
-          </Button>
+            <Button
+              type="primary"
+              icon={<Download size={17} />}
+              loading={downloadGenerating === 'full'}
+              disabled={!chapters.length || !!downloadGenerating}
+              onClick={() => void downloadDocx()}
+            >
+              标书下载
+            </Button>
         </Space>
       </header>
 
@@ -1051,7 +1360,9 @@ export function BidEditorPage(): JSX.Element {
                   <span className="chapter-toggle" onClick={event => { event.stopPropagation(); toggleChapter(chapter.id); }}>
                     {chapter.expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                   </span>
-                  <span className={`chapter-status ${chapter.priority || 'medium'}`} />
+                  <Tooltip title={batchTasks[chapter.id]?.status ? batchStatusLabel(batchTasks[chapter.id].status) : isChapterGenerated(chapter) ? '已完成' : '未完成'}>
+                    <span className={`chapter-status ${chapterStatusClass(chapter)}`} />
+                  </Tooltip>
                   <span className="chapter-title">{chapter.order ? `${chapter.order}. ` : ''}{chapter.title}</span>
                   <Dropdown
                     trigger={['click']}
@@ -1104,9 +1415,15 @@ export function BidEditorPage(): JSX.Element {
           <Space>
             {streaming ? <Tag color="processing">大纲生成中</Tag> : null}
             {sectionStreaming ? <Tag color="processing">正文生成中</Tag> : null}
-            <Tag color="blue">{selectedChapter?.priority || 'medium'}</Tag>
             <Button icon={<Sparkles size={16} />} loading={sectionStreaming} disabled={!selectedChapter || streaming} onClick={() => void generateCurrentSection()}>生成本章正文</Button>
-            <Button type="primary" icon={<Save size={16} />} onClick={() => void saveDraft()}>保存</Button>
+            <Button
+              icon={<Download size={16} />}
+              loading={downloadGenerating === 'section'}
+              disabled={!selectedChapter || !!downloadGenerating}
+              onClick={() => selectedChapter && void downloadDocx(selectedChapter.id)}
+            >
+              下载本章
+            </Button>
           </Space>
         </section>
 

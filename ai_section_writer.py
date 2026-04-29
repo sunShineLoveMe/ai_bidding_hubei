@@ -2,6 +2,7 @@ import re
 from typing import Any, Iterator
 
 from app_config import build_enterprise_context
+from bid_writing_plan import ensure_chapter_writing_plan
 from db_supabase import get_project_interpretation
 from qwen_client import call_dashscope_api, stream_dashscope_api
 
@@ -37,6 +38,7 @@ def build_section_prompt(project_id: str, chapter: dict[str, Any]) -> str:
 
     title = _text(chapter.get("title")) or "未命名章节"
     purpose = _text(chapter.get("purpose"))
+    writing_plan = ensure_chapter_writing_plan(chapter)
     context = {
         "project_name": project_meta.get("project_name") or project.get("project_name"),
         "tender_no": project_meta.get("tender_no") or project.get("project_no"),
@@ -50,6 +52,7 @@ def build_section_prompt(project_id: str, chapter: dict[str, Any]) -> str:
         "required_materials": chapter.get("required_materials") or [],
         "source_pages": chapter.get("source_pages") or [],
         "writing_notes": chapter.get("writing_notes") or [],
+        "writing_plan": writing_plan,
     }
 
     enterprise_context = build_enterprise_context()
@@ -67,7 +70,7 @@ def build_section_prompt(project_id: str, chapter: dict[str, Any]) -> str:
 3. 不要编造企业没有提供的证书编号、人员姓名、合同金额、具体日期；遇到缺失信息，用“【待补充：...】”占位。
 4. 必须回应章节目标、响应要点、评分项和风险点。
 5. 如适合表格，用 Markdown 表格输出。
-6. 正文字数控制在 800-1500 字。
+6. 正文字数按章节写作计划控制。本次生成尽量覆盖完整章节；若目标字数较长，可先输出结构完整的第一版，并保留可续写的小标题。
 
 项目信息：
 - 项目名称：{context["project_name"] or "需人工复核"}
@@ -78,6 +81,17 @@ def build_section_prompt(project_id: str, chapter: dict[str, Any]) -> str:
 - 标题：{title}
 - 编写目标：{purpose or "需人工复核"}
 - 来源页码：{context["source_pages"] or "需人工复核"}
+
+章节写作计划：
+- 重要性：{writing_plan.get("importance") or "medium"}
+- 目标字数：{writing_plan.get("target_words") or "需人工复核"} 字
+- 建议篇幅：{writing_plan.get("suggested_pages") or "需人工复核"} 页
+- 生成方式：{writing_plan.get("generation_mode") or "single_pass"}
+- 是否需要表格：{"是" if writing_plan.get("needs_table") else "否"}
+- 是否需要图片/流程图：{"是" if writing_plan.get("needs_image") else "否"}
+- 是否需要资质材料：{"是" if writing_plan.get("needs_qualification") else "否"}
+- 是否需要业绩支撑：{"是" if writing_plan.get("needs_case") else "否"}
+- 写作策略：{writing_plan.get("strategy") or "需人工复核"}
 
 响应要点：
 {_compact_list(context["response_points"])}

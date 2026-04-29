@@ -8,6 +8,7 @@ from typing import Any, Iterator
 from db_supabase import get_project_interpretation, get_supabase_client, replace_bid_sections_from_outline
 from llm_json_utils import strip_llm_json
 from qwen_client import call_dashscope_api
+from bid_writing_plan import build_chapter_writing_plan
 
 
 def _compact_items(items: list[dict[str, Any]], fields: list[str], limit: int) -> list[dict[str, Any]]:
@@ -53,6 +54,11 @@ def _normalize_outline_chapters(chapters: list[dict[str, Any]]) -> list[dict[str
             row["source_pages"] = row.get("source_pages") or []
             row["required_materials"] = row.get("required_materials") or []
             row["writing_notes"] = row.get("writing_notes") or []
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            row["metadata"] = {
+                **metadata,
+                "writing_plan": metadata.get("writing_plan") or build_chapter_writing_plan(row),
+            }
             normalized.append(row)
             if isinstance(children, list) and children:
                 visit(children, min(level + 1, 4), str(order))

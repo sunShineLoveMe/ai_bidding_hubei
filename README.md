@@ -444,6 +444,33 @@ http://127.0.0.1:3012
 - 支持标题、列表、表格、加粗、斜体、下划线等常用标书编辑能力
 - 后续可扩展选中文字润色、续写、改写、资质图片插入和合规提示块
 
+## 章节写作计划
+
+标书章节不会只按目录层级固定生成固定字数。系统会在章节大纲生成阶段为每个 `bid_sections` 章节写入 `metadata.writing_plan`，用于指导目录模式展示和章节正文生成。
+
+当前写作计划字段包括：
+
+| 字段 | 说明 |
+| --- | --- |
+| `importance` | 章节重要性：`high` / `medium` / `low` |
+| `target_words` | 目标字数，用于指导正文生成篇幅 |
+| `min_words` / `max_words` | 建议字数区间 |
+| `suggested_pages` | 建议页数区间，按标书常见排版估算 |
+| `needs_table` | 是否建议插入表格 |
+| `needs_image` | 是否建议插入图片、流程图或示意图 |
+| `needs_qualification` | 是否需要资质、证书、营业执照等材料支撑 |
+| `needs_case` | 是否需要类似项目业绩或案例支撑 |
+| `generation_mode` | `single_pass` 或 `multi_pass`，长章节后续可分段续写 |
+| `strategy` | 章节写作策略，参与正文生成 Prompt |
+
+目录模式中：
+
+- `目标 xxx字` 表示写作计划给出的目标篇幅。
+- `已完成 xxx字` 表示当前章节正文去除空白后的实际字数。
+- 核心章节、建议页数、需表格、需图文、需资质、需业绩等标签均来自写作计划。
+
+如果旧数据没有 `metadata.writing_plan`，前端和后端会根据章节标题、层级、评分项、风险项和材料要求临时推导一份计划，避免历史项目无法生成正文。
+
 ### 终稿编辑：ONLYOFFICE（可选）
 
 如需 Word 格式终稿编辑，可本地启动 ONLYOFFICE Document Server：
@@ -551,6 +578,8 @@ docker run -d \
 - [ ] 提供完整 `.env.example`
 - [x] 提供 Supabase 补充 SQL：`app_users`、`onlyoffice_documents`
 - [x] 集成 Tiptap AI 章节编辑器，替换 Milkdown 为主编辑方案
+- [x] 增加章节写作计划：目标字数、建议页数、章节重要性和材料支撑策略
+- [x] 优化标书目录生成交互：单章重写跳转正文编辑区，一键编写全文保留目录模式并显示批量进度
 - [ ] Tiptap AI 辅助编辑：选中文字润色、续写、改写
 - [ ] 整理完整 Supabase 初始化 SQL / migration
 - [ ] 增加 OpenAPI 文档

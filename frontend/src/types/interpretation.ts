@@ -54,6 +54,20 @@ export interface BidOutlineChapter {
   metadata?: Record<string, unknown>;
 }
 
+export interface ChapterWritingPlan {
+  importance?: 'high' | 'medium' | 'low' | string;
+  min_words?: number;
+  max_words?: number;
+  target_words?: number;
+  suggested_pages?: string;
+  needs_table?: boolean;
+  needs_image?: boolean;
+  needs_qualification?: boolean;
+  needs_case?: boolean;
+  generation_mode?: 'single_pass' | 'multi_pass' | string;
+  strategy?: string;
+}
+
 export interface BidSection extends BidOutlineChapter {
   id: string;
   project_id: string;

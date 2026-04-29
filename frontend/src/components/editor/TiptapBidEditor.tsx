@@ -99,7 +99,14 @@ function markdownToHtml(markdown: string): string {
       continue;
     }
 
-    const heading = /^(#{1,3})\s+(.+)$/.exec(trimmed);
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      closeParagraph(paragraph);
+      html.push('<hr>');
+      i += 1;
+      continue;
+    }
+
+    const heading = /^(#{1,6})\s+(.+)$/.exec(trimmed);
     if (heading) {
       closeParagraph(paragraph);
       html.push(`<h${heading[1].length}>${renderInline(heading[2])}</h${heading[1].length}>`);
@@ -163,8 +170,11 @@ function listItemText(node: JSONContent): string {
 
 function nodeToMarkdown(node: JSONContent): string {
   if (node.type === 'heading') {
-    const level = Math.min(Number(node.attrs?.level || 2), 3);
+    const level = Math.min(Number(node.attrs?.level || 2), 6);
     return `${'#'.repeat(level)} ${nodeText(node)}`;
+  }
+  if (node.type === 'horizontalRule') {
+    return '---';
   }
   if (node.type === 'paragraph') {
     return nodeText(node);
@@ -208,7 +218,7 @@ export function TiptapBidEditor({ content, onChange, placeholder }: TiptapBidEdi
   const lastEmittedContent = useRef(content || '');
   const extensions = useMemo(() => [
     StarterKit.configure({
-      heading: { levels: [1, 2, 3] },
+      heading: { levels: [1, 2, 3, 4, 5, 6] },
     }),
     Underline,
     Placeholder.configure({ placeholder: placeholder || '开始编写标书章节内容...' }),
