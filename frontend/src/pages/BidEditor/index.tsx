@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { Alert, Button, Dropdown, Empty, Input, Modal, Segmented, Space, Spin, Tag, message } from 'antd';
+import { Alert, Button, Dropdown, Empty, Input, Modal, Segmented, Space, Spin, Tag, Tooltip, message } from 'antd';
 import type { MenuProps } from 'antd';
 import {
   BookOpen,
@@ -15,7 +15,6 @@ import {
   Sparkles,
   ArrowUp,
   ArrowDown,
-  Settings,
   Eye,
   Trash2,
   SlidersHorizontal,
@@ -331,17 +330,36 @@ export function BidEditorPage(): JSX.Element {
     [filteredChapters],
   );
   const matchText = keyword ? `${filteredChapters.length} / ${chapters.length}` : `0 / ${chapters.length}`;
-  const totalChars = chapters.reduce((sum, chapter) => sum + chapter.content.length, 0);
-  const estimatedPages = Math.max(1, Math.ceil(totalChars / 700));
-  const generatedCount = chapters.filter(chapter => (chapter.content || '').trim() && !chapter.content.includes('请在此编写章节内容')).length;
+  const actualChars = chapters.reduce((sum, chapter) => sum + (isChapterGenerated(chapter) ? chapterActualWords(chapter) : 0), 0);
+  const estimatedTotalChars = chapters.reduce((sum, chapter) => (
+    sum + (isChapterGenerated(chapter) ? chapterActualWords(chapter) : estimateChapterWords(chapter))
+  ), 0);
+  const estimatedPages = Math.max(1, Math.ceil(estimatedTotalChars / 700));
+  const generatedCount = chapters.filter(isChapterGenerated).length;
   const generationProgress = chapters.length ? Math.round((generatedCount / chapters.length) * 10000) / 100 : 0;
 
-  function chapterWordLabel(chapter: ChapterDraft): string {
-    const content = (chapter.content || '').trim();
-    if (!content || content.includes('请在此编写章节内容') || content.includes('待进一步生成正文')) {
-      return `预计${Math.max(420, Math.min(1200, Math.round(((chapter.level || 1) <= 2 ? 680 : 520) / 10) * 10))}字`;
+  function chapterActualWords(chapter: ChapterDraft): number {
+    return (chapter.content || '').replace(/\s+/g, '').length;
+  }
+
+  function estimateChapterWords(chapter: ChapterDraft): number {
+    return Math.max(420, Math.min(1200, Math.round(((chapter.level || 1) <= 2 ? 680 : 520) / 10) * 10));
+  }
+
+  function chapterWordMeta(chapter: ChapterDraft): { label: string; tooltip: string; generated: boolean } {
+    const generated = isChapterGenerated(chapter);
+    if (generated) {
+      return {
+        label: `已完成 ${chapterActualWords(chapter)}字`,
+        tooltip: '已完成字数：按当前章节正文去除空白后统计。',
+        generated: true,
+      };
     }
-    return `${content.length}字`;
+    return {
+      label: `预计 ${estimateChapterWords(chapter)}字`,
+      tooltip: '预计字数：按章节层级给出的初始写作目标，生成正文后会变为已完成字数。',
+      generated: false,
+    };
   }
 
   function isChapterGenerated(chapter: ChapterDraft): boolean {
@@ -681,6 +699,18 @@ export function BidEditorPage(): JSX.Element {
     ];
   }
 
+  function outlineMoreMenuItems(chapter: ChapterDraft): MenuProps['items'] {
+    return [
+      { key: 'custom', label: '自定义编写' },
+      { key: 'add', label: '新增子章节', icon: <Plus size={14} /> },
+      { key: 'rename', label: '修改标题' },
+      { key: 'move-up', label: '上移章节', icon: <ArrowUp size={14} />, disabled: !canMoveChapter(chapter, 'up') },
+      { key: 'move-down', label: '下移章节', icon: <ArrowDown size={14} />, disabled: !canMoveChapter(chapter, 'down') },
+      { type: 'divider' },
+      { key: 'delete', label: '删除章节', icon: <Trash2 size={14} />, danger: true },
+    ];
+  }
+
   function handleChapterMenu(key: string, chapter: ChapterDraft): void {
     setSelectedId(chapter.id);
     if (key === 'write') {
@@ -836,7 +866,8 @@ export function BidEditorPage(): JSX.Element {
             <div className="outline-summary">
               <span>总章节：{chapters.length}</span>
               <span>已生成：{generatedCount}</span>
-              <span>总字数：{totalChars}（约{estimatedPages}页）</span>
+              <span>已完成字数：{actualChars}</span>
+              <span>预计总字数：{estimatedTotalChars}（约{estimatedPages}页）</span>
               <span>进度：{generationProgress}%</span>
             </div>
           </section>
@@ -863,7 +894,7 @@ export function BidEditorPage(): JSX.Element {
 
             <div className="outline-table">
               {visibleChapters.map(chapter => {
-                const generated = isChapterGenerated(chapter);
+                const wordMeta = chapterWordMeta(chapter);
                 const active = chapter.id === selectedChapter?.id;
                 return (
                   <div
@@ -888,16 +919,26 @@ export function BidEditorPage(): JSX.Element {
                     >
                       <span>{chapter.order ? `${chapter.order}. ` : ''}{chapter.title}</span>
                     </button>
-                    <div className={`outline-word-pill ${generated ? 'done' : 'pending'}`}>
-                      {generated ? <CheckCircle2 size={13} /> : null}
-                      <span>{chapterWordLabel(chapter)}</span>
-                    </div>
+                    <Tooltip title={wordMeta.tooltip}>
+                      <div className={`outline-word-pill ${wordMeta.generated ? 'done' : 'pending'}`}>
+                        {wordMeta.generated ? <CheckCircle2 size={13} /> : null}
+                        <span>{wordMeta.label}</span>
+                      </div>
+                    </Tooltip>
                     <div className="outline-row-actions">
-                      <Button type="link" size="small" icon={<Settings size={14} />}>章节设置</Button>
-                      <Button type="link" size="small" icon={<Plus size={14} />} onClick={() => void addChapter({ parent: chapter })}>新增章节</Button>
-                      <Button type="link" size="small" icon={<Sparkles size={14} />} loading={sectionStreaming && selectedId === chapter.id} onClick={() => void generateCurrentSection(chapter, { preserveMode: true })}>快速编写</Button>
+                      <Button type="link" size="small" icon={<Sparkles size={14} />} loading={sectionStreaming && selectedId === chapter.id} onClick={() => void generateCurrentSection(chapter, { preserveMode: true })}>
+                        {wordMeta.generated ? '重写正文' : '生成正文'}
+                      </Button>
                       <Button type="link" size="small" icon={<Eye size={14} />} onClick={() => previewChapter(chapter)}>预览</Button>
-                      <Button type="link" size="small" danger icon={<Trash2 size={14} />} onClick={() => deleteChapter(chapter)}>删除</Button>
+                      <Dropdown
+                        trigger={['click']}
+                        menu={{
+                          items: outlineMoreMenuItems(chapter),
+                          onClick: info => handleChapterMenu(info.key, chapter),
+                        }}
+                      >
+                        <Button type="link" size="small" icon={<MoreVertical size={14} />}>更多</Button>
+                      </Dropdown>
                     </div>
                   </div>
                 );
@@ -1049,7 +1090,7 @@ export function BidEditorPage(): JSX.Element {
         </div>
         <footer className="chapter-stats">
           <span>总章节：{chapters.length}</span>
-          <span>总字数：{totalChars}</span>
+          <span>已完成字数：{actualChars}</span>
           <span>约{estimatedPages}页</span>
         </footer>
       </aside>

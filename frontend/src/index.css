@@ -339,7 +339,7 @@ textarea {
   align-items: center;
   justify-content: center;
   gap: 5px;
-  min-width: 86px;
+  min-width: 118px;
   height: 24px;
   border-radius: 99px;
   padding: 0 10px;
@@ -361,7 +361,7 @@ textarea {
   justify-self: end;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   opacity: 0;
   transition: 0.16s ease;
 }
@@ -373,6 +373,7 @@ textarea {
 
 .outline-row-actions .ant-btn {
   font-weight: 850;
+  padding-inline: 4px;
 }
 
 .outline-footer {
