@@ -15,6 +15,9 @@ interface KnowledgeAsset {
   asset_type: string;
   public_url?: string;
   source_url?: string;
+  file_name?: string;
+  mime_type?: string;
+  storage_path?: string;
   license?: string;
   attribution?: string;
   applicable_sections?: string[];
@@ -50,6 +53,14 @@ function statusLabel(asset: KnowledgeAsset): string {
   return '待核验';
 }
 
+function assetFileUrl(asset: KnowledgeAsset): string {
+  return `/api/knowledge/assets/${asset.id}/file`;
+}
+
+function isImageAsset(asset: KnowledgeAsset): boolean {
+  return (asset.mime_type || '').startsWith('image/');
+}
+
 const statusColor: Record<string, string> = {
   有效: 'green',
   临期: 'orange',
@@ -63,6 +74,7 @@ export function QualificationBasePage(): JSX.Element {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [assetFile, setAssetFile] = useState<File | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
   const [detail, setDetail] = useState<KnowledgeAsset | null>(null);
 
   const fetchAssets = async () => {
@@ -152,6 +164,7 @@ export function QualificationBasePage(): JSX.Element {
       message.success('资信资料已保存并接入检索');
       form.resetFields();
       setAssetFile(null);
+      setFormOpen(false);
       await fetchAssets();
     } catch (error: any) {
       if (error?.errorFields) return;
@@ -169,7 +182,8 @@ export function QualificationBasePage(): JSX.Element {
         actions={
           <Upload showUploadList={false} beforeUpload={(file) => {
             setAssetFile(file);
-            message.success('已选择文件，请在右侧补充证照信息后保存');
+            setFormOpen(true);
+            message.success('已选择文件，请补充证照信息后保存');
             return false;
           }}>
             <Button type="primary" icon={<UploadCloud size={16} />}>上传资信文件</Button>
@@ -184,24 +198,41 @@ export function QualificationBasePage(): JSX.Element {
           { title: '待核验资料', value: assets.filter(asset => asset.status !== 'indexed').length, desc: '需人工复核', icon: AlertTriangle, colorClass: 'bg-red-50 text-red-500' },
         ]}
       />
-      <div className="grid min-h-0 grid-cols-[250px_1fr_340px] gap-4">
+      <div className="grid min-h-0 grid-cols-[250px_minmax(0,1fr)] gap-4">
         <CategoryList title="资信分类" items={categories} activeName={activeCategory} onChange={setActiveCategory} />
-        <section className="panel-card h-full">
-          <h2 className="panel-title">资信文件列表</h2>
+        <section className="panel-card flex h-full min-h-0 flex-col overflow-hidden">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="panel-title mb-0">资信文件列表</h2>
+            <Button type="primary" icon={<UploadCloud size={16} />} onClick={() => setFormOpen(true)}>新增资信资料</Button>
+          </div>
           <Table
             rowKey="id"
             size="small"
-            pagination={false}
+            pagination={{ pageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 50], showTotal: total => `共 ${total} 条` }}
             columns={columns}
             dataSource={dataSource}
             loading={loading}
             className="compact-table"
+            tableLayout="fixed"
+            scroll={{ y: 'calc(100vh - 430px)' }}
             locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无资信文件，请上传真实证照材料" /> }}
           />
         </section>
-        <section className="panel-card h-full overflow-auto">
-          <h2 className="panel-title">证照信息维护</h2>
-          <Form form={form} layout="vertical" size="small" className="compact-form">
+      </div>
+
+      <Modal
+        title="证照信息维护"
+        open={formOpen}
+        onCancel={() => setFormOpen(false)}
+        width={920}
+        destroyOnClose={false}
+        footer={[
+          <Button key="cancel" onClick={() => setFormOpen(false)}>取消</Button>,
+          <Button key="save" type="primary" loading={saving} onClick={saveQualificationAsset}>保存资信信息</Button>,
+        ]}
+      >
+        <Form form={form} layout="vertical" size="middle" className="compact-form">
+          <div className="grid gap-x-5 md:grid-cols-2">
             <Form.Item label="资信名称" name="title" rules={[{ required: true, message: '请输入资信名称' }]}>
               <Input placeholder="例如：水利水电施工总承包资质证书" />
             </Form.Item>
@@ -214,6 +245,7 @@ export function QualificationBasePage(): JSX.Element {
             <Form.Item label="发证/出具机构" name="issuer">
               <Input placeholder="请输入机构名称，可填写脱敏机构" />
             </Form.Item>
+          </div>
             <Form.Item label="适用投标场景" name="applicable_sections">
               <Select mode="multiple" placeholder="选择场景" options={['资格审查资料', '商务响应文件', '企业概况', '发包人提供的资料', '项目业绩'].map(value => ({ label: value, value }))} />
             </Form.Item>
@@ -226,6 +258,7 @@ export function QualificationBasePage(): JSX.Element {
             <Form.Item label="图片/附件文件" required>
               <Upload
                 maxCount={1}
+                fileList={assetFile ? [{ uid: 'asset-file', name: assetFile.name, status: 'done' }] : []}
                 beforeUpload={(file) => {
                   setAssetFile(file);
                   return false;
@@ -245,16 +278,29 @@ export function QualificationBasePage(): JSX.Element {
             <Form.Item label="使用备注" name="usage_note">
               <Input placeholder="例如：正式投标前需替换为企业真实证照扫描件" />
             </Form.Item>
-            <Button block type="primary" loading={saving} onClick={saveQualificationAsset}>保存资信信息</Button>
-          </Form>
-        </section>
-      </div>
+        </Form>
+      </Modal>
 
       <Modal title="资信文件详情" open={Boolean(detail)} onCancel={() => setDetail(null)} footer={<Button onClick={() => setDetail(null)}>关闭</Button>} width={860}>
         {detail ? (
           <div className="grid gap-4 md:grid-cols-[260px_1fr]">
             <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-              {detail.public_url ? <Image src={detail.public_url} alt={detail.title} className="rounded-lg object-contain" /> : <Empty description="无图片" />}
+              {isImageAsset(detail) ? (
+                <Image
+                  src={assetFileUrl(detail)}
+                  alt={detail.title}
+                  className="rounded-lg object-contain"
+                  fallback="/assets/brand-logo.png"
+                />
+              ) : detail.storage_path || detail.public_url ? (
+                <div className="flex h-full min-h-48 flex-col items-center justify-center gap-3 text-center">
+                  <FileBadge className="text-blue-500" size={42} />
+                  <div className="text-sm font-bold text-slate-600">{detail.file_name || detail.title}</div>
+                  <Button href={assetFileUrl(detail)} target="_blank">打开附件</Button>
+                </div>
+              ) : (
+                <Empty description="无附件" />
+              )}
             </div>
             <Descriptions size="small" bordered column={1}>
               <Descriptions.Item label="文件名称">{detail.title}</Descriptions.Item>

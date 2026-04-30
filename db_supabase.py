@@ -635,6 +635,27 @@ def get_knowledge_asset_detail(asset_id: str) -> dict[str, Any] | None:
     return rows[0] if rows else None
 
 
+def download_knowledge_asset_file(asset_id: str) -> tuple[dict[str, Any], bytes] | None:
+    asset = get_knowledge_asset_detail(asset_id)
+    if not asset:
+        return None
+
+    bucket = asset.get("storage_bucket")
+    object_path = asset.get("storage_path")
+    if not bucket or not object_path:
+        return None
+
+    client = get_supabase_client()
+    content = client.storage.from_(bucket).download(object_path)
+    if isinstance(content, bytes):
+        data = content
+    elif hasattr(content, "content"):
+        data = content.content
+    else:
+        data = bytes(content)
+    return asset, data
+
+
 def _knowledge_asset_bucket() -> str:
     return os.getenv("SUPABASE_STORAGE_KNOWLEDGE_ASSET_BUCKET") or os.getenv("SUPABASE_STORAGE_KNOWLEDGE_BUCKET") or "knowledge-assets"
 

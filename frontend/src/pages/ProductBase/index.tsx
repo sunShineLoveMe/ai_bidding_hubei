@@ -15,6 +15,9 @@ interface KnowledgeAsset {
   asset_type: string;
   public_url?: string;
   source_url?: string;
+  file_name?: string;
+  mime_type?: string;
+  storage_path?: string;
   license?: string;
   attribution?: string;
   applicable_sections?: string[];
@@ -47,6 +50,14 @@ function versionLabel(asset: KnowledgeAsset): string {
   return asset.is_synthetic ? '脱敏样例' : '公开素材';
 }
 
+function assetFileUrl(asset: KnowledgeAsset): string {
+  return `/api/knowledge/assets/${asset.id}/file`;
+}
+
+function isImageAsset(asset: KnowledgeAsset): boolean {
+  return (asset.mime_type || '').startsWith('image/');
+}
+
 export function ProductBasePage(): JSX.Element {
   const [form] = Form.useForm();
   const [activeCategory, setActiveCategory] = useState('全部产品');
@@ -54,6 +65,7 @@ export function ProductBasePage(): JSX.Element {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [assetFile, setAssetFile] = useState<File | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
   const [detail, setDetail] = useState<KnowledgeAsset | null>(null);
 
   const fetchAssets = async () => {
@@ -151,6 +163,7 @@ export function ProductBasePage(): JSX.Element {
       message.success('产品资料已保存并接入检索');
       form.resetFields();
       setAssetFile(null);
+      setFormOpen(false);
       await fetchAssets();
     } catch (error: any) {
       if (error?.errorFields) return;
@@ -167,10 +180,15 @@ export function ProductBasePage(): JSX.Element {
         description="沉淀产品参数、制造能力、适用场景、案例资料和服务能力，为技术响应和商务材料生成提供标准素材。"
         actions={
           <>
-            <Button onClick={() => form.resetFields()}>新增产品</Button>
+            <Button onClick={() => {
+              form.resetFields();
+              setAssetFile(null);
+              setFormOpen(true);
+            }}>新增产品</Button>
             <Upload showUploadList={false} beforeUpload={(file) => {
               setAssetFile(file);
-              message.success('已选择文件，请在右侧补充产品信息后保存');
+              setFormOpen(true);
+              message.success('已选择文件，请补充产品信息后保存');
               return false;
             }}>
               <Button type="primary" icon={<UploadCloud size={16} />}>上传产品资料</Button>
@@ -186,24 +204,41 @@ export function ProductBasePage(): JSX.Element {
           { title: '案例附件', value: publicCaseCount, desc: '公开来源图片', icon: FileStack, colorClass: 'bg-orange-50 text-orange-500' },
         ]}
       />
-      <div className="grid min-h-0 grid-cols-[250px_1fr_350px] gap-4">
+      <div className="grid min-h-0 grid-cols-[250px_minmax(0,1fr)] gap-4">
         <CategoryList title="产品分类" items={categories} activeName={activeCategory} onChange={setActiveCategory} />
-        <section className="panel-card h-full">
-          <h2 className="panel-title">产品与服务列表</h2>
+        <section className="panel-card flex h-full min-h-0 flex-col overflow-hidden">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="panel-title mb-0">产品与服务列表</h2>
+            <Button type="primary" icon={<UploadCloud size={16} />} onClick={() => setFormOpen(true)}>新增产品资料</Button>
+          </div>
           <Table
             rowKey="id"
             size="small"
-            pagination={{ pageSize: 12 }}
+            pagination={{ pageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 50], showTotal: total => `共 ${total} 条` }}
             columns={columns}
             dataSource={dataSource}
             loading={loading}
             className="compact-table"
+            tableLayout="fixed"
+            scroll={{ y: 'calc(100vh - 430px)' }}
             locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无产品资料，请维护真实产品信息" /> }}
           />
         </section>
-        <section className="panel-card h-full overflow-auto">
-          <h2 className="panel-title">产品能力维护</h2>
-          <Form form={form} layout="vertical" size="small" className="compact-form">
+      </div>
+
+      <Modal
+        title="产品能力维护"
+        open={formOpen}
+        onCancel={() => setFormOpen(false)}
+        width={920}
+        destroyOnClose={false}
+        footer={[
+          <Button key="cancel" onClick={() => setFormOpen(false)}>取消</Button>,
+          <Button key="save" type="primary" loading={saving} onClick={saveProductAsset}>保存产品信息</Button>,
+        ]}
+      >
+        <Form form={form} layout="vertical" size="middle" className="compact-form">
+          <div className="grid gap-x-5 md:grid-cols-2">
             <Form.Item label="产品名称" name="title" rules={[{ required: true, message: '请输入产品名称' }]}>
               <Input placeholder="例如：水轮机叶片精密加工件" />
             </Form.Item>
@@ -213,6 +248,7 @@ export function ProductBasePage(): JSX.Element {
             <Form.Item label="规格型号" name="product_model">
               <Input placeholder="例如：DN800、Q235B、定制加工件" />
             </Form.Item>
+          </div>
             <Form.Item label="推荐插入章节" name="applicable_sections">
               <Select mode="multiple" options={['技术响应文件', '施工组织设计', '设备配置方案', '质量保证措施', '商务响应文件'].map(value => ({ label: value, value }))} />
             </Form.Item>
@@ -225,6 +261,7 @@ export function ProductBasePage(): JSX.Element {
             <Form.Item label="图片/附件文件" required>
               <Upload
                 maxCount={1}
+                fileList={assetFile ? [{ uid: 'asset-file', name: assetFile.name, status: 'done' }] : []}
                 beforeUpload={(file) => {
                   setAssetFile(file);
                   return false;
@@ -241,16 +278,29 @@ export function ProductBasePage(): JSX.Element {
             <Form.Item label="使用备注" name="usage_note">
               <Input placeholder="例如：适合技术响应配图，不作为资质证明材料" />
             </Form.Item>
-            <Button block type="primary" loading={saving} onClick={saveProductAsset}>保存产品信息</Button>
-          </Form>
-        </section>
-      </div>
+        </Form>
+      </Modal>
 
       <Modal title="产品资料详情" open={Boolean(detail)} onCancel={() => setDetail(null)} footer={<Button onClick={() => setDetail(null)}>关闭</Button>} width={900}>
         {detail ? (
           <div className="grid gap-4 md:grid-cols-[300px_1fr]">
             <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-              {detail.public_url ? <Image src={detail.public_url} alt={detail.title} className="rounded-lg object-contain" /> : <Empty description="无图片" />}
+              {isImageAsset(detail) ? (
+                <Image
+                  src={assetFileUrl(detail)}
+                  alt={detail.title}
+                  className="rounded-lg object-contain"
+                  fallback="/assets/brand-logo.png"
+                />
+              ) : detail.storage_path || detail.public_url ? (
+                <div className="flex h-full min-h-48 flex-col items-center justify-center gap-3 text-center">
+                  <Box className="text-blue-500" size={42} />
+                  <div className="text-sm font-bold text-slate-600">{detail.file_name || detail.title}</div>
+                  <Button href={assetFileUrl(detail)} target="_blank">打开附件</Button>
+                </div>
+              ) : (
+                <Empty description="无附件" />
+              )}
             </div>
             <Descriptions size="small" bordered column={1}>
               <Descriptions.Item label="产品名称">{detail.title}</Descriptions.Item>

@@ -189,38 +189,36 @@ export function KnowledgeBasePage(): JSX.Element {
           { title: '处理失败', value: files.filter(f => f.status === 'failed').length, desc: '需重新上传', icon: RefreshCw, colorClass: 'bg-orange-50 text-orange-500' },
         ]}
       />
-      <div className="grid min-h-0 grid-cols-[260px_1fr_310px] gap-4">
+      <div className="grid min-h-0 grid-cols-[240px_minmax(0,1fr)] gap-4">
         <CategoryList title="资料分类" items={categories} activeName={activeCategory} onChange={setActiveCategory} />
-        <section className="panel-card h-full">
-          <h2 className="panel-title">文件列表</h2>
+        <section className="panel-card flex h-full min-h-0 flex-col overflow-hidden">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="panel-title mb-0">文件列表</h2>
+            <div className="flex min-w-0 items-center gap-3 text-xs font-bold text-slate-500">
+              <span>索引完成率 {files.length > 0 ? Math.round((files.filter(f => f.status === 'indexed').length / files.length) * 100) : 0}%</span>
+              <Progress className="w-36" percent={files.length > 0 ? Math.round((files.filter(f => f.status === 'indexed').length / files.length) * 100) : 0} showInfo={false} size="small" />
+            </div>
+          </div>
+          <div className="mb-3 grid gap-3 text-sm font-semibold text-slate-600 xl:grid-cols-2">
+            <div className="rounded-xl bg-slate-50 p-3 leading-6">
+              Supabase PGVector 持久化存储，支持水利法规、招标文件、标准话术和企业资料检索。
+            </div>
+            <div className="rounded-xl bg-blue-50 p-3 leading-6 text-blue-700">
+              上传资质扫描件、产品图片或图文混排资料后，可继续扩展图片召回和标书自动配图能力。
+            </div>
+          </div>
           <Table
             rowKey="id"
             size="small"
-            pagination={{ pageSize: 15 }}
+            pagination={{ pageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 50], showTotal: total => `共 ${total} 条` }}
             columns={columns}
             dataSource={dataSource}
             loading={loading}
             className="compact-table"
+            tableLayout="fixed"
+            scroll={{ y: 'calc(100vh - 500px)' }}
             locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无知识库资料，请上传真实企业资料" /> }}
           />
-        </section>
-        <section className="panel-card h-full">
-          <h2 className="panel-title">检索与索引策略</h2>
-          <div className="space-y-4 text-sm font-semibold text-slate-600">
-            <div>
-              <div className="mb-2 flex justify-between">
-                <span>知识库索引完成率</span>
-                <span>{files.length > 0 ? Math.round((files.filter(f => f.status === 'indexed').length / files.length) * 100) : 0}%</span>
-              </div>
-              <Progress percent={files.length > 0 ? Math.round((files.filter(f => f.status === 'indexed').length / files.length) * 100) : 0} showInfo={false} />
-            </div>
-            <div className="rounded-xl bg-slate-50 p-3 leading-6">
-              当前采用 Supabase PGVector 持久化存储。水利行业种子库已按资料分类、文本抽取、分片和向量化流程入库，可用于法规、招标文件和标准话术检索。
-            </div>
-            <div className="rounded-xl bg-blue-50 p-3 leading-6 text-blue-700">
-              当前 26 份水利资料主要支持文本 RAG 问答。后续上传资质扫描件、产品图片或图文混排资料并完成 MinerU 图文解析后，可继续扩展图片召回能力。
-            </div>
-          </div>
         </section>
       </div>
       <Modal

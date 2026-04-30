@@ -15,9 +15,9 @@ interface CategoryListProps {
 
 export function CategoryList({ title, items, activeName, onChange }: CategoryListProps): JSX.Element {
   return (
-    <section className="panel-card h-full">
+    <section className="panel-card flex h-full min-h-0 flex-col">
       <h2 className="panel-title">{title}</h2>
-      <div className="grid gap-2">
+      <div className="grid min-h-0 gap-2 overflow-y-auto pr-1">
         {items.map(item => {
           const active = item.name === activeName;
           return (

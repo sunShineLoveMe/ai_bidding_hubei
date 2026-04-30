@@ -126,14 +126,14 @@ def build_knowledge_prompt(
         similarity = float(asset.get("similarity") or 0)
         searchable_text = asset.get("searchable_text") or asset.get("description") or ""
         sections = "、".join(asset.get("applicable_sections") or [])
-        public_url = asset.get("public_url") or ""
+        public_url = f"/api/knowledge/assets/{asset.get('id')}/file" if asset.get("id") else (asset.get("public_url") or "")
         asset_contexts.append(
             f"【图片资产{index}｜相关度 {similarity:.2f}｜分类 {category}｜类型 {asset_type}】\n"
             f"名称：{title}\n适用章节：{sections}\n图片地址：{public_url}\n说明：{searchable_text}"
         )
-        if asset.get("public_url"):
+        if public_url:
             images.append({
-                "url": asset["public_url"],
+                "url": public_url,
                 "alt": title,
             })
 

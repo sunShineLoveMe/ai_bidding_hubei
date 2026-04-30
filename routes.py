@@ -20,7 +20,7 @@ from ai_chapter_planner import generate_bid_outline, stream_bid_outline
 from ai_section_writer import stream_bid_section
 from ai_interpreter import generate_ai_interpretation_report
 from compliance_checker import build_compliance_report
-from db_supabase import create_knowledge_asset, delete_bid_project, delete_bid_section, get_bid_file, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_section_content, upload_knowledge_asset_file, upsert_bid_section
+from db_supabase import create_knowledge_asset, delete_bid_project, delete_bid_section, download_knowledge_asset_file, get_bid_file, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_section_content, upload_knowledge_asset_file, upsert_bid_section
 from llm_json_utils import strip_llm_json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
@@ -1740,6 +1740,30 @@ def get_knowledge_asset(asset_id):
     except Exception as e:
         logging.exception("查询知识资产详情失败")
         return jsonify({'error': f'查询失败: {str(e)}'}), 500
+
+
+@knowledge_bp.route('/assets/<asset_id>/file', methods=['GET'])
+@bp.route('/knowledge/assets/<asset_id>/file', methods=['GET'])
+def get_knowledge_asset_file(asset_id):
+    try:
+        result = download_knowledge_asset_file(asset_id)
+        if not result:
+            return jsonify({'error': '知识资产文件不存在'}), 404
+
+        asset, data = result
+        mime_type = asset.get("mime_type") or "application/octet-stream"
+        filename = asset.get("file_name") or asset.get("title") or f"{asset_id}"
+        return Response(
+            data,
+            mimetype=mime_type,
+            headers={
+                "Content-Disposition": f"inline; filename*=UTF-8''{requests.utils.quote(str(filename))}",
+                "Cache-Control": "private, max-age=300",
+            },
+        )
+    except Exception as e:
+        logging.exception("读取知识资产文件失败")
+        return jsonify({'error': f'读取文件失败: {str(e)}'}), 500
 
 
 def _split_form_list(value: str | None) -> list[str]:
