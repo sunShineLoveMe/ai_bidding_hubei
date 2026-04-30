@@ -106,10 +106,14 @@ def get_embeddings(client, texts, batch_size=10):
     # 按批次处理
     for i in range(0, len(texts), batch_size):
         batch_texts = texts[i:i+batch_size]
-        response = client.embeddings.create(
-            model=get_setting("embedding_model", "text-embedding-v3"),
-            input=batch_texts
-        )
+        kwargs = {
+            "model": get_setting("embedding_model", "text-embedding-v4"),
+            "input": batch_texts,
+        }
+        dimensions = get_setting("embedding_dimensions", 1024)
+        if dimensions:
+            kwargs["dimensions"] = int(dimensions)
+        response = client.embeddings.create(**kwargs)
         # 提取当前批次的向量并添加到结果列表
         batch_embeddings = [item.embedding for item in response.data]
         all_embeddings.extend(batch_embeddings)

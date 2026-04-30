@@ -1,4 +1,4 @@
-import { Button, Descriptions, Empty, Form, Image, Input, Modal, Select, Space, Table, Tag, Upload, message } from 'antd';
+import { Button, Descriptions, Empty, Form, Image, Input, Modal, Select, Space, Switch, Table, Tag, Upload, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { Box, Cpu, FileStack, Tags, UploadCloud } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
@@ -48,9 +48,12 @@ function versionLabel(asset: KnowledgeAsset): string {
 }
 
 export function ProductBasePage(): JSX.Element {
+  const [form] = Form.useForm();
   const [activeCategory, setActiveCategory] = useState('全部产品');
   const [assets, setAssets] = useState<KnowledgeAsset[]>([]);
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [assetFile, setAssetFile] = useState<File | null>(null);
   const [detail, setDetail] = useState<KnowledgeAsset | null>(null);
 
   const fetchAssets = async () => {
@@ -120,6 +123,43 @@ export function ProductBasePage(): JSX.Element {
     },
   ];
 
+  const saveProductAsset = async () => {
+    try {
+      const values = await form.validateFields();
+      if (!assetFile) {
+        message.warning('请先上传产品图片、图册或附件');
+        return;
+      }
+      setSaving(true);
+      const formData = new FormData();
+      formData.append('file', assetFile);
+      formData.append('library_type', 'product');
+      formData.append('asset_type', 'product_image');
+      formData.append('title', values.title);
+      formData.append('category', values.category);
+      formData.append('description', values.description || '');
+      formData.append('product_model', values.product_model || '');
+      formData.append('tags', JSON.stringify(values.tags || []));
+      formData.append('applicable_sections', JSON.stringify(values.applicable_sections || []));
+      formData.append('allowed_for_bid', String(values.allowed_for_bid ?? true));
+      formData.append('is_sensitive', 'false');
+      formData.append('anonymized', 'true');
+      formData.append('usage_note', values.usage_note || '');
+      await apiClient.post('/api/knowledge/assets/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      message.success('产品资料已保存并接入检索');
+      form.resetFields();
+      setAssetFile(null);
+      await fetchAssets();
+    } catch (error: any) {
+      if (error?.errorFields) return;
+      message.error(error.message || '保存产品资料失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="module-shell">
       <ModuleHeader
@@ -127,9 +167,10 @@ export function ProductBasePage(): JSX.Element {
         description="沉淀产品参数、制造能力、适用场景、案例资料和服务能力，为技术响应和商务材料生成提供标准素材。"
         actions={
           <>
-            <Button onClick={() => message.info('新增产品将接入 knowledge_assets 结构化写入')}>新增产品</Button>
-            <Upload showUploadList={false} beforeUpload={() => {
-              message.info('产品资料上传将接入 knowledge_assets 入库流程');
+            <Button onClick={() => form.resetFields()}>新增产品</Button>
+            <Upload showUploadList={false} beforeUpload={(file) => {
+              setAssetFile(file);
+              message.success('已选择文件，请在右侧补充产品信息后保存');
               return false;
             }}>
               <Button type="primary" icon={<UploadCloud size={16} />}>上传产品资料</Button>
@@ -160,25 +201,47 @@ export function ProductBasePage(): JSX.Element {
             locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无产品资料，请维护真实产品信息" /> }}
           />
         </section>
-        <section className="panel-card h-full">
+        <section className="panel-card h-full overflow-auto">
           <h2 className="panel-title">产品能力维护</h2>
-          <Form layout="vertical" size="small" className="compact-form">
-            <Form.Item label="产品名称">
+          <Form form={form} layout="vertical" size="small" className="compact-form">
+            <Form.Item label="产品名称" name="title" rules={[{ required: true, message: '请输入产品名称' }]}>
               <Input placeholder="例如：水轮机叶片精密加工件" />
             </Form.Item>
-            <Form.Item label="产品类型">
+            <Form.Item label="产品类型" name="category" rules={[{ required: true, message: '请选择产品类型' }]}>
               <Select options={categories.slice(1).map(item => ({ label: item.name, value: item.name }))} placeholder="选择类型" />
             </Form.Item>
-            <Form.Item label="适用行业">
-              <Select mode="multiple" options={['水利工程', '水电站', '机电设备', '金属结构'].map(value => ({ label: value, value }))} />
+            <Form.Item label="规格型号" name="product_model">
+              <Input placeholder="例如：DN800、Q235B、定制加工件" />
             </Form.Item>
-            <Form.Item label="核心能力标签">
+            <Form.Item label="推荐插入章节" name="applicable_sections">
+              <Select mode="multiple" options={['技术响应文件', '施工组织设计', '设备配置方案', '质量保证措施', '商务响应文件'].map(value => ({ label: value, value }))} />
+            </Form.Item>
+            <Form.Item label="核心能力标签" name="tags">
               <Select mode="tags" placeholder="输入能力标签" />
             </Form.Item>
-            <Form.Item label="产品简介">
-              <Input.TextArea rows={3} placeholder="用于标书技术响应的标准描述" />
+            <Form.Item label="产品图片/图册说明" name="description" rules={[{ required: true, message: '请输入说明，便于AI检索和插图' }]}>
+              <Input.TextArea rows={3} placeholder="说明图片中的产品、规格、使用场景，以及适合插入的标书章节" />
             </Form.Item>
-            <Button block type="primary" onClick={() => message.info('产品元数据保存待接入资产更新接口')}>保存产品信息</Button>
+            <Form.Item label="图片/附件文件" required>
+              <Upload
+                maxCount={1}
+                beforeUpload={(file) => {
+                  setAssetFile(file);
+                  return false;
+                }}
+                onRemove={() => setAssetFile(null)}
+                accept="image/*,.pdf,.doc,.docx"
+              >
+                <Button icon={<UploadCloud size={16} />}>选择产品图片或附件</Button>
+              </Upload>
+            </Form.Item>
+            <Form.Item label="允许自动插入标书" name="allowed_for_bid" valuePropName="checked" initialValue>
+              <Switch checkedChildren="允许" unCheckedChildren="仅检索" />
+            </Form.Item>
+            <Form.Item label="使用备注" name="usage_note">
+              <Input placeholder="例如：适合技术响应配图，不作为资质证明材料" />
+            </Form.Item>
+            <Button block type="primary" loading={saving} onClick={saveProductAsset}>保存产品信息</Button>
           </Form>
         </section>
       </div>

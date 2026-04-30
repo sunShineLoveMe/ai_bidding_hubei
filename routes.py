@@ -20,7 +20,7 @@ from ai_chapter_planner import generate_bid_outline, stream_bid_outline
 from ai_section_writer import stream_bid_section
 from ai_interpreter import generate_ai_interpretation_report
 from compliance_checker import build_compliance_report
-from db_supabase import delete_bid_project, delete_bid_section, get_bid_file, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_section_content, upsert_bid_section
+from db_supabase import create_knowledge_asset, delete_bid_project, delete_bid_section, get_bid_file, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_section_content, upload_knowledge_asset_file, upsert_bid_section
 from llm_json_utils import strip_llm_json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
@@ -334,6 +334,18 @@ def _build_section_image_markdown(section: dict, assets: list[dict], used_asset_
     return "".join(snippets)
 
 
+def _asset_allowed_for_bid(asset: dict) -> bool:
+    if asset.get("is_sensitive"):
+        return False
+    metadata = asset.get("metadata") or {}
+    specs = asset.get("specs") or {}
+    if isinstance(metadata, dict) and metadata.get("allowed_for_bid") is False:
+        return False
+    if isinstance(specs, dict) and specs.get("allowed_for_bid") is False:
+        return False
+    return True
+
+
 def _section_with_descendants(sections: list[dict], section_id: str) -> list[dict]:
     selected_ids = {section_id}
     changed = True
@@ -378,6 +390,7 @@ def build_project_bid_markdown(project_id: str, focus_section_id: str | None = N
             image_assets = [
                 asset for asset in list_knowledge_assets()
                 if _asset_image_ref(asset)
+                and _asset_allowed_for_bid(asset)
                 and str(asset.get("asset_type") or "").lower() not in {"document", "markdown", "text"}
             ]
         except Exception:
@@ -784,6 +797,7 @@ def stream_interpretation_bid_section(project_id):
                             image_assets = [
                                 asset for asset in list_knowledge_assets()
                                 if _asset_image_ref(asset)
+                                and _asset_allowed_for_bid(asset)
                                 and str(asset.get("asset_type") or "").lower() not in {"document", "markdown", "text"}
                             ]
                             image_markdown = _build_section_image_markdown(
@@ -1726,3 +1740,120 @@ def get_knowledge_asset(asset_id):
     except Exception as e:
         logging.exception("查询知识资产详情失败")
         return jsonify({'error': f'查询失败: {str(e)}'}), 500
+
+
+def _split_form_list(value: str | None) -> list[str]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+    except Exception:
+        pass
+    return [item.strip() for item in re.split(r"[,，\n]", value) if item.strip()]
+
+
+def _build_asset_searchable_text(payload: dict) -> str:
+    parts = [
+        payload.get("title"),
+        payload.get("description"),
+        payload.get("category"),
+        payload.get("asset_type"),
+        payload.get("ai_caption"),
+    ]
+    parts.extend(payload.get("tags") or [])
+    parts.extend(payload.get("applicable_sections") or [])
+    specs = payload.get("specs") or {}
+    if isinstance(specs, dict):
+        parts.extend(str(value) for value in specs.values() if value)
+    return "\n".join(str(part).strip() for part in parts if str(part or "").strip())
+
+
+@knowledge_bp.route('/assets/upload', methods=['POST'])
+@bp.route('/knowledge/assets/upload', methods=['POST'])
+def upload_knowledge_asset():
+    try:
+        file = request.files.get('file')
+        if not file or not file.filename:
+            return jsonify({'error': '请上传图片或附件文件'}), 400
+
+        library_type = request.form.get('library_type') or 'qualification'
+        if library_type not in {'qualification', 'product'}:
+            return jsonify({'error': 'library_type 仅支持 qualification 或 product'}), 400
+
+        asset_type = request.form.get('asset_type') or ('qualification_image' if library_type == 'qualification' else 'product_image')
+        category = request.form.get('category') or ('企业资信' if library_type == 'qualification' else '产品资料')
+        title = (request.form.get('title') or file.filename).strip()
+        description = (request.form.get('description') or '').strip()
+        tags = _split_form_list(request.form.get('tags'))
+        applicable_sections = _split_form_list(request.form.get('applicable_sections'))
+        allowed_for_bid = request.form.get('allowed_for_bid', 'true').lower() in {'1', 'true', 'yes', 'on'}
+        is_sensitive = request.form.get('is_sensitive', 'false').lower() in {'1', 'true', 'yes', 'on'}
+        anonymized = request.form.get('anonymized', 'true').lower() in {'1', 'true', 'yes', 'on'}
+
+        upload_dir = Path(current_app.config['UPLOAD_FOLDER'])
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        original_filename = file.filename
+        unique_filename = f"asset-{uuid.uuid4()}-{secure_filename(original_filename) or 'upload'}"
+        local_path = upload_dir / unique_filename
+        file.save(local_path)
+
+        storage_info = upload_knowledge_asset_file(
+            local_file_path=local_path,
+            original_filename=original_filename,
+            library_type=library_type,
+        )
+
+        payload = {
+            "title": title,
+            "description": description,
+            "category": category,
+            "asset_type": asset_type,
+            "file_name": original_filename,
+            "file_ext": storage_info.get("file_ext"),
+            "mime_type": storage_info.get("mime_type"),
+            "file_size": storage_info.get("file_size"),
+            "storage_bucket": storage_info.get("bucket"),
+            "storage_path": storage_info.get("object_path"),
+            "public_url": storage_info.get("public_url"),
+            "source_type": "user_upload",
+            "license": "企业自有资料",
+            "attribution": request.form.get('attribution') or "用户上传",
+            "is_synthetic": False,
+            "is_sensitive": is_sensitive,
+            "anonymized": anonymized,
+            "industry": "水利行业",
+            "applicable_sections": applicable_sections,
+            "tags": tags,
+            "specs": {
+                "library_type": library_type,
+                "allowed_for_bid": allowed_for_bid,
+                "usage_note": request.form.get('usage_note') or '',
+                "certificate_no": request.form.get('certificate_no') or '',
+                "issuer": request.form.get('issuer') or '',
+                "product_model": request.form.get('product_model') or '',
+            },
+            "ai_caption": description,
+            "status": "indexed",
+            "metadata": {
+                "library_type": library_type,
+                "allowed_for_bid": allowed_for_bid,
+                "upload_source": "enterprise_library_page",
+            },
+        }
+        payload["searchable_text"] = _build_asset_searchable_text(payload)
+
+        try:
+            from file_to_chroma import init_ali_client, get_embeddings
+            embeddings = get_embeddings(init_ali_client(), [payload["searchable_text"]])
+            if embeddings:
+                payload["embedding"] = embeddings[0]
+        except Exception:
+            logging.exception("知识资产 embedding 生成失败，将仅保存结构化资产")
+
+        asset = create_knowledge_asset(payload)
+        return jsonify(asset), 201
+    except Exception as e:
+        logging.exception("上传知识资产失败")
+        return jsonify({'error': f'上传失败: {str(e)}'}), 500

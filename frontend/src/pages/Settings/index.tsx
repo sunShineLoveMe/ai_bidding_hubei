@@ -10,6 +10,10 @@ interface RuntimeSettings {
   text_model: string;
   knowledge_model: string;
   embedding_model: string;
+  embedding_dimensions: number;
+  rerank_enabled: boolean;
+  rerank_model: string;
+  rerank_top_n: number;
   request_timeout_seconds: number;
   stream_connect_timeout_seconds: number;
   stream_read_timeout_seconds: number;
@@ -118,8 +122,31 @@ export function SettingsPage(): JSX.Element {
                     <Form.Item label="知识库问答模型" name="knowledge_model" rules={[{ required: true, message: '请输入知识库问答模型' }]}>
                       <Input placeholder="qwen-long" />
                     </Form.Item>
-                    <Form.Item label="Embedding 模型" name="embedding_model" rules={[{ required: true, message: '请输入 Embedding 模型' }]}>
-                      <Input placeholder="text-embedding-v3" />
+                    <Form.Item label="Embedding 模型" name="embedding_model" rules={[{ required: true, message: '请选择 Embedding 模型' }]}>
+                      <Select
+                        options={[
+                          { label: 'text-embedding-v4（推荐，百炼新版通用向量）', value: 'text-embedding-v4' },
+                          { label: 'text-embedding-v3（兼容旧索引）', value: 'text-embedding-v3' },
+                        ]}
+                      />
+                    </Form.Item>
+                    <Form.Item label="Embedding 维度" name="embedding_dimensions">
+                      <InputNumber className="w-full" min={128} max={2048} addonAfter="维" />
+                    </Form.Item>
+                    <Form.Item label="启用 Rerank 重排" name="rerank_enabled" valuePropName="checked">
+                      <Switch checkedChildren="启用" unCheckedChildren="关闭" />
+                    </Form.Item>
+                    <Form.Item label="Rerank 模型" name="rerank_model" rules={[{ required: true, message: '请选择 Rerank 模型' }]}>
+                      <Select
+                        options={[
+                          { label: 'qwen3-rerank（推荐，文本知识库重排）', value: 'qwen3-rerank' },
+                          { label: 'gte-rerank-v2（备选，传统文本重排）', value: 'gte-rerank-v2' },
+                          { label: 'qwen3-vl-rerank（多模态重排预留）', value: 'qwen3-vl-rerank' },
+                        ]}
+                      />
+                    </Form.Item>
+                    <Form.Item label="Rerank TopN" name="rerank_top_n">
+                      <InputNumber className="w-full" min={1} max={20} addonAfter="条" />
                     </Form.Item>
                     <Form.Item label="请求超时时间" name="request_timeout_seconds">
                       <InputNumber className="w-full" min={10} max={600} addonAfter="秒" />
@@ -139,6 +166,8 @@ export function SettingsPage(): JSX.Element {
                     <Tag color="purple">DASHSCOPE_MODEL</Tag>
                     <Tag color="cyan">DASHSCOPE_KNOWLEDGE_MODEL</Tag>
                     <Tag color="green">DASHSCOPE_EMBEDDING_MODEL</Tag>
+                    <Tag color="lime">DASHSCOPE_EMBEDDING_DIMENSIONS</Tag>
+                    <Tag color="gold">DASHSCOPE_RERANK_MODEL</Tag>
                   </div>
                 </div>
               ),

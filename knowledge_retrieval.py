@@ -7,6 +7,7 @@ from supabase_client import get_supabase_client
 from file_to_chroma import init_ali_client, get_embeddings
 from qwen_client import stream_dashscope_api
 from app_config import get_setting
+from rerank_client import rerank_documents
 
 def search_knowledge_base(query: str, match_threshold: float = 0.5, match_count: int = 5) -> List[Dict[str, Any]]:
     """
@@ -27,11 +28,12 @@ def search_knowledge_base(query: str, match_threshold: float = 0.5, match_count:
         {
             "query_embedding": query_vector,
             "match_threshold": match_threshold,
-            "match_count": match_count
+            "match_count": max(match_count * 3, match_count)
         }
     ).execute()
     
-    return response.data or []
+    rows = response.data or []
+    return rerank_documents(query, rows, text_key="content", top_n=match_count)
 
 
 def search_knowledge_assets(query: str, match_count: int = 8) -> List[Dict[str, Any]]:
@@ -50,13 +52,13 @@ def search_knowledge_assets(query: str, match_count: int = 8) -> List[Dict[str, 
         "match_knowledge_assets",
         {
             "query_embedding": query_embeddings[0],
-            "match_count": match_count,
+            "match_count": max(match_count * 3, match_count),
             "filter_category": None,
             "filter_asset_type": None,
         },
     ).execute()
 
-    assets = response.data or []
+    assets = rerank_documents(query, response.data or [], text_key="searchable_text", top_n=match_count)
     # 过滤掉明显弱相关的资产，保留图片来源展示的准确性。
     return [asset for asset in assets if float(asset.get("similarity") or 0) >= 0.28]
 

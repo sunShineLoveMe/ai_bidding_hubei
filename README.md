@@ -136,7 +136,8 @@ GET /api/bidding/interpretations/{project_id}/compliance-check
 | 业务数据库 | Supabase PostgreSQL | 保存知识文档元数据、文档分片、解析状态和业务表 |
 | 向量检索 | pgvector | 在 PostgreSQL 内保存 embedding 向量并执行相似度检索 |
 | 对象存储 | Supabase Storage | 保存原始知识库文件、招标文件和生成文档 |
-| 向量模型 | 默认 DashScope `text-embedding-v3`，可在系统设置中调整 | 将用户问题和知识分片转换为向量 |
+| 向量模型 | 默认 DashScope `text-embedding-v4`，维度默认 1024，可在系统设置中调整 | 将用户问题、知识分片和图片资产描述转换为向量 |
+| Rerank 重排 | 默认 DashScope `qwen3-rerank`，可切换 `gte-rerank-v2`，系统设置可关闭 | 对 pgvector 初召回结果二次排序，提升水利术语、设备型号、资质名称匹配准确率 |
 | 问答模型 | 默认 `qwen-long`，可在系统设置中调整 | 基于召回片段生成最终回答 |
 | 流式输出 | DashScope SSE / Flask `text/event-stream` | 支持 RAG 回答逐段返回，降低首屏等待体感 |
 | 文本抽取 | PyPDF2 / Mammoth / Markdown 读取 | 处理普通 PDF、DOCX 和 Markdown 文档 |
@@ -356,7 +357,11 @@ cp .env.example .env
 DASHSCOPE_API_KEY=your_dashscope_api_key
 DASHSCOPE_MODEL=qwen-turbo-latest
 DASHSCOPE_KNOWLEDGE_MODEL=qwen-long
-DASHSCOPE_EMBEDDING_MODEL=text-embedding-v3
+DASHSCOPE_EMBEDDING_MODEL=text-embedding-v4
+DASHSCOPE_EMBEDDING_DIMENSIONS=1024
+DASHSCOPE_RERANK_ENABLED=true
+DASHSCOPE_RERANK_MODEL=qwen3-rerank
+DASHSCOPE_RERANK_TOP_N=6
 DASHSCOPE_REQUEST_TIMEOUT_SECONDS=120
 DASHSCOPE_STREAM_CONNECT_TIMEOUT_SECONDS=15
 DASHSCOPE_STREAM_READ_TIMEOUT_SECONDS=180
@@ -581,7 +586,7 @@ docker run -d \
 
 - 当前业务链路完整：招标文件上传、MinerU/OCR 解析、结构化解读、AI 深度解读、章节大纲、章节正文生成、目录模式、Tiptap 编辑、RAG 问答、DOCX 导出已经形成闭环。
 - `bid_writing_plan.py` 的章节写作计划是核心产品能力之一，能够根据章节类型、重要性、评分项、风险项和材料要求动态规划字数、页数、图表、资质和案例支撑。
-- RAG 当前可用，但仍是基础向量检索，后续需要混合检索、Rerank、来源引用和行业资料扩展。
+- RAG 当前已具备 pgvector 向量召回和 DashScope Rerank 重排，后续需要继续补混合检索、来源引用和行业资料扩展。
 - 合规检查当前是轻量规则版，适合发现漏项，但还不能替代人工或大模型语义复核。
 - Tiptap 已经适合作为主编辑器，后续应增强 AI 伴写能力，而不是继续依赖复杂的外部在线 Office 作为主链路。
 - 代码已经进入需要治理的阶段，后端 `routes.py` 和前端 `BidEditor` 体量较大，应拆分模块并补测试。
@@ -637,7 +642,7 @@ docker run -d \
 ### P4：RAG 与行业知识库增强
 
 - [ ] 增加混合检索：关键词 BM25 / 全文检索 + pgvector 向量检索。
-- [ ] 接入 Rerank 模型，对水利专有名词、设备型号、资质名称和评分条款进行重排。
+- [x] 接入 Rerank 模型，对水利专有名词、设备型号、资质名称和评分条款进行重排。
 - [ ] 增加章节正文引用来源标注，支持用户追溯每段正文来自哪些招标条款或知识库资料。
 - [ ] 扩充水利行业种子库到更多工程类型：水库除险加固、泵站、河道治理、灌区、堤防、水闸、水电站、信息化监测等。
 - [ ] 完善企业知识库批量导入 UI，支持资料分类、标签、解析状态、失败重试和批量删除。

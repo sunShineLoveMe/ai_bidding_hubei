@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import mimetypes
+import os
 import time
 import uuid
 from pathlib import Path
@@ -632,3 +633,41 @@ def get_knowledge_asset_detail(asset_id: str) -> dict[str, Any] | None:
     )
     rows = response.data or []
     return rows[0] if rows else None
+
+
+def _knowledge_asset_bucket() -> str:
+    return os.getenv("SUPABASE_STORAGE_KNOWLEDGE_ASSET_BUCKET") or os.getenv("SUPABASE_STORAGE_KNOWLEDGE_BUCKET") or "knowledge-assets"
+
+
+def upload_knowledge_asset_file(
+    *,
+    local_file_path: str | Path,
+    original_filename: str,
+    library_type: str,
+) -> dict[str, Any]:
+    client = get_supabase_client()
+    local_path = Path(local_file_path)
+    bucket = _knowledge_asset_bucket()
+    safe_suffix = _storage_extension(original_filename, local_path)
+    object_path = f"{library_type}/{uuid.uuid4().hex}{safe_suffix}"
+    content_type = mimetypes.guess_type(original_filename)[0] or "application/octet-stream"
+
+    upload_file_to_storage(bucket, object_path, local_path, content_type)
+    public_url = client.storage.from_(bucket).get_public_url(object_path)
+
+    return {
+        "bucket": bucket,
+        "object_path": object_path,
+        "public_url": public_url,
+        "file_ext": safe_suffix.lstrip(".") or None,
+        "mime_type": content_type,
+        "file_size": local_path.stat().st_size,
+    }
+
+
+def create_knowledge_asset(payload: dict[str, Any]) -> dict[str, Any]:
+    client = get_supabase_client()
+    response = client.table("knowledge_assets").insert(payload).execute()
+    if not response.data:
+        raise RuntimeError("Supabase knowledge_assets insert returned no data")
+    return response.data[0]

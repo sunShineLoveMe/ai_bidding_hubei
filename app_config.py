@@ -10,7 +10,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "ai_provider": "dashscope",
     "text_model": "qwen-turbo-latest",
     "knowledge_model": "qwen-long",
-    "embedding_model": "text-embedding-v3",
+    "embedding_model": "text-embedding-v4",
+    "embedding_dimensions": 1024,
+    "rerank_enabled": True,
+    "rerank_model": "qwen3-rerank",
+    "rerank_top_n": 6,
     "request_timeout_seconds": 120,
     "stream_connect_timeout_seconds": 15,
     "stream_read_timeout_seconds": 180,
@@ -40,6 +44,10 @@ ENV_MAPPING = {
     "text_model": "DASHSCOPE_MODEL",
     "knowledge_model": "DASHSCOPE_KNOWLEDGE_MODEL",
     "embedding_model": "DASHSCOPE_EMBEDDING_MODEL",
+    "embedding_dimensions": "DASHSCOPE_EMBEDDING_DIMENSIONS",
+    "rerank_enabled": "DASHSCOPE_RERANK_ENABLED",
+    "rerank_model": "DASHSCOPE_RERANK_MODEL",
+    "rerank_top_n": "DASHSCOPE_RERANK_TOP_N",
     "request_timeout_seconds": "DASHSCOPE_REQUEST_TIMEOUT_SECONDS",
     "stream_connect_timeout_seconds": "DASHSCOPE_STREAM_CONNECT_TIMEOUT_SECONDS",
     "stream_read_timeout_seconds": "DASHSCOPE_STREAM_READ_TIMEOUT_SECONDS",
@@ -64,11 +72,14 @@ INT_KEYS = {
     "request_timeout_seconds",
     "stream_connect_timeout_seconds",
     "stream_read_timeout_seconds",
+    "embedding_dimensions",
+    "rerank_top_n",
 }
 
 BOOL_KEYS = {
     "online_editing_enabled",
     "auto_backup_enabled",
+    "rerank_enabled",
 }
 
 
