@@ -6,6 +6,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { GlobalLoading } from '../common/GlobalLoading';
 import { BrandMark } from '../common/BrandMark';
 import { KnowledgeSearchDrawer } from '../../pages/KnowledgeBase/KnowledgeSearchDrawer';
+import { useLoadingStore } from '../../stores/loadingStore';
 
 const navItems = [
   { path: '/', label: '主页', icon: Home },
@@ -20,6 +21,8 @@ export function AppLayout({ children }: PropsWithChildren): JSX.Element {
   const location = useLocation();
   const navigate = useNavigate();
   const [knowledgeAssistantOpen, setKnowledgeAssistantOpen] = useState(false);
+  const pendingCount = useLoadingStore(state => state.pendingCount);
+  const loadingLocked = pendingCount > 0;
 
   return (
     <div className="h-screen overflow-hidden bg-slate-50 text-slate-950">
@@ -58,7 +61,7 @@ export function AppLayout({ children }: PropsWithChildren): JSX.Element {
         </nav>
       </aside>
 
-      <main className="fixed bottom-12 left-60 right-0 top-16 overflow-y-auto overflow-x-hidden p-5">
+      <main className={`fixed bottom-12 left-60 right-0 top-16 overflow-x-hidden p-5 ${loadingLocked ? 'overflow-hidden' : 'overflow-y-auto'}`}>
         {children}
         <GlobalLoading />
       </main>

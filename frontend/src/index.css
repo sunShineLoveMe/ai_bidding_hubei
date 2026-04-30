@@ -1671,13 +1671,17 @@ textarea {
 }
 
 .global-loading {
-  position: absolute;
-  inset: 0;
-  z-index: 20;
+  position: fixed;
+  left: 240px;
+  right: 0;
+  top: 64px;
+  bottom: 48px;
+  z-index: 60;
   display: grid;
   place-items: center;
   background: rgba(245, 247, 251, 0.58);
   backdrop-filter: blur(2px);
+  overscroll-behavior: contain;
 }
 
 .global-loading-card {
