@@ -673,12 +673,26 @@ def get_knowledge_asset_detail(asset_id: str) -> dict[str, Any] | None:
 
 
 def download_knowledge_asset_file(asset_id: str) -> tuple[dict[str, Any], bytes] | None:
+    return download_knowledge_asset_file_variant(asset_id, variant="original")
+
+
+def download_knowledge_asset_file_variant(asset_id: str, variant: str = "original") -> tuple[dict[str, Any], bytes] | None:
     asset = get_knowledge_asset_detail(asset_id)
     if not asset:
         return None
 
     bucket = asset.get("storage_bucket")
     object_path = asset.get("storage_path")
+    mime_type = asset.get("mime_type")
+    file_name = asset.get("file_name")
+    metadata = asset.get("metadata") or {}
+    if variant == "thumb" and isinstance(metadata, dict) and metadata.get("thumbnail_storage_path"):
+        bucket = metadata.get("thumbnail_storage_bucket") or bucket
+        object_path = metadata.get("thumbnail_storage_path")
+        mime_type = metadata.get("thumbnail_mime_type") or "image/webp"
+        stem = Path(file_name or asset.get("title") or asset_id).stem
+        file_name = f"{stem}-thumbnail.webp"
+
     if not bucket or not object_path:
         return None
 
@@ -690,11 +704,33 @@ def download_knowledge_asset_file(asset_id: str) -> tuple[dict[str, Any], bytes]
         data = content.content
     else:
         data = bytes(content)
+    asset = {**asset, "mime_type": mime_type, "file_name": file_name}
     return asset, data
 
 
 def _knowledge_asset_bucket() -> str:
     return os.getenv("SUPABASE_STORAGE_KNOWLEDGE_ASSET_BUCKET") or os.getenv("SUPABASE_STORAGE_KNOWLEDGE_BUCKET") or "knowledge-assets"
+
+
+def _create_image_thumbnail(local_path: Path, max_size: int = 960) -> tuple[Path, str] | None:
+    try:
+        from PIL import Image, ImageOps
+    except Exception:
+        logging.exception("Pillow 不可用，跳过知识资产缩略图生成")
+        return None
+
+    try:
+        with Image.open(local_path) as image:
+            image = ImageOps.exif_transpose(image)
+            image.thumbnail((max_size, max_size))
+            if image.mode not in {"RGB", "RGBA"}:
+                image = image.convert("RGB")
+            thumb_path = local_path.with_name(f"{local_path.stem}-thumb.webp")
+            image.save(thumb_path, "WEBP", quality=78, method=6)
+        return thumb_path, "image/webp"
+    except Exception:
+        logging.exception("知识资产缩略图生成失败: %s", local_path)
+        return None
 
 
 def upload_knowledge_asset_file(
@@ -712,6 +748,28 @@ def upload_knowledge_asset_file(
 
     upload_file_to_storage(bucket, object_path, local_path, content_type)
     public_url = client.storage.from_(bucket).get_public_url(object_path)
+    thumbnail_info: dict[str, Any] = {}
+
+    if content_type.startswith("image/"):
+        thumbnail = _create_image_thumbnail(local_path)
+        if thumbnail:
+            thumb_path, thumb_mime_type = thumbnail
+            thumb_object_path = f"{library_type}/thumbnails/{uuid.uuid4().hex}.webp"
+            try:
+                upload_file_to_storage(bucket, thumb_object_path, thumb_path, thumb_mime_type)
+                thumbnail_info = {
+                    "thumbnail_bucket": bucket,
+                    "thumbnail_path": thumb_object_path,
+                    "thumbnail_mime_type": thumb_mime_type,
+                    "thumbnail_size": thumb_path.stat().st_size,
+                }
+            except Exception:
+                logging.exception("知识资产缩略图上传失败，已降级为仅保存原图: %s", original_filename)
+            finally:
+                try:
+                    thumb_path.unlink()
+                except OSError:
+                    pass
 
     return {
         "bucket": bucket,
@@ -720,6 +778,7 @@ def upload_knowledge_asset_file(
         "file_ext": safe_suffix.lstrip(".") or None,
         "mime_type": content_type,
         "file_size": local_path.stat().st_size,
+        **thumbnail_info,
     }
 
 

@@ -1,4 +1,6 @@
 import os
+import logging
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -48,7 +50,6 @@ def get_bucket_name(kind: str) -> str:
 
 
 def upload_file_to_storage(bucket: str, object_path: str, file_path: str | Path, content_type: str | None = None) -> Any:
-    client = get_supabase_client()
     options: dict[str, str] = {"upsert": "true"}
     if content_type:
         options["content-type"] = content_type
@@ -56,8 +57,26 @@ def upload_file_to_storage(bucket: str, object_path: str, file_path: str | Path,
     with open(file_path, "rb") as f:
         data = f.read()
 
-    return client.storage.from_(bucket).upload(
-        path=object_path,
-        file=data,
-        file_options=options,
-    )
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            client = get_supabase_client()
+            return client.storage.from_(bucket).upload(
+                path=object_path,
+                file=data,
+                file_options=options,
+            )
+        except Exception as exc:
+            last_error = exc
+            logging.warning(
+                "Supabase Storage 上传失败，第 %s 次: bucket=%s object=%s error=%s",
+                attempt,
+                bucket,
+                object_path,
+                exc,
+            )
+            if attempt >= 3:
+                break
+            reset_supabase_client()
+            time.sleep(1.5 * attempt)
+    raise RuntimeError(f"Supabase Storage 上传失败，已重试 3 次: {last_error}") from last_error

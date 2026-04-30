@@ -20,7 +20,7 @@ from ai_chapter_planner import generate_bid_outline, stream_bid_outline
 from ai_section_writer import stream_bid_section
 from ai_interpreter import generate_ai_interpretation_report
 from compliance_checker import build_compliance_report
-from db_supabase import create_knowledge_asset, delete_bid_project, delete_bid_section, download_bid_file_to_local, download_knowledge_asset_file, get_bid_file, get_latest_bid_file_for_project, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_file_parse_status, update_bid_section_content, upload_knowledge_asset_file, upsert_bid_section
+from db_supabase import create_knowledge_asset, delete_bid_project, delete_bid_section, download_bid_file_to_local, download_knowledge_asset_file_variant, get_bid_file, get_latest_bid_file_for_project, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_file_parse_status, update_bid_section_content, upload_knowledge_asset_file, upsert_bid_section
 from llm_json_utils import strip_llm_json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
@@ -1861,7 +1861,8 @@ def get_knowledge_asset(asset_id):
 @bp.route('/knowledge/assets/<asset_id>/file', methods=['GET'])
 def get_knowledge_asset_file(asset_id):
     try:
-        result = download_knowledge_asset_file(asset_id)
+        variant = request.args.get("variant") or "original"
+        result = download_knowledge_asset_file_variant(asset_id, variant=variant)
         if not result:
             return jsonify({'error': '知识资产文件不存在'}), 404
 
@@ -1873,7 +1874,7 @@ def get_knowledge_asset_file(asset_id):
             mimetype=mime_type,
             headers={
                 "Content-Disposition": f"inline; filename*=UTF-8''{requests.utils.quote(str(filename))}",
-                "Cache-Control": "private, max-age=300",
+                "Cache-Control": "private, max-age=86400" if variant == "thumb" else "private, max-age=300",
             },
         )
     except Exception as e:
@@ -1979,6 +1980,10 @@ def upload_knowledge_asset():
                 "library_type": library_type,
                 "allowed_for_bid": allowed_for_bid,
                 "upload_source": "enterprise_library_page",
+                "thumbnail_storage_bucket": storage_info.get("thumbnail_bucket"),
+                "thumbnail_storage_path": storage_info.get("thumbnail_path"),
+                "thumbnail_mime_type": storage_info.get("thumbnail_mime_type"),
+                "thumbnail_size": storage_info.get("thumbnail_size"),
             },
         }
         payload["searchable_text"] = _build_asset_searchable_text(payload)

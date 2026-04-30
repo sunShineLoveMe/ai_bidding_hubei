@@ -54,6 +54,10 @@ function assetFileUrl(asset: KnowledgeAsset): string {
   return `/api/knowledge/assets/${asset.id}/file`;
 }
 
+function assetThumbnailUrl(asset: KnowledgeAsset): string {
+  return `/api/knowledge/assets/${asset.id}/file?variant=thumb`;
+}
+
 function isImageAsset(asset: KnowledgeAsset): boolean {
   return (asset.mime_type || '').startsWith('image/');
 }
@@ -287,9 +291,10 @@ export function ProductBasePage(): JSX.Element {
             <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
               {isImageAsset(detail) ? (
                 <Image
-                  src={assetFileUrl(detail)}
+                  src={assetThumbnailUrl(detail)}
                   alt={detail.title}
                   className="rounded-lg object-contain"
+                  preview={{ src: assetFileUrl(detail) }}
                   fallback="/assets/brand-logo.png"
                 />
               ) : detail.storage_path || detail.public_url ? (

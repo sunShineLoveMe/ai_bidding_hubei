@@ -32,6 +32,7 @@
 - PostgreSQL / pgvector
 - ChromaDB 本地向量库兼容层
 - PyPDF2 / Mammoth / python-docx
+- Pillow 图片处理，用于企业资信库和产品库缩略图生成
 - MinerU API
 - OpenAI-compatible SDK，用于调用通义千问等兼容模型服务
 
@@ -142,6 +143,7 @@ GET /api/bidding/interpretations/{project_id}/compliance-check
 | 流式输出 | DashScope SSE / Flask `text/event-stream` | 支持 RAG 回答逐段返回，降低首屏等待体感 |
 | 文本抽取 | PyPDF2 / Mammoth / Markdown 读取 | 处理普通 PDF、DOCX 和 Markdown 文档 |
 | OCR/版面解析 | MinerU，可选 | 处理扫描版 PDF、复杂表格、图片型招标文件 |
+| 图片预览 | Pillow + Supabase Storage | 上传企业资信/产品图片时生成 WebP 缩略图，详情预览优先加载缩略图，原图保留用于标书插图和下载 |
 | 本地兼容向量库 | ChromaDB | 早期 MVP 兼容保留，主链路已转向 Supabase pgvector |
 
 当前核心代码：
@@ -668,6 +670,7 @@ docker run -d \
 - [x] 优化标书目录生成交互：单章重写跳转正文编辑区，一键编写全文保留目录模式并显示批量进度
 - [x] 增加章节生成状态重置能力
 - [x] 增加图文并茂 DOCX 导出基础能力
+- [x] 企业资信库和产品库图片上传支持原图 + WebP 缩略图双文件策略，详情预览优先加载缩略图，点击放大再读取原图
 
 ## License
 
