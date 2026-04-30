@@ -4,6 +4,7 @@ import { AlertTriangle, ClipboardList, FileClock, Search, SquarePen, Trash2 } fr
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiClient } from '../../api/client';
+import { retryHistoryParse } from '../../api/bidProject';
 import { CategoryList } from '../../components/common/CategoryList';
 import { MetricCards } from '../../components/common/MetricCards';
 import { ModuleHeader } from '../../components/common/ModuleHeader';
@@ -25,6 +26,11 @@ interface HistoryItem {
   chunk_count?: number;
   file_count?: number;
   parse_status?: string | null;
+  latest_file_id?: string | null;
+  parse_task_id?: string | null;
+  parse_error?: string | null;
+  parse_retryable?: boolean;
+  parse_updated_at?: string | null;
   latest_file_name?: string | null;
   created_at?: string | null;
 }
@@ -44,13 +50,52 @@ const parseStatusLabel: Record<string, string> = {
   uploaded: '已上传',
   pending: '等待解析',
   parsing: '解析中',
+  syncing_supabase: '同步文件中',
+  supabase_synced: '等待解析',
   mineru_submitted: 'MinerU解析中',
+  mineru_running: 'MinerU解析中',
+  mineru_split_submitted: '大文件分片解析',
+  mineru_split_running: '大文件分片解析',
+  mineru_downloading: '下载解析结果',
+  mineru_download_retrying: '下载重试中',
+  mineru_importing_zip: '导入解析结果',
+  mineru_fallback_native: '原生抽取兜底',
   mineru_done: 'MinerU完成',
   mineru_failed: 'MinerU失败',
   mineru_download_failed: '结果下载失败',
+  mineru_import_failed: '结果导入失败',
+  supabase_sync_failed: '文件同步失败',
   ocr_required: '需要OCR',
   failed: '解析失败',
 };
+
+const runningParseStatuses = new Set([
+  'uploaded',
+  'pending',
+  'parsing',
+  'syncing_supabase',
+  'supabase_synced',
+  'mineru_submitted',
+  'mineru_running',
+  'mineru_split_submitted',
+  'mineru_split_running',
+  'mineru_downloading',
+  'mineru_download_retrying',
+  'mineru_importing_zip',
+  'mineru_fallback_native',
+]);
+
+const failedParseStatuses = new Set([
+  'failed',
+  'mineru_failed',
+  'index_failed',
+  'ocr_required',
+  'mineru_download_failed',
+  'mineru_import_failed',
+  'supabase_sync_failed',
+]);
+
+const ACTIVE_WORKFLOW_KEY = 'aiBiddingActiveWorkflow';
 
 function formatDate(value?: string | null): string {
   if (!value) return '-';
@@ -68,6 +113,7 @@ export function HistoryPage(): JSX.Element {
   const navigate = useNavigate();
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
   const [activeStage, setActiveStage] = useState('全部记录');
   const [keyword, setKeyword] = useState('');
 
@@ -89,13 +135,22 @@ export function HistoryPage(): JSX.Element {
     fetchHistory();
   }, []);
 
+  useEffect(() => {
+    const hasRunningTask = items.some(item => item.stage === '解析中' || runningParseStatuses.has(item.parse_status || ''));
+    if (!hasRunningTask) return undefined;
+    const timer = window.setInterval(() => {
+      void fetchHistory();
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [items]);
+
   const stageCategories = useMemo(() => {
     const counts = items.reduce<Record<string, number>>((acc, item) => {
       const stage = item.stage || '已上传';
       acc[stage] = (acc[stage] || 0) + 1;
       return acc;
     }, {});
-    const order = ['已上传', '解析完成', '解读完成', '标书编制'];
+    const order = ['解析中', '解析失败', '已上传', '解析完成', '解读完成', '标书编制'];
     return [
       { name: '全部记录', count: items.length },
       ...order.filter(stage => counts[stage]).map(stage => ({ name: stage, count: counts[stage] })),
@@ -137,6 +192,25 @@ export function HistoryPage(): JSX.Element {
     }
   };
 
+  const retryParse = async (record: HistoryItem) => {
+    try {
+      setRetryingId(record.id);
+      const result = await retryHistoryParse(record.id);
+      localStorage.setItem(ACTIVE_WORKFLOW_KEY, JSON.stringify({
+        fileName: record.latest_file_name || record.project_name || '历史解析任务',
+        fileId: result.fileId,
+        projectId: record.id,
+        startedAt: Date.now(),
+      }));
+      message.success('解析重试任务已启动，首页流程和历史记录会继续跟踪状态');
+      await fetchHistory();
+    } catch (error: any) {
+      message.error(error.message || '重试解析失败');
+    } finally {
+      setRetryingId(null);
+    }
+  };
+
   const columns: ColumnsType<HistoryItem> = [
     {
       title: '任务信息',
@@ -165,12 +239,21 @@ export function HistoryPage(): JSX.Element {
       width: 220,
       render: (_, record) => {
         const parseStatus = record.parse_status || '';
+        const failed = failedParseStatuses.has(parseStatus) || record.stage === '解析失败';
         return (
           <div className="flex flex-col items-start gap-2">
             <Tag color={stageColor[record.stage || '已上传'] || 'default'}>{record.stage || '已上传'}</Tag>
-            <Tag color={parseStatus.includes('failed') || parseStatus === 'ocr_required' ? 'red' : 'default'}>
+            <Tag color={failed ? 'red' : runningParseStatuses.has(parseStatus) ? 'processing' : 'default'}>
               {parseStatusLabel[parseStatus] || parseStatus || '-'}
             </Tag>
+            {record.parse_error ? (
+              <div className="line-clamp-2 max-w-[200px] text-xs font-semibold text-red-500" title={record.parse_error}>
+                原因：{record.parse_error}
+              </div>
+            ) : null}
+            {record.parse_task_id ? (
+              <div className="text-[11px] font-semibold text-slate-400">任务 {record.parse_task_id.slice(0, 8)}</div>
+            ) : null}
           </div>
         );
       },
@@ -194,6 +277,11 @@ export function HistoryPage(): JSX.Element {
       align: 'right',
       render: (_, record) => (
         <Space size={6}>
+          {(record.parse_retryable || record.stage === '解析失败' || failedParseStatuses.has(record.parse_status || '')) ? (
+            <Button size="small" loading={retryingId === record.id} onClick={() => retryParse(record)}>
+              重试解析
+            </Button>
+          ) : null}
           <Button type="primary" ghost size="small" onClick={() => openRecord(record)}>
             {record.action || '查看'}
           </Button>

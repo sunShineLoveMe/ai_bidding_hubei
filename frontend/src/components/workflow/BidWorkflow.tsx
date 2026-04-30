@@ -144,8 +144,16 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
       if (parseStatus === 'indexed') {
         return;
       }
-      if (parseStatus === 'mineru_failed' || parseStatus === 'index_failed') {
-        throw new Error('招标文件解析失败，请检查文件是否可读，或稍后重试 MinerU/OCR 解析。');
+      if ([
+        'mineru_failed',
+        'index_failed',
+        'ocr_required',
+        'mineru_download_failed',
+        'mineru_import_failed',
+        'supabase_sync_failed',
+      ].includes(parseStatus)) {
+        const errorDetail = String(mineru.error || mineru.reason || '');
+        throw new Error(errorDetail || '招标文件解析失败，请检查文件是否可读，或在历史记录中重试 MinerU/OCR 解析。');
       }
       await delay(5000);
     }

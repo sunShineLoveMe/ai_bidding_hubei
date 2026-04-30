@@ -99,6 +99,42 @@ def get_bid_file(file_id: str) -> dict[str, Any] | None:
     return response.data[0] if response.data else None
 
 
+def get_latest_bid_file_for_project(project_id: str) -> dict[str, Any] | None:
+    response = (
+        get_supabase_client()
+        .table("bid_files")
+        .select("*")
+        .eq("project_id", project_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return response.data[0] if response.data else None
+
+
+def download_bid_file_to_local(file_record: dict[str, Any], target_dir: str | Path) -> Path:
+    bucket = file_record.get("bucket")
+    object_path = file_record.get("object_path")
+    if not bucket or not object_path:
+        raise RuntimeError("招标文件缺少 Supabase Storage bucket/object_path，无法重试解析")
+
+    client = get_supabase_client()
+    content = client.storage.from_(bucket).download(object_path)
+    if isinstance(content, bytes):
+        data = content
+    elif hasattr(content, "content"):
+        data = content.content
+    else:
+        data = bytes(content)
+
+    target = Path(target_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    suffix = Path(file_record.get("file_name") or "").suffix or f".{file_record.get('file_type') or 'bin'}"
+    local_path = target / f"retry-{uuid.uuid4()}{suffix}"
+    local_path.write_bytes(data)
+    return local_path
+
+
 def delete_bid_project(project_id: str) -> None:
     client = get_supabase_client()
     for table in [
@@ -478,7 +514,7 @@ def list_bid_history(limit: int = 100) -> list[dict[str, Any]]:
 
     file_rows = (
         client.table("bid_files")
-        .select("project_id,parse_status,created_at,file_name")
+        .select("id,project_id,parse_status,created_at,file_name")
         .in_("project_id", project_ids)
         .order("created_at", desc=True)
         .execute()
@@ -529,6 +565,7 @@ def list_bid_history(limit: int = 100) -> list[dict[str, Any]]:
             "chunk_count": chunk_counts.get(project_id, 0),
             "file_count": len(files),
             "parse_status": parse_status,
+            "latest_file_id": latest_file.get("id"),
             "latest_file_name": latest_file.get("file_name"),
         })
 

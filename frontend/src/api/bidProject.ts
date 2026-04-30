@@ -20,6 +20,18 @@ export async function getParseStatus(fileId: string): Promise<ParseStatusRespons
   return response.data;
 }
 
+export async function retryHistoryParse(projectId: string): Promise<{
+  message: string;
+  projectId: string;
+  fileId: string;
+  supabaseFileId: string;
+}> {
+  const response = await apiClient.post(`/api/bidding/history/${projectId}/retry-parse`, undefined, {
+    skipGlobalLoading: true,
+  });
+  return response.data;
+}
+
 export async function getLatestInterpretation(): Promise<InterpretationResponse> {
   const response = await apiClient.get('/api/bidding/interpretations/latest');
   return response.data;

@@ -20,7 +20,7 @@ from ai_chapter_planner import generate_bid_outline, stream_bid_outline
 from ai_section_writer import stream_bid_section
 from ai_interpreter import generate_ai_interpretation_report
 from compliance_checker import build_compliance_report
-from db_supabase import create_knowledge_asset, delete_bid_project, delete_bid_section, download_knowledge_asset_file, get_bid_file, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_section_content, upload_knowledge_asset_file, upsert_bid_section
+from db_supabase import create_knowledge_asset, delete_bid_project, delete_bid_section, download_bid_file_to_local, download_knowledge_asset_file, get_bid_file, get_latest_bid_file_for_project, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_file_parse_status, update_bid_section_content, upload_knowledge_asset_file, upsert_bid_section
 from llm_json_utils import strip_llm_json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
@@ -670,10 +670,125 @@ def get_latest_interpretation():
 def get_bid_history():
     try:
         limit = int(request.args.get("limit", 100))
-        return jsonify({"items": list_bid_history(limit=limit)}), 200
+        items = list_bid_history(limit=limit)
+        for item in items:
+            local_status = _find_local_parse_status_for_supabase_file(item.get("latest_file_id"))
+            if not local_status:
+                continue
+            parse_status = local_status.get("parse_status") or item.get("parse_status")
+            item["parse_status"] = parse_status
+            item["parse_task_id"] = local_status.get("_parse_id")
+            item["parse_error"] = (
+                local_status.get("error")
+                or local_status.get("reason")
+                or local_status.get("supabase_sync_error")
+            )
+            item["parse_retryable"] = bool(local_status.get("retryable"))
+            item["parse_updated_at"] = local_status.get("updated_at")
+            if parse_status in {
+                "mineru_failed",
+                "index_failed",
+                "ocr_required",
+                "mineru_download_failed",
+                "mineru_import_failed",
+                "supabase_sync_failed",
+            }:
+                item["stage"] = "解析失败"
+                item["action"] = "查看"
+                item["parse_retryable"] = True
+            elif parse_status in {
+                "uploaded",
+                "pending",
+                "syncing_supabase",
+                "supabase_synced",
+                "mineru_submitted",
+                "mineru_running",
+                "mineru_split_submitted",
+                "mineru_split_running",
+                "mineru_downloading",
+                "mineru_download_retrying",
+                "mineru_importing_zip",
+                "mineru_fallback_native",
+            } and not item.get("chunk_count"):
+                item["stage"] = "解析中"
+                item["action"] = "查看状态"
+        return jsonify({"items": items}), 200
     except Exception as e:
         logging.exception("查询历史记录失败")
         return jsonify({'error': f'查询历史记录失败: {str(e)}'}), 500
+
+
+def _find_local_parse_status_for_supabase_file(supabase_file_id):
+    if not supabase_file_id:
+        return None
+    status_root = Path("parsed_outputs")
+    if not status_root.exists():
+        return None
+    latest_status = None
+    latest_mtime = 0.0
+    for status_path in status_root.glob("*/mineru_status.json"):
+        try:
+            payload = json.loads(status_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if payload.get("supabase_file_id") != supabase_file_id:
+            continue
+        mtime = status_path.stat().st_mtime
+        if mtime >= latest_mtime:
+            latest_mtime = mtime
+            payload["_parse_id"] = status_path.parent.name
+            latest_status = payload
+    return latest_status
+
+
+@bp.route('/history/<project_id>/retry-parse', methods=['POST'])
+def retry_bid_history_parse(project_id):
+    try:
+        uuid.UUID(project_id)
+        file_record = get_latest_bid_file_for_project(project_id)
+        if not file_record:
+            return jsonify({'error': '未找到该项目的招标文件记录，无法重试解析。'}), 404
+
+        local_status = _find_local_parse_status_for_supabase_file(file_record.get("id")) or {}
+        source_file = local_status.get("source_file")
+        if source_file and Path(source_file).exists():
+            local_path = Path(source_file)
+        else:
+            local_path = download_bid_file_to_local(file_record, current_app.config['UPLOAD_FOLDER'])
+
+        parse_id = str(uuid.uuid4())
+        original_filename = file_record.get("file_name") or local_path.name
+        update_bid_file_parse_status(file_record["id"], "pending")
+        write_parse_status(parse_id, {
+            "parse_status": "supabase_synced",
+            "parser": "mineru",
+            "source_file": str(local_path),
+            "file_name": original_filename,
+            "project_id": project_id,
+            "supabase_file_id": file_record["id"],
+            "retry_from": local_status.get("_parse_id"),
+        })
+        threading.Thread(
+            target=parse_and_index_tender_file,
+            kwargs={
+                "file_path": str(local_path),
+                "original_filename": original_filename,
+                "parse_id": parse_id,
+                "supabase_file_id": file_record["id"],
+            },
+            daemon=True,
+        ).start()
+        return jsonify({
+            "message": "解析重试任务已启动",
+            "projectId": project_id,
+            "fileId": parse_id,
+            "supabaseFileId": file_record["id"],
+        }), 202
+    except ValueError:
+        return jsonify({'error': 'project_id 不是合法 UUID。'}), 400
+    except Exception as e:
+        logging.exception("重试解析历史记录失败: %s", project_id)
+        return jsonify({'error': f'重试解析失败: {str(e)}'}), 500
 
 
 @bp.route('/history/<project_id>', methods=['DELETE'])
