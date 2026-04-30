@@ -5,6 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from PyPDF2 import PdfReader, PdfWriter
+
 from bid_interpreter import ingest_mineru_artifacts_to_supabase
 from db_supabase import update_bid_file_parse_status
 from file_to_chroma import EmptyDocumentContentError, file_to_chroma
@@ -20,6 +22,7 @@ from mineru_client import (
 )
 
 PARSED_OUTPUT_ROOT = Path("parsed_outputs")
+MINERU_MAX_PDF_PAGES = int(os.getenv("MINERU_MAX_PDF_PAGES", "200"))
 
 
 def _status_file(file_id: str) -> Path:
@@ -113,6 +116,102 @@ def _should_use_mineru_first(file_path: str) -> bool:
     return os.getenv("MINERU_PARSE_PDF_FIRST", "true").lower() not in {"false", "0", "no"}
 
 
+def _pdf_page_count(file_path: str | Path) -> int | None:
+    try:
+        reader = PdfReader(str(file_path))
+        return len(reader.pages)
+    except Exception:
+        logging.exception("读取 PDF 页数失败: %s", file_path)
+        return None
+
+
+def _split_pdf_for_mineru(file_path: str | Path, parse_id: str, max_pages: int = MINERU_MAX_PDF_PAGES) -> list[dict[str, Any]]:
+    reader = PdfReader(str(file_path))
+    total_pages = len(reader.pages)
+    split_dir = PARSED_OUTPUT_ROOT / parse_id / "split_inputs"
+    split_dir.mkdir(parents=True, exist_ok=True)
+
+    parts: list[dict[str, Any]] = []
+    for index, start in enumerate(range(0, total_pages, max_pages), 1):
+        end = min(start + max_pages, total_pages)
+        writer = PdfWriter()
+        for page_index in range(start, end):
+            writer.add_page(reader.pages[page_index])
+
+        part_path = split_dir / f"part_{index:03d}_pages_{start + 1}_{end}.pdf"
+        with open(part_path, "wb") as f:
+            writer.write(f)
+        parts.append({
+            "index": index,
+            "path": str(part_path),
+            "start_page": start + 1,
+            "end_page": end,
+            "page_count": end - start,
+        })
+    return parts
+
+
+def _read_json_list(path: str | None) -> list[dict[str, Any]]:
+    if not path:
+        return []
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        logging.exception("读取 MinerU content_list 失败: %s", path)
+        return []
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def _merge_split_artifacts(parse_id: str, parts: list[dict[str, Any]]) -> dict[str, Any]:
+    combined_dir = PARSED_OUTPUT_ROOT / parse_id / "combined"
+    combined_dir.mkdir(parents=True, exist_ok=True)
+    markdown_parts: list[str] = []
+    content_list: list[dict[str, Any]] = []
+    artifacts_parts: list[dict[str, Any]] = []
+
+    for part in parts:
+        artifacts = part["artifacts"]
+        artifacts_parts.append({
+            "index": part["index"],
+            "start_page": part["start_page"],
+            "end_page": part["end_page"],
+            "artifacts": artifacts,
+        })
+        markdown_path = artifacts.get("markdown_path")
+        if markdown_path:
+            markdown = Path(markdown_path).read_text(encoding="utf-8")
+            markdown_parts.append(
+                f"\n\n<!-- MinerU split part {part['index']}, pages {part['start_page']}-{part['end_page']} -->\n\n{markdown.strip()}\n"
+            )
+
+        page_offset = int(part["start_page"]) - 1
+        for item in _read_json_list(artifacts.get("content_list_path")):
+            next_item = dict(item)
+            page_idx = next_item.get("page_idx")
+            if isinstance(page_idx, int):
+                next_item["page_idx"] = page_idx + page_offset
+            next_item.setdefault("split_part", part["index"])
+            content_list.append(next_item)
+
+    markdown_path = combined_dir / "full.md"
+    content_list_path = combined_dir / "combined_content_list.json"
+    markdown_path.write_text("\n".join(markdown_parts).strip() + "\n", encoding="utf-8")
+    content_list_path.write_text(json.dumps(content_list, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return {
+        "extract_dir": str(combined_dir),
+        "markdown_path": str(markdown_path),
+        "content_list_path": str(content_list_path),
+        "model_path": None,
+        "middle_path": None,
+        "zip_path": None,
+        "split": True,
+        "split_parts": artifacts_parts,
+    }
+
+
 def _run_mineru_parse_and_index(
     *,
     file_path: str,
@@ -169,6 +268,112 @@ def _run_mineru_parse_and_index(
     )
     artifacts = download_and_extract_zip(full_zip_url, output_dir)
     write_parse_status(parse_id, {"parse_status": "mineru_done", "artifacts": artifacts})
+    ingest_artifacts(parse_id, artifacts)
+    _vectorize_markdown(artifacts.get("markdown_path"), parse_id, supabase_file_id)
+
+
+def _run_mineru_split_parse_and_index(
+    *,
+    file_path: str,
+    original_filename: str,
+    parse_id: str,
+    supabase_file_id: str | None,
+    total_pages: int,
+) -> None:
+    parts = _split_pdf_for_mineru(file_path, parse_id)
+    _update_supabase_status(supabase_file_id, "mineru_split_submitted")
+    write_parse_status(parse_id, {
+        "parse_status": "mineru_split_submitted",
+        "parser": "mineru",
+        "split": True,
+        "total_pages": total_pages,
+        "max_pages_per_part": MINERU_MAX_PDF_PAGES,
+        "part_count": len(parts),
+        "parts": [
+            {
+                "index": part["index"],
+                "start_page": part["start_page"],
+                "end_page": part["end_page"],
+                "page_count": part["page_count"],
+            }
+            for part in parts
+        ],
+        "supabase_file_id": supabase_file_id,
+    })
+
+    parsed_parts: list[dict[str, Any]] = []
+    original_path = Path(original_filename)
+    for part in parts:
+        part_parse_id = f"{parse_id}_part{part['index']:03d}"
+        part_name = f"{original_path.stem}_part{part['index']:03d}_p{part['start_page']}-{part['end_page']}.pdf"
+        output_dir = PARSED_OUTPUT_ROOT / parse_id / "parts" / f"part_{part['index']:03d}"
+        _update_supabase_status(supabase_file_id, "mineru_split_running")
+        write_parse_status(parse_id, {
+            "parse_status": "mineru_split_running",
+            "current_part": part["index"],
+            "current_part_pages": f"{part['start_page']}-{part['end_page']}",
+        })
+
+        task = create_local_file_batch_task(
+            local_file_path=part["path"],
+            file_name=part_name,
+            data_id=part_parse_id,
+        )
+        write_parse_status(part_parse_id, {
+            "parse_status": "mineru_submitted",
+            "parser": "mineru",
+            "parent_parse_id": parse_id,
+            "batch_id": task.batch_id,
+            "data_id": task.data_id,
+            "file_name": task.file_name,
+            "start_page": part["start_page"],
+            "end_page": part["end_page"],
+            "supabase_file_id": supabase_file_id,
+        })
+
+        def on_progress(result: dict[str, Any], *, current_part: dict[str, Any] = part) -> None:
+            state = result.get("state") or "mineru_running"
+            status = "mineru_running" if state in {"waiting-file", "pending", "running", "converting"} else state
+            _update_supabase_status(supabase_file_id, "mineru_split_running")
+            progress_payload = {
+                "parse_status": "mineru_split_running",
+                "current_part": current_part["index"],
+                "current_part_pages": f"{current_part['start_page']}-{current_part['end_page']}",
+                "current_part_state": state,
+                "extract_progress": result.get("extract_progress"),
+                "err_msg": result.get("err_msg"),
+            }
+            write_parse_status(parse_id, progress_payload)
+            write_parse_status(part_parse_id, {
+                "parse_status": status,
+                "mineru_state": state,
+                "extract_progress": result.get("extract_progress"),
+                "err_msg": result.get("err_msg"),
+            })
+
+        result = wait_for_batch_file_result(batch_id=task.batch_id, data_id=part_parse_id, on_progress=on_progress)
+        full_zip_url = result.get("full_zip_url")
+        if not full_zip_url:
+            raise RuntimeError(f"MinerU split part finished without full_zip_url: {result}")
+
+        write_parse_status(part_parse_id, {
+            "parse_status": "mineru_downloading",
+            "mineru_state": "done",
+            "full_zip_url": full_zip_url,
+        })
+        artifacts = download_and_extract_zip(full_zip_url, output_dir)
+        part["artifacts"] = artifacts
+        parsed_parts.append(part)
+        write_parse_status(part_parse_id, {"parse_status": "mineru_done", "artifacts": artifacts})
+
+    artifacts = _merge_split_artifacts(parse_id, parsed_parts)
+    _update_supabase_status(supabase_file_id, "mineru_done")
+    write_parse_status(parse_id, {
+        "parse_status": "mineru_done",
+        "mineru_state": "done",
+        "artifacts": artifacts,
+        "current_part": None,
+    })
     ingest_artifacts(parse_id, artifacts)
     _vectorize_markdown(artifacts.get("markdown_path"), parse_id, supabase_file_id)
 
@@ -233,12 +438,22 @@ def parse_and_index_tender_file(
     """Use MinerU first for PDFs when configured, otherwise index native text."""
     if has_mineru_token() and _should_use_mineru_first(file_path):
         try:
-            _run_mineru_parse_and_index(
-                file_path=file_path,
-                original_filename=original_filename,
-                parse_id=parse_id,
-                supabase_file_id=supabase_file_id,
-            )
+            page_count = _pdf_page_count(file_path)
+            if page_count and page_count > MINERU_MAX_PDF_PAGES:
+                _run_mineru_split_parse_and_index(
+                    file_path=file_path,
+                    original_filename=original_filename,
+                    parse_id=parse_id,
+                    supabase_file_id=supabase_file_id,
+                    total_pages=page_count,
+                )
+            else:
+                _run_mineru_parse_and_index(
+                    file_path=file_path,
+                    original_filename=original_filename,
+                    parse_id=parse_id,
+                    supabase_file_id=supabase_file_id,
+                )
             return
         except MinerUDownloadError as e:
             logging.exception("MinerU 结果 zip 下载失败，保留解析任务等待重试: %s", file_path)
@@ -255,11 +470,11 @@ def parse_and_index_tender_file(
             return
         except Exception as e:
             logging.exception("MinerU 优先解析失败，回退原生文本抽取: %s", file_path)
-            _update_supabase_status(supabase_file_id, "mineru_failed")
+            _update_supabase_status(supabase_file_id, "mineru_fallback_native")
             write_parse_status(
                 parse_id,
                 {
-                    "parse_status": "mineru_failed",
+                    "parse_status": "mineru_fallback_native",
                     "parser": "mineru",
                     "error": str(e),
                     "fallback": "native_text",

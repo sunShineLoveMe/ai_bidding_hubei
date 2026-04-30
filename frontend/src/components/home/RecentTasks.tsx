@@ -12,6 +12,7 @@ interface HistoryItem {
   stage?: string | null;
   action?: string | null;
   section_count?: number;
+  parse_status?: string | null;
 }
 
 const statusColor: Record<string, string> = {
@@ -19,6 +20,8 @@ const statusColor: Record<string, string> = {
   生成中: 'blue',
   已导出: 'green',
   解析完成: 'purple',
+  解析中: 'processing',
+  解析失败: 'red',
   已上传: 'cyan',
   解读完成: 'blue',
   标书编制: 'green',
@@ -77,8 +80,8 @@ export function RecentTasks({ refreshKey = 0 }: RecentTasksProps): JSX.Element {
     {
       title: '当前状态',
       dataIndex: 'stage',
-      width: 90,
-      render: status => <Tag color={statusColor[status as string] || 'default'}>{status || '已上传'}</Tag>,
+      width: 96,
+      render: (_, record) => <Tag color={statusColor[record.stage as string] || 'default'}>{record.stage || record.parse_status || '已上传'}</Tag>,
     },
     {
       title: '操作',

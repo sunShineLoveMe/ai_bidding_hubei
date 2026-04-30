@@ -956,7 +956,7 @@ export function BidEditorPage(): JSX.Element {
       if (!dataText) {
         return;
       }
-      const payload = JSON.parse(dataText) as { content?: string; error?: string; title?: string };
+      const payload = JSON.parse(dataText) as { content?: string; error?: string; title?: string; id?: string; oldId?: string };
       if (eventName === 'start') {
         options?.onStart?.(payload.title);
       }
@@ -967,6 +967,12 @@ export function BidEditorPage(): JSX.Element {
       }
       if (eventName === 'done') {
         options?.onDone?.();
+      }
+      if (eventName === 'saved' && payload.id && payload.oldId && payload.id !== payload.oldId) {
+        const savedId = payload.id;
+        const oldId = payload.oldId;
+        setChapters(items => items.map(item => item.id === oldId ? { ...item, id: savedId, status: 'generated' } : item));
+        setSelectedId(current => current === oldId ? savedId : current);
       }
       if (eventName === 'error') {
         throw new Error(payload.error || '章节正文生成失败');

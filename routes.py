@@ -20,7 +20,7 @@ from ai_chapter_planner import generate_bid_outline, stream_bid_outline
 from ai_section_writer import stream_bid_section
 from ai_interpreter import generate_ai_interpretation_report
 from compliance_checker import build_compliance_report
-from db_supabase import delete_bid_section, get_bid_file, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_section_content, upsert_bid_section
+from db_supabase import delete_bid_project, delete_bid_section, get_bid_file, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_section_content, upsert_bid_section
 from llm_json_utils import strip_llm_json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
@@ -662,6 +662,16 @@ def get_bid_history():
         logging.exception("查询历史记录失败")
         return jsonify({'error': f'查询历史记录失败: {str(e)}'}), 500
 
+
+@bp.route('/history/<project_id>', methods=['DELETE'])
+def delete_bid_history_project(project_id):
+    try:
+        delete_bid_project(project_id)
+        return jsonify({"message": "历史项目已删除", "projectId": project_id}), 200
+    except Exception as e:
+        logging.exception("删除历史项目失败: %s", project_id)
+        return jsonify({'error': f'删除历史项目失败: {str(e)}'}), 500
+
 @bp.route('/interpretations/<project_id>', methods=['GET'])
 def get_interpretation(project_id):
     """按项目获取招标文件结构化解读结果。"""
@@ -787,14 +797,17 @@ def stream_interpretation_bid_section(project_id):
                                 yield f"data: {json.dumps({'content': image_markdown}, ensure_ascii=False)}\n\n"
                         except Exception:
                             logging.exception("章节图文配图失败，继续保存纯文本章节: %s", chapter.get("id"))
-                    update_bid_section_content(project_id, chapter["id"], full_content, "generated")
+                    saved_section = update_bid_section_content(project_id, chapter["id"], full_content, "generated", chapter)
+                    if saved_section.get("id") != chapter.get("id"):
+                        yield "event: saved\n"
+                        yield f"data: {json.dumps({'id': saved_section.get('id'), 'oldId': chapter.get('id')}, ensure_ascii=False)}\n\n"
                 yield f"event: {event_type}\n"
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as e:
             logging.exception("流式生成章节正文失败: %s", project_id)
             if chapter.get("id"):
                 try:
-                    update_bid_section_content(project_id, chapter["id"], "", "failed")
+                    update_bid_section_content(project_id, chapter["id"], "", "failed", chapter)
                 except Exception:
                     logging.exception("写入章节失败状态失败: %s", chapter.get("id"))
             yield "event: error\n"

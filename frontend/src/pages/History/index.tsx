@@ -1,6 +1,6 @@
-import { Button, Empty, Input, Select, Space, Table, Tag, message } from 'antd';
+import { Button, Empty, Input, Popconfirm, Select, Space, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { AlertTriangle, ClipboardList, FileClock, FileText, Search, SquarePen } from 'lucide-react';
+import { AlertTriangle, ClipboardList, FileClock, Search, SquarePen, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiClient } from '../../api/client';
@@ -23,12 +23,17 @@ interface HistoryItem {
   risk_count?: number;
   section_count?: number;
   chunk_count?: number;
+  file_count?: number;
+  parse_status?: string | null;
+  latest_file_name?: string | null;
   created_at?: string | null;
 }
 
 const stageColor: Record<string, string> = {
   已上传: 'cyan',
   解析完成: 'purple',
+  解析中: 'processing',
+  解析失败: 'red',
   解读完成: 'blue',
   标书编制: 'green',
   failed: 'red',
@@ -109,25 +114,47 @@ export function HistoryPage(): JSX.Element {
     navigate(`/interpretation?projectId=${record.id}`);
   };
 
+  const deleteRecord = async (record: HistoryItem) => {
+    try {
+      await apiClient.delete(`/api/bidding/history/${record.id}`, { skipGlobalLoading: true });
+      message.success('历史任务已删除');
+      await fetchHistory();
+    } catch (error: any) {
+      message.error(error.message || '删除历史任务失败');
+    }
+  };
+
   const columns: ColumnsType<HistoryItem> = [
     {
       title: '项目名称',
       dataIndex: 'project_name',
+      width: 230,
       ellipsis: true,
-      render: value => value || '未命名招标项目',
+      render: (value, record) => (
+        <div className="min-w-0">
+          <div className="truncate font-semibold text-slate-900">{value || '未命名招标项目'}</div>
+          {record.latest_file_name ? <div className="truncate text-xs text-slate-500">{record.latest_file_name}</div> : null}
+        </div>
+      ),
     },
-    { title: '项目编号', dataIndex: 'project_no', width: 150, ellipsis: true, render: value => value || '-' },
-    { title: '招标单位', dataIndex: 'tender_unit', width: 160, ellipsis: true, render: value => value || '-' },
-    { title: '项目类型', dataIndex: 'project_type', width: 110, render: value => value || '-' },
+    { title: '项目编号', dataIndex: 'project_no', width: 130, ellipsis: true, render: value => value || '-' },
+    { title: '招标单位', dataIndex: 'tender_unit', width: 140, ellipsis: true, render: value => value || '-' },
+    { title: '项目类型', dataIndex: 'project_type', width: 100, ellipsis: true, render: value => value || '-' },
     {
       title: '当前阶段',
       dataIndex: 'stage',
-      width: 110,
+      width: 115,
       render: stage => <Tag color={stageColor[stage as string] || 'default'}>{stage || '已上传'}</Tag>,
     },
     {
+      title: '解析状态',
+      dataIndex: 'parse_status',
+      width: 135,
+      render: value => <Tag>{value || '-'}</Tag>,
+    },
+    {
       title: '解析数据',
-      width: 170,
+      width: 150,
       render: (_, record) => (
         <Space size={4} wrap>
           <Tag>需求 {record.requirement_count || 0}</Tag>
@@ -136,14 +163,20 @@ export function HistoryPage(): JSX.Element {
         </Space>
       ),
     },
-    { title: '创建时间', dataIndex: 'created_at', width: 170, render: formatDate },
+    { title: '创建时间', dataIndex: 'created_at', width: 150, render: formatDate },
     {
       title: '操作',
-      width: 130,
+      width: 150,
+      fixed: 'right',
       render: (_, record) => (
-        <Button type="link" size="small" onClick={() => openRecord(record)}>
-          {record.action || '查看'}
-        </Button>
+        <Space size={2}>
+          <Button type="link" size="small" onClick={() => openRecord(record)}>
+            {record.action || '查看'}
+          </Button>
+          <Popconfirm title="确认删除该历史任务？" description="会删除项目记录和已解析的结构化数据。" okText="删除" cancelText="取消" onConfirm={() => deleteRecord(record)}>
+            <Button type="link" danger size="small" icon={<Trash2 size={14} />}>删除</Button>
+          </Popconfirm>
+        </Space>
       ),
     },
   ];
@@ -197,6 +230,7 @@ export function HistoryPage(): JSX.Element {
             dataSource={filteredItems}
             loading={loading}
             className="compact-table"
+            scroll={{ x: 1180 }}
             locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无历史记录，上传招标文件后会显示在这里" /> }}
           />
         </section>

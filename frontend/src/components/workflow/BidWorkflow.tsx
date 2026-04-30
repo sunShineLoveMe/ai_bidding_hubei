@@ -13,6 +13,14 @@ import {
 import { useBidProjectStore } from '../../stores/bidProjectStore';
 
 type StepStatus = 'wait' | 'process' | 'finish' | 'error';
+const ACTIVE_WORKFLOW_KEY = 'aiBiddingActiveWorkflow';
+
+interface ActiveWorkflow {
+  fileName: string;
+  fileId: string;
+  projectId: string;
+  startedAt: number;
+}
 
 interface BidWorkflowProps {
   onReady?: (openFilePicker: () => void) => void;
@@ -52,6 +60,26 @@ function initialStatuses(): StepStatus[] {
   return workflowSteps.map(() => 'wait');
 }
 
+function readActiveWorkflow(): ActiveWorkflow | null {
+  try {
+    const raw = localStorage.getItem(ACTIVE_WORKFLOW_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ActiveWorkflow;
+    if (!parsed.fileId || !parsed.projectId) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveActiveWorkflow(task: ActiveWorkflow): void {
+  localStorage.setItem(ACTIVE_WORKFLOW_KEY, JSON.stringify(task));
+}
+
+function clearActiveWorkflow(): void {
+  localStorage.removeItem(ACTIVE_WORKFLOW_KEY);
+}
+
 export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.Element {
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -72,6 +100,13 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
   useEffect(() => {
     onReady?.(openFilePicker);
   }, [onReady, openFilePicker]);
+
+  useEffect(() => {
+    const active = readActiveWorkflow();
+    if (!active || busy) return;
+    void resumeWorkflow(active);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function getUserId(): Promise<string | number> {
     if (userId) return userId;
@@ -99,7 +134,11 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
       if (runTokenRef.current !== token) return;
       const data = await getParseStatus(fileId);
       const parseStatus = data.parseStatus || 'pending';
-      setDetail(`解析状态：${parseStatus}。系统正在抽取文本、表格和图片信息，第 ${count} 次检查。`);
+      const mineru = (data.mineru || {}) as Record<string, unknown>;
+      const splitDetail = mineru.split && mineru.part_count
+        ? `当前为超 200 页 PDF，已自动分为 ${mineru.part_count} 份解析${mineru.current_part ? `，正在处理第 ${mineru.current_part} 份（${mineru.current_part_pages || ''} 页）` : ''}。`
+        : '';
+      setDetail(`解析状态：${parseStatus}。${splitDetail}系统正在抽取文本、表格和图片信息，第 ${count} 次检查。`);
 
       if (parseStatus === 'indexed') {
         return;
@@ -148,6 +187,14 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
         throw new Error('上传成功，但未返回项目 ID，无法继续自动生成招标解读。');
       }
       setProjectId(uploadResult.projectId);
+      if (uploadResult.fileId) {
+        saveActiveWorkflow({
+          fileName: selectedFile.name,
+          fileId: uploadResult.fileId,
+          projectId: uploadResult.projectId,
+          startedAt: Date.now(),
+        });
+      }
 
       updateStep(1, 'process', '正在解析招标文件...', '系统正在识别正文、表格、图片和扫描页，完成后会自动进入招标解读。');
       if (uploadResult.fileId) {
@@ -167,6 +214,7 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
       finishStep(3);
 
       updateStep(4, 'finish', '章节大纲已生成，可以进入标书编制。', '后续可在标书编制工作台中编辑章节正文、引用资料并导出 Word。');
+      clearActiveWorkflow();
       message.success('招标解读和章节大纲已生成');
       onTaskChanged?.();
     } catch (error) {
@@ -178,6 +226,52 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
       message.error(reason);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function resumeWorkflow(active: ActiveWorkflow): Promise<void> {
+    const token = runTokenRef.current + 1;
+    runTokenRef.current = token;
+    setFile(null);
+    setProjectId(active.projectId);
+    setBusy(true);
+    setCurrent(1);
+    activeStepRef.current = 1;
+    setStatuses(['finish', 'process', 'wait', 'wait', 'wait']);
+    setSummary('正在恢复未完成的招标文件流程...');
+    setDetail(`检测到未完成任务：${active.fileName}。系统将继续解析、解读和生成章节大纲。`);
+
+    try {
+      updateStep(1, 'process', '正在恢复解析进度...', '正在从后台查询 MinerU/OCR 解析状态。');
+      await waitForParseIndexed(active.fileId, token);
+      if (runTokenRef.current !== token) return;
+      finishStep(1);
+
+      updateStep(2, 'process', '正在生成招标解读...', '解析已完成，继续提取项目概况、资格要求、评分标准和风险项。');
+      await generateAIInterpretation(active.projectId);
+      if (runTokenRef.current !== token) return;
+      finishStep(2);
+
+      updateStep(3, 'process', '正在生成章节大纲...', '正在结合招标解读和知识库规划章节。');
+      await generateBidOutline(active.projectId);
+      if (runTokenRef.current !== token) return;
+      finishStep(3);
+
+      updateStep(4, 'finish', '章节大纲已生成，可以进入标书编制。', '后续可继续编辑章节正文并导出 Word。');
+      clearActiveWorkflow();
+      onTaskChanged?.();
+      message.success('已恢复并完成招标解读和章节大纲生成');
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      setCurrent(activeStepRef.current);
+      setStatuses(prev => prev.map((item, index) => (index === activeStepRef.current ? 'error' : item)));
+      setSummary('恢复流程失败');
+      setDetail(reason);
+      message.error(reason);
+    } finally {
+      if (runTokenRef.current === token) {
+        setBusy(false);
+      }
     }
   }
 

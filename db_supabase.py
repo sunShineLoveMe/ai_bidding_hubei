@@ -98,6 +98,26 @@ def get_bid_file(file_id: str) -> dict[str, Any] | None:
     return response.data[0] if response.data else None
 
 
+def delete_bid_project(project_id: str) -> None:
+    client = get_supabase_client()
+    for table in [
+        "bid_sections",
+        "bid_chapter_suggestions",
+        "bid_scoring_items",
+        "bid_risks",
+        "bid_requirements",
+        "bid_analysis",
+        "document_chunks",
+        "bid_files",
+        "onlyoffice_documents",
+    ]:
+        try:
+            client.table(table).delete().eq("project_id", project_id).execute()
+        except Exception:
+            logging.exception("删除项目关联表失败: table=%s project_id=%s", table, project_id)
+    client.table("bid_projects").delete().eq("id", project_id).execute()
+
+
 def identify_app_user(fingerprint_id: str) -> tuple[str, bool]:
     """Create or return a lightweight local-app user in Supabase."""
     client = get_supabase_client()
@@ -286,18 +306,81 @@ def reorder_bid_sections(project_id: str, sections: list[dict[str, Any]]) -> lis
     raise RuntimeError(f"批量排序章节失败，已重试 3 次: {last_error}") from last_error
 
 
-def update_bid_section_content(project_id: str, section_id: str, content: str, status: str = "edited") -> dict[str, Any]:
-    response = (
+def _section_match_score(row: dict[str, Any], section: dict[str, Any]) -> int:
+    score = 0
+    if row.get("title") and row.get("title") == section.get("title"):
+        score += 10
+    if int(row.get("level") or 0) == int(section.get("level") or 0):
+        score += 3
+    if int(row.get("order_index") or 0) == int(section.get("order_index") or section.get("order") or 0):
+        score += 2
+    return score
+
+
+def _find_existing_section_for_generated_content(project_id: str, section: dict[str, Any]) -> dict[str, Any] | None:
+    title = section.get("title")
+    if not title:
+        return None
+    rows = (
         get_supabase_client()
         .table("bid_sections")
-        .update({"content": content, "status": status})
+        .select("*")
+        .eq("project_id", project_id)
+        .eq("title", title)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        return None
+    return sorted(rows, key=lambda row: _section_match_score(row, section), reverse=True)[0]
+
+
+def update_bid_section_content(
+    project_id: str,
+    section_id: str,
+    content: str,
+    status: str = "edited",
+    section: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    client = get_supabase_client()
+    payload = {"content": content, "status": status}
+    response = (
+        client
+        .table("bid_sections")
+        .update(payload)
         .eq("id", section_id)
         .eq("project_id", project_id)
         .execute()
     )
-    if not response.data:
-        raise RuntimeError("章节不存在或保存失败")
-    return response.data[0]
+    if response.data:
+        return response.data[0]
+
+    if section:
+        existing = _find_existing_section_for_generated_content(project_id, section)
+        if existing:
+            retry = (
+                client.table("bid_sections")
+                .update(payload)
+                .eq("id", existing["id"])
+                .eq("project_id", project_id)
+                .execute()
+            )
+            if retry.data:
+                return retry.data[0]
+
+        fallback = _section_payload(project_id, {**section, "id": None, "content": content, "status": status, "parent_id": None}, int(section.get("order_index") or section.get("order") or 1) - 1)
+        created = client.table("bid_sections").insert(fallback).execute()
+        if created.data:
+            logging.warning(
+                "章节 ID 失效，已按标题重建章节: project_id=%s old_section_id=%s title=%s",
+                project_id,
+                section_id,
+                section.get("title"),
+            )
+            return created.data[0]
+
+    raise RuntimeError("章节不存在或保存失败")
 
 
 def reset_bid_sections_generation(project_id: str, clear_content: bool = False) -> list[dict[str, Any]]:
@@ -392,20 +475,44 @@ def list_bid_history(limit: int = 100) -> list[dict[str, Any]]:
     section_counts = count_by_project("bid_sections")
     chunk_counts = count_by_project("document_chunks")
 
+    file_rows = (
+        client.table("bid_files")
+        .select("project_id,parse_status,created_at,file_name")
+        .in_("project_id", project_ids)
+        .order("created_at", desc=True)
+        .execute()
+        .data
+        or []
+    )
+    files_by_project: dict[str, list[dict[str, Any]]] = {}
+    for row in file_rows:
+        project_id = row.get("project_id")
+        if project_id:
+            files_by_project.setdefault(project_id, []).append(row)
+
     history = []
     for project in projects:
         project_id = project["id"]
         has_analysis = analysis_counts.get(project_id, 0) > 0
         section_count = section_counts.get(project_id, 0)
+        files = files_by_project.get(project_id, [])
+        latest_file = files[0] if files else {}
+        parse_status = latest_file.get("parse_status")
         if section_count > 0:
             stage = "标书编制"
             action = "继续编制"
         elif has_analysis:
             stage = "解读完成"
             action = "查看解读"
-        elif chunk_counts.get(project_id, 0) > 0:
+        elif chunk_counts.get(project_id, 0) > 0 or parse_status in {"indexed", "mineru_done"}:
             stage = "解析完成"
             action = "查看解读"
+        elif parse_status in {"pending", "mineru_submitted", "mineru_running", "mineru_split_submitted", "mineru_split_running", "mineru_downloading", "syncing_supabase", "supabase_synced"}:
+            stage = "解析中"
+            action = "查看状态"
+        elif parse_status in {"mineru_failed", "index_failed", "ocr_required", "mineru_download_failed"}:
+            stage = "解析失败"
+            action = "查看"
         else:
             stage = project.get("status") or "已上传"
             action = "查看"
@@ -419,6 +526,9 @@ def list_bid_history(limit: int = 100) -> list[dict[str, Any]]:
             "risk_count": risk_counts.get(project_id, 0),
             "section_count": section_count,
             "chunk_count": chunk_counts.get(project_id, 0),
+            "file_count": len(files),
+            "parse_status": parse_status,
+            "latest_file_name": latest_file.get("file_name"),
         })
 
     return history
