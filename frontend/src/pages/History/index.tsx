@@ -39,6 +39,19 @@ const stageColor: Record<string, string> = {
   failed: 'red',
 };
 
+const parseStatusLabel: Record<string, string> = {
+  indexed: '解析完成',
+  uploaded: '已上传',
+  pending: '等待解析',
+  parsing: '解析中',
+  mineru_submitted: 'MinerU解析中',
+  mineru_done: 'MinerU完成',
+  mineru_failed: 'MinerU失败',
+  mineru_download_failed: '结果下载失败',
+  ocr_required: '需要OCR',
+  failed: '解析失败',
+};
+
 function formatDate(value?: string | null): string {
   if (!value) return '-';
   return new Date(value).toLocaleString('zh-CN', {
@@ -126,55 +139,66 @@ export function HistoryPage(): JSX.Element {
 
   const columns: ColumnsType<HistoryItem> = [
     {
-      title: '项目名称',
+      title: '任务信息',
       dataIndex: 'project_name',
-      width: 230,
-      ellipsis: true,
+      width: 380,
       render: (value, record) => (
-        <div className="min-w-0">
-          <div className="truncate font-semibold text-slate-900">{value || '未命名招标项目'}</div>
-          {record.latest_file_name ? <div className="truncate text-xs text-slate-500">{record.latest_file_name}</div> : null}
+        <div className="min-w-0 pr-2">
+          <div className="truncate text-sm font-black text-slate-950" title={value || '未命名招标项目'}>
+            {value || '未命名招标项目'}
+          </div>
+          {record.latest_file_name ? (
+            <div className="mt-1 truncate text-xs font-semibold text-slate-500" title={record.latest_file_name}>
+              文件：{record.latest_file_name}
+            </div>
+          ) : null}
+          <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
+            <Tag>编号 {record.project_no || '-'}</Tag>
+            <Tag>类型 {record.project_type || '-'}</Tag>
+            {record.tender_unit ? <Tag>招标单位 {record.tender_unit}</Tag> : null}
+          </div>
         </div>
       ),
     },
-    { title: '项目编号', dataIndex: 'project_no', width: 130, ellipsis: true, render: value => value || '-' },
-    { title: '招标单位', dataIndex: 'tender_unit', width: 140, ellipsis: true, render: value => value || '-' },
-    { title: '项目类型', dataIndex: 'project_type', width: 100, ellipsis: true, render: value => value || '-' },
     {
-      title: '当前阶段',
-      dataIndex: 'stage',
-      width: 115,
-      render: stage => <Tag color={stageColor[stage as string] || 'default'}>{stage || '已上传'}</Tag>,
+      title: '处理状态',
+      width: 220,
+      render: (_, record) => {
+        const parseStatus = record.parse_status || '';
+        return (
+          <div className="flex flex-col items-start gap-2">
+            <Tag color={stageColor[record.stage || '已上传'] || 'default'}>{record.stage || '已上传'}</Tag>
+            <Tag color={parseStatus.includes('failed') || parseStatus === 'ocr_required' ? 'red' : 'default'}>
+              {parseStatusLabel[parseStatus] || parseStatus || '-'}
+            </Tag>
+          </div>
+        );
+      },
     },
     {
-      title: '解析状态',
-      dataIndex: 'parse_status',
-      width: 135,
-      render: value => <Tag>{value || '-'}</Tag>,
-    },
-    {
-      title: '解析数据',
-      width: 150,
+      title: '解析摘要',
+      width: 210,
       render: (_, record) => (
-        <Space size={4} wrap>
+        <Space size={[4, 6]} wrap>
           <Tag>需求 {record.requirement_count || 0}</Tag>
           <Tag>风险 {record.risk_count || 0}</Tag>
           <Tag>章节 {record.section_count || 0}</Tag>
+          {record.file_count ? <Tag>文件 {record.file_count}</Tag> : null}
         </Space>
       ),
     },
-    { title: '创建时间', dataIndex: 'created_at', width: 150, render: formatDate },
+    { title: '创建时间', dataIndex: 'created_at', width: 155, render: value => <span className="text-slate-600">{formatDate(value)}</span> },
     {
       title: '操作',
-      width: 150,
-      fixed: 'right',
+      width: 160,
+      align: 'right',
       render: (_, record) => (
-        <Space size={2}>
-          <Button type="link" size="small" onClick={() => openRecord(record)}>
+        <Space size={6}>
+          <Button type="primary" ghost size="small" onClick={() => openRecord(record)}>
             {record.action || '查看'}
           </Button>
           <Popconfirm title="确认删除该历史任务？" description="会删除项目记录和已解析的结构化数据。" okText="删除" cancelText="取消" onConfirm={() => deleteRecord(record)}>
-            <Button type="link" danger size="small" icon={<Trash2 size={14} />}>删除</Button>
+            <Button danger size="small" icon={<Trash2 size={14} />}>删除</Button>
           </Popconfirm>
         </Space>
       ),
@@ -210,9 +234,9 @@ export function HistoryPage(): JSX.Element {
         ]}
       />
 
-      <div className="grid min-h-0 grid-cols-[250px_1fr] gap-4">
+      <div className="grid min-h-0 grid-cols-[220px_minmax(0,1fr)] gap-4">
         <CategoryList title="记录阶段" items={stageCategories} activeName={activeStage} onChange={setActiveStage} />
-        <section className="panel-card h-full">
+        <section className="panel-card h-full overflow-hidden">
           <div className="mb-3 flex items-center justify-between gap-3">
             <h2 className="panel-title mb-0">历史任务列表</h2>
             <Select
@@ -230,7 +254,8 @@ export function HistoryPage(): JSX.Element {
             dataSource={filteredItems}
             loading={loading}
             className="compact-table"
-            scroll={{ x: 1180 }}
+            tableLayout="fixed"
+            scroll={{ y: 'calc(100vh - 392px)' }}
             locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无历史记录，上传招标文件后会显示在这里" /> }}
           />
         </section>

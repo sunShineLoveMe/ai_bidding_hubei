@@ -1027,8 +1027,50 @@ textarea {
   border-bottom: 1px solid #dce3ee;
 }
 
-.loading-brand {
-  animation: brandPulse 1.9s ease-in-out infinite;
+.loading-brand,
+.brand-loading-logo {
+  animation: brandPulse 1.45s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.brand-loading-logo-sm {
+  flex: 0 0 auto;
+}
+
+.brand-loading-orbit {
+  position: relative;
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 76px;
+  height: 76px;
+  border-radius: 999px;
+}
+
+.brand-loading-orbit::before,
+.brand-loading-orbit::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.brand-loading-orbit::before {
+  background: radial-gradient(circle, rgba(50, 103, 255, 0.16) 0%, rgba(50, 103, 255, 0.08) 46%, transparent 68%);
+  animation: brandHaloPulse 1.45s ease-in-out infinite;
+}
+
+.brand-loading-orbit::after {
+  border: 2px solid transparent;
+  border-top-color: rgba(50, 103, 255, 0.46);
+  border-right-color: rgba(36, 199, 255, 0.4);
+  animation: brandOrbitSpin 1.15s linear infinite;
+}
+
+.brand-loading-orbit .brand-mark {
+  position: relative;
+  z-index: 1;
 }
 
 .onlyoffice-embed-editor {
@@ -1206,6 +1248,24 @@ textarea {
   50% {
     transform: scale(1.05);
     filter: drop-shadow(0 12px 22px rgba(50, 103, 255, 0.2));
+  }
+}
+
+@keyframes brandHaloPulse {
+  0%,
+  100% {
+    transform: scale(0.92);
+    opacity: 0.58;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 0.94;
+  }
+}
+
+@keyframes brandOrbitSpin {
+  to {
+    transform: rotate(360deg);
   }
 }
 
@@ -1698,10 +1758,6 @@ textarea {
   font-size: 15px;
   font-weight: 800;
   box-shadow: 0 16px 40px rgba(31, 60, 136, 0.16);
-}
-
-.global-loading-logo {
-  animation: brandPulse 1.9s ease-in-out infinite;
 }
 
 .brand-mark {

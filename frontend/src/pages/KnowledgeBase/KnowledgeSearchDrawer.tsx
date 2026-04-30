@@ -1,7 +1,8 @@
-import { Drawer, Input, Button, List, Spin, Typography, Image, message } from 'antd';
+import { Drawer, Input, Button, List, Typography, Image, message } from 'antd';
 import { SearchOutlined, SendOutlined } from '@ant-design/icons';
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { BrandMark } from '../../components/common/BrandMark';
 
 const { Text } = Typography;
 
@@ -245,7 +246,7 @@ export function KnowledgeSearchDrawer({
                   <div className={`prose prose-sm max-w-none ${msg.role === 'user' ? 'prose-invert' : ''}`}>
                     {msg.status && (
                       <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-500">
-                        <Spin size="small" />
+                        <BrandMark size={24} className="brand-loading-logo brand-loading-logo-sm" />
                         <span>{msg.status}</span>
                       </div>
                     )}

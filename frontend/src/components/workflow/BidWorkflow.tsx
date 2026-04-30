@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Progress, Steps, Tag, Upload, message } from 'antd';
 import type { UploadProps } from 'antd';
-import { CheckCircle2, FileSearch, FileUp, Loader2, RotateCcw, SquarePen } from 'lucide-react';
+import { CheckCircle2, FileSearch, FileUp, RotateCcw, SquarePen } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
   generateAIInterpretation,
@@ -10,6 +10,7 @@ import {
   identifyUser,
   uploadTenderFile,
 } from '../../api/bidProject';
+import { BrandMark } from '../common/BrandMark';
 import { useBidProjectStore } from '../../stores/bidProjectStore';
 
 type StepStatus = 'wait' | 'process' | 'finish' | 'error';
@@ -339,7 +340,7 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
         <div className="rounded-2xl border border-slate-100 bg-white px-5 py-4">
           <div className="mb-3 flex items-center gap-3">
             {busy ? (
-              <Loader2 className="animate-spin text-blue-600" size={22} />
+              <BrandMark size={28} className="brand-loading-logo brand-loading-logo-sm" />
             ) : progressPercent === 100 ? (
               <CheckCircle2 className="text-emerald-500" size={22} />
             ) : (

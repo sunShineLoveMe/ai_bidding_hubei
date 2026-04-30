@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Result, Space, Spin, message } from 'antd';
+import { Alert, Button, Result, Space, message } from 'antd';
 import { ArrowLeft, Download, RefreshCw } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { generateOnlyOfficeConfig } from '../../api/bidProject';
+import { BrandMark } from '../../components/common/BrandMark';
 
 declare global {
   interface Window {
@@ -120,7 +121,9 @@ export function OnlyOfficeEditorPage(): JSX.Element {
       </div> : null}
       {loading ? (
         <div className="onlyoffice-loading">
-          <Spin size="large" />
+          <span className="brand-loading-orbit" aria-hidden="true">
+            <BrandMark size={60} className="brand-loading-logo" />
+          </span>
           <span>正在生成 DOCX 并加载 ONLYOFFICE 编辑器...</span>
         </div>
       ) : null}
