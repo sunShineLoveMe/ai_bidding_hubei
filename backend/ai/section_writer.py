@@ -1,10 +1,10 @@
 import re
 from typing import Any, Iterator
 
-from app_config import build_enterprise_context
-from bid_writing_plan import ensure_chapter_writing_plan
-from db_supabase import get_project_interpretation
-from qwen_client import call_dashscope_api, stream_dashscope_api
+from backend.core.config import build_enterprise_context
+from backend.ai.bid_writing_plan import ensure_chapter_writing_plan
+from backend.db.supabase_repo import get_project_interpretation
+from backend.ai.qwen_client import call_dashscope_api, stream_dashscope_api
 
 
 def _text(value: Any) -> str:

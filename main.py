@@ -70,8 +70,8 @@ def init_db():
 # 初始化数据库
 init_db()
 
-import routes
-import users
+from backend.api import routes
+from backend.api import users
 
 # 注册蓝图
 app.register_blueprint(routes.bp, url_prefix='/api/bidding')

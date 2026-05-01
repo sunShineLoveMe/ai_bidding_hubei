@@ -1,6 +1,6 @@
 from typing import Any
 
-from db_supabase import get_project_interpretation
+from backend.db.supabase_repo import get_project_interpretation
 
 
 def _normalize(value: Any) -> str:

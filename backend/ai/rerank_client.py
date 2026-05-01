@@ -4,7 +4,7 @@ from typing import Any
 
 import requests
 
-from app_config import get_setting
+from backend.core.config import get_setting
 
 
 RERANK_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"

@@ -7,10 +7,10 @@ from typing import Any
 
 from PyPDF2 import PdfReader, PdfWriter
 
-from bid_interpreter import ingest_mineru_artifacts_to_supabase
-from db_supabase import update_bid_file_parse_status
-from file_to_chroma import EmptyDocumentContentError, file_to_chroma
-from mineru_client import (
+from backend.parsing.bid_interpreter import ingest_mineru_artifacts_to_supabase
+from backend.db.supabase_repo import update_bid_file_parse_status
+from backend.rag.vector_store import EmptyDocumentContentError, file_to_chroma
+from backend.parsing.mineru_client import (
     MinerUDownloadError,
     MinerUConfigError,
     create_local_file_batch_task,

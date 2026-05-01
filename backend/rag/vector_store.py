@@ -4,7 +4,7 @@ from chromadb.utils import embedding_functions
 from openai import OpenAI
 import hashlib
 from pathlib import Path
-from app_config import get_setting
+from backend.core.config import get_setting
 
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 

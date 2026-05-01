@@ -11,8 +11,8 @@ ASSET_ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from file_to_chroma import get_embeddings, init_ali_client  # noqa: E402
-from supabase_client import get_supabase_client, upload_file_to_storage  # noqa: E402
+from backend.rag.vector_store import get_embeddings, init_ali_client  # noqa: E402
+from backend.db.supabase_client import get_supabase_client, upload_file_to_storage  # noqa: E402
 from unidecode import unidecode  # noqa: E402
 
 try:

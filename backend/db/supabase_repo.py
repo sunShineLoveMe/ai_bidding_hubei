@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from supabase_client import get_bucket_name, get_supabase_client, reset_supabase_client, upload_file_to_storage
+from backend.db.supabase_client import get_bucket_name, get_supabase_client, reset_supabase_client, upload_file_to_storage
 
 
 def _file_sha256(file_path: str | Path) -> str:

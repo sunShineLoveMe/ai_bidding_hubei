@@ -3,11 +3,11 @@ import json
 from typing import Any, Iterator, List, Dict
 from openai import OpenAI
 
-from supabase_client import get_supabase_client
-from file_to_chroma import init_ali_client, get_embeddings
-from qwen_client import stream_dashscope_api
-from app_config import get_setting
-from rerank_client import rerank_documents
+from backend.db.supabase_client import get_supabase_client
+from backend.rag.vector_store import init_ali_client, get_embeddings
+from backend.ai.qwen_client import stream_dashscope_api
+from backend.core.config import get_setting
+from backend.ai.rerank_client import rerank_documents
 
 def search_knowledge_base(query: str, match_threshold: float = 0.5, match_count: int = 5) -> List[Dict[str, Any]]:
     """

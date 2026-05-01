@@ -1,10 +1,10 @@
 import json
 from typing import Any
 
-from app_config import build_enterprise_context
-from db_supabase import get_project_interpretation, get_supabase_client
-from llm_json_utils import strip_llm_json
-from qwen_client import call_dashscope_api
+from backend.core.config import build_enterprise_context
+from backend.db.supabase_repo import get_project_interpretation, get_supabase_client
+from backend.core.llm_json_utils import strip_llm_json
+from backend.ai.qwen_client import call_dashscope_api
 
 
 def _compact_items(items: list[dict[str, Any]], fields: list[str], limit: int) -> list[dict[str, Any]]:

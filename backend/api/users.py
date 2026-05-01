@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify
 import sqlite3
 import json
 import logging
-from db_supabase import identify_app_user
+from backend.db.supabase_repo import identify_app_user
 
 # 创建蓝图
 bp = Blueprint('users', __name__)

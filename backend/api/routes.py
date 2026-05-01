@@ -14,23 +14,23 @@ import re
 from werkzeug.utils import secure_filename
 import codecs
 import PyPDF2
-from qwen_client import call_dashscope_api, generate_bid_section
-from md_to_word import convert_md_to_word
-from ai_chapter_planner import generate_bid_outline, stream_bid_outline
-from ai_section_writer import stream_bid_section
-from ai_interpreter import generate_ai_interpretation_report
-from compliance_checker import build_compliance_report
-from db_supabase import create_knowledge_asset, delete_bid_project, delete_bid_section, download_bid_file_to_local, download_knowledge_asset_file_variant, get_bid_file, get_latest_bid_file_for_project, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_file_parse_status, update_bid_section_content, upload_knowledge_asset_file, upsert_bid_section
-from llm_json_utils import strip_llm_json
+from backend.ai.qwen_client import call_dashscope_api, generate_bid_section
+from backend.export.md_to_word import convert_md_to_word
+from backend.ai.chapter_planner import generate_bid_outline, stream_bid_outline
+from backend.ai.section_writer import stream_bid_section
+from backend.ai.interpreter import generate_ai_interpretation_report
+from backend.ai.compliance_checker import build_compliance_report
+from backend.db.supabase_repo import create_knowledge_asset, delete_bid_project, delete_bid_section, download_bid_file_to_local, download_knowledge_asset_file_variant, get_bid_file, get_latest_bid_file_for_project, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_file_parse_status, update_bid_section_content, upload_knowledge_asset_file, upsert_bid_section
+from backend.core.llm_json_utils import strip_llm_json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import shutil
 from datetime import timedelta
-from app_config import DEFAULT_SETTINGS, build_enterprise_context, load_runtime_settings, save_runtime_settings
+from backend.core.config import DEFAULT_SETTINGS, build_enterprise_context, load_runtime_settings, save_runtime_settings
 
 # 操作向量数据库的函数
-from document_parser import ingest_artifacts as ingest_mineru_artifacts_to_supabase, import_mineru_result_zip, parse_and_index_tender_file, read_parse_status, retry_mineru_result_download, write_parse_status
-from file_to_chroma import query_chroma
+from backend.parsing.document_parser import ingest_artifacts as ingest_mineru_artifacts_to_supabase, import_mineru_result_zip, parse_and_index_tender_file, read_parse_status, retry_mineru_result_download, write_parse_status
+from backend.rag.vector_store import query_chroma
 # 创建蓝图
 bp = Blueprint('bidding', __name__)
 knowledge_bp = Blueprint('knowledge', __name__)
@@ -1633,8 +1633,8 @@ def generate_bid_document():
         logging.exception(f"生成投标书过程出错: {e}")
         return jsonify({'error': f'生成投标书失败: {str(e)}'}), 500
 
-from knowledge_ingestion import ingest_knowledge_document, create_knowledge_document, update_knowledge_document_status
-from knowledge_retrieval import (
+from backend.rag.ingestion import ingest_knowledge_document, create_knowledge_document, update_knowledge_document_status
+from backend.rag.retrieval import (
     generate_knowledge_answer,
     search_knowledge_assets,
     search_knowledge_base,
@@ -1652,8 +1652,8 @@ def sync_and_parse_knowledge_in_background(file_path, original_filename, parse_i
         # For simplicity, we directly call mineru tasks here
         # Assuming parse_and_index_tender_file creates the mineru batch, but we want our own ingestion logic
         # So we can use the same run mineru logic but with custom ingestion
-        from document_parser import _run_mineru_parse_and_index, has_mineru_token, _should_use_mineru_first
-        from mineru_client import download_and_extract_zip, wait_for_batch_file_result, create_local_file_batch_task
+        from backend.parsing.document_parser import _run_mineru_parse_and_index, has_mineru_token, _should_use_mineru_first
+        from backend.parsing.mineru_client import download_and_extract_zip, wait_for_batch_file_result, create_local_file_batch_task
         
         output_dir = Path("parsed_outputs") / parse_id
         
@@ -1800,7 +1800,7 @@ def stream_search_knowledge():
 
     return Response(generate(), mimetype='text/event-stream')
 
-from db_supabase import (
+from backend.db.supabase_repo import (
     get_knowledge_asset_detail,
     get_knowledge_document_detail,
     list_knowledge_assets,
@@ -1989,7 +1989,7 @@ def upload_knowledge_asset():
         payload["searchable_text"] = _build_asset_searchable_text(payload)
 
         try:
-            from file_to_chroma import init_ali_client, get_embeddings
+            from backend.rag.vector_store import init_ali_client, get_embeddings
             embeddings = get_embeddings(init_ali_client(), [payload["searchable_text"]])
             if embeddings:
                 payload["embedding"] = embeddings[0]

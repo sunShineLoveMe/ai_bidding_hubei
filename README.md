@@ -150,11 +150,11 @@ GET /api/bidding/interpretations/{project_id}/compliance-check
 
 | 文件 | 说明 |
 | --- | --- |
-| `knowledge_ingestion.py` | 上传知识库资料后的解析、图片上下文提取、embedding 和 `document_chunks` 写入 |
-| `knowledge_retrieval.py` | 用户问题向量化、调用 Supabase RPC 检索、组装 Prompt、生成 RAG 回答 |
+| `backend/rag/ingestion.py` | 上传知识库资料后的解析、图片上下文提取、embedding 和 `document_chunks` 写入 |
+| `backend/rag/retrieval.py` | 用户问题向量化、调用 Supabase RPC 检索、组装 Prompt、生成 RAG 回答 |
 | `rag_seed/water_resources/_scripts/ingest_water_rag_seed.py` | 水利行业种子资料批量入库脚本 |
-| `file_to_chroma.py` | DashScope embedding 封装与 ChromaDB 兼容逻辑 |
-| `routes.py` | `/api/knowledge/search` 和 `/api/knowledge/search/stream` API |
+| `backend/rag/vector_store.py` | DashScope embedding 封装与 ChromaDB 兼容逻辑 |
+| `backend/api/routes.py` | `/api/knowledge/search` 和 `/api/knowledge/search/stream` API |
 
 RAG 检索链路：
 
@@ -176,7 +176,7 @@ RAG 检索链路：
 - 每个分片写入 `document_chunks.content`，向量写入 `document_chunks.embedding`。
 - `document_chunks.metadata` 保存资料分类、文档类型、来源单位、原始 URL、文件路径、标签和 hash。
 - 前端 RAG 回答完成后展示参考资料来源，帮助用户核对答案依据。
-- 当前水利种子库主要是文本 RAG；图片召回能力保留在 `knowledge_ingestion.py` 的图文节点逻辑中，需上传图文资料并完成 MinerU 解析后使用。
+- 当前水利种子库主要是文本 RAG；图片召回能力保留在 `backend/rag/ingestion.py` 的图文节点逻辑中，需上传图文资料并完成 MinerU 解析后使用。
 
 当前已验证的水利种子库入库结果：
 
@@ -501,19 +501,34 @@ docker run -d \
 ```text
 .
 ├── main.py                         # Flask 服务入口
-├── routes.py                       # API 路由
-├── db_supabase.py                  # Supabase 业务数据封装
-├── supabase_client.py              # Supabase client 与 Storage 封装
-├── document_parser.py              # 招标文件解析入口
-├── mineru_client.py                # MinerU API 封装
-├── bid_interpreter.py              # 招标文件结构化解读
-├── ai_interpreter.py               # AI 深度解读
-├── ai_chapter_planner.py           # 章节大纲生成
-├── ai_section_writer.py            # 单章节正文生成
-├── knowledge_ingestion.py          # 企业知识库入库逻辑
-├── knowledge_retrieval.py          # RAG 检索与问答
-├── file_to_chroma.py               # 本地 Chroma 兼容向量库
-├── md_to_word.py                   # Markdown / 章节内容转 DOCX
+├── backend/                        # 后端业务代码包
+│   ├── api/                        # Flask API 路由与用户接口
+│   │   ├── routes.py
+│   │   └── users.py
+│   ├── ai/                         # 大模型调用、解读、章节规划和正文生成
+│   │   ├── qwen_client.py
+│   │   ├── rerank_client.py
+│   │   ├── interpreter.py
+│   │   ├── chapter_planner.py
+│   │   ├── section_writer.py
+│   │   ├── bid_writing_plan.py
+│   │   └── compliance_checker.py
+│   ├── core/                       # 配置读取与通用工具
+│   │   ├── config.py
+│   │   └── llm_json_utils.py
+│   ├── db/                         # Supabase 客户端与业务数据访问层
+│   │   ├── supabase_client.py
+│   │   └── supabase_repo.py
+│   ├── parsing/                    # MinerU/OCR、招标文件解析和结构化解读
+│   │   ├── document_parser.py
+│   │   ├── mineru_client.py
+│   │   └── bid_interpreter.py
+│   ├── rag/                        # 知识库入库、向量化、检索与 RAG 问答
+│   │   ├── ingestion.py
+│   │   ├── retrieval.py
+│   │   └── vector_store.py
+│   └── export/                     # DOCX / Word 导出
+│       └── md_to_word.py
 ├── frontend/                       # Vite + React 前端
 ├── sql/                            # 数据库 SQL
 ├── rag_seed/water_resources/       # 水利行业 RAG 种子资料
@@ -587,18 +602,18 @@ docker run -d \
 ### 评审共识
 
 - 当前业务链路完整：招标文件上传、MinerU/OCR 解析、结构化解读、AI 深度解读、章节大纲、章节正文生成、目录模式、Tiptap 编辑、RAG 问答、DOCX 导出已经形成闭环。
-- `bid_writing_plan.py` 的章节写作计划是核心产品能力之一，能够根据章节类型、重要性、评分项、风险项和材料要求动态规划字数、页数、图表、资质和案例支撑。
+- `backend/ai/bid_writing_plan.py` 的章节写作计划是核心产品能力之一，能够根据章节类型、重要性、评分项、风险项和材料要求动态规划字数、页数、图表、资质和案例支撑。
 - RAG 当前已具备 pgvector 向量召回和 DashScope Rerank 重排，后续需要继续补混合检索、来源引用和行业资料扩展。
 - 合规检查当前是轻量规则版，适合发现漏项，但还不能替代人工或大模型语义复核。
 - Tiptap 已经适合作为主编辑器，后续应增强 AI 伴写能力，而不是继续依赖复杂的外部在线 Office 作为主链路。
-- 代码已经进入需要治理的阶段，后端 `routes.py` 和前端 `BidEditor` 体量较大，应拆分模块并补测试。
+- 代码已经进入需要治理的阶段，后端已完成基础分包，但 `backend/api/routes.py` 和前端 `BidEditor` 体量仍较大，应继续拆分并补测试。
 
 ### 需要修正的评审结论
 
 - “已达到生产级”这一判断偏乐观。当前更准确的定位是：适合单机版、私有化试点和 MVP 验证，尚未达到公网生产部署标准。
 - “模型服务支持 Qwen、Claude”这一表述不严谨。当前主链路是 DashScope/Qwen，其他模型提供商需要后续适配。
 - “网络请求普遍具备重试机制”不完全准确。图片下载和部分文档处理已有超时保护，但大模型调用、Supabase 写入和批量任务仍需要系统化重试、退避和幂等设计。
-- “代码结构可维护性良好”偏乐观。当前功能可运行，但核心文件过大，继续迭代前应拆分。
+- “代码结构可维护性良好”偏乐观。当前后端已按功能迁移到 `backend/` 包，但部分核心模块仍偏大，继续迭代前应进一步细分。
 - “安全问题在单机版影响较小”只适用于本机试用。一旦开源、内网多人使用或部署到公网，认证、CORS、密钥、错误脱敏和上传校验必须优先处理。
 
 ### P0：开源与安全最小闭环
@@ -627,7 +642,8 @@ docker run -d \
 
 ### P2：工程结构治理
 
-- [ ] 拆分 `routes.py`：项目/文件、MinerU 解析、招标解读、章节大纲、章节正文、知识库、系统设置、DOCX 导出分别成模块。
+- [x] 后端根目录 Python 文件已按功能迁移到 `backend/api`、`backend/ai`、`backend/core`、`backend/db`、`backend/parsing`、`backend/rag`、`backend/export`，根目录仅保留 `main.py` 作为 Flask 启动入口。
+- [ ] 继续拆分 `backend/api/routes.py`：项目/文件、MinerU 解析、招标解读、章节大纲、章节正文、知识库、系统设置、DOCX 导出分别成模块。
 - [ ] 拆分 `frontend/src/pages/BidEditor/index.tsx`：章节树、目录模式、正文编辑器、批量生成、下载、状态管理拆成组件和 hooks。
 - [ ] 收敛历史兼容代码，逐步移除不再作为主链路的旧版 Chroma/OnlyOffice/Milkdown 逻辑。
 - [ ] 减少前端 `any`，补充核心 API 类型和章节数据类型。

@@ -4,7 +4,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from db_supabase import replace_bid_analysis, replace_project_rows
+from backend.db.supabase_repo import replace_bid_analysis, replace_project_rows
 
 
 KEYWORD_GROUPS = {

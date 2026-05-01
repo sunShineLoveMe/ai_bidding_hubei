@@ -19,8 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = ROOT.parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from file_to_chroma import get_embeddings, init_ali_client, read_file_content, split_text  # noqa: E402
-from supabase_client import get_bucket_name, get_supabase_client, upload_file_to_storage  # noqa: E402
+from backend.rag.vector_store import get_embeddings, init_ali_client, read_file_content, split_text  # noqa: E402
+from backend.db.supabase_client import get_bucket_name, get_supabase_client, upload_file_to_storage  # noqa: E402
 
 load_dotenv(PROJECT_ROOT / ".env")
 

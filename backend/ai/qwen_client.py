@@ -7,7 +7,7 @@ from unidecode import unidecode
 from werkzeug.utils import secure_filename
 import logging
 import json
-from app_config import build_enterprise_context, get_setting
+from backend.core.config import build_enterprise_context, get_setting
 
 # 通义千问API配置
 DASHSCOPE_API_KEY = os.getenv('DASHSCOPE_API_KEY')

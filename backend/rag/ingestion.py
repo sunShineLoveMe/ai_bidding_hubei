@@ -7,8 +7,8 @@ import re
 from pathlib import Path
 from typing import Any, List, Dict
 
-from supabase_client import get_supabase_client, upload_file_to_storage, get_bucket_name
-from file_to_chroma import init_ali_client, get_embeddings, split_text
+from backend.db.supabase_client import get_supabase_client, upload_file_to_storage, get_bucket_name
+from backend.rag.vector_store import init_ali_client, get_embeddings, split_text
 
 
 def _file_sha256(file_path: str | Path) -> str:
