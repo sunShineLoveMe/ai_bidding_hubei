@@ -46,6 +46,7 @@ interface Message {
   images?: ImageMeta[];
   sources?: SourceContext[];
   assets?: KnowledgeAsset[];
+  followups?: string[];
   streaming?: boolean;
   status?: string;
 }
@@ -62,6 +63,104 @@ function sourceDescription(source: SourceContext): string {
 
 function previewText(content?: string): string {
   return (content || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+}
+
+function assetImageMarkdown(asset: KnowledgeAsset, index: number): string {
+  if (!asset.id) return '';
+  const alt = (asset.title || `图片资产${index}`).replace(/[\[\]()]/g, '');
+  return `\n\n![${alt}](/api/knowledge/assets/${asset.id}/file?variant=thumb)\n\n`;
+}
+
+function withInlineAssetImages(content: string, assets?: KnowledgeAsset[]): string {
+  if (!content || !assets?.length) return content;
+
+  const usedAssetIndexes = new Set<number>();
+  const lines = content.split('\n');
+  const output: string[] = [];
+
+  for (const line of lines) {
+    output.push(line);
+    const matches = [...line.matchAll(/图片资产\s*([0-9]+(?:\s*[、,，]\s*[0-9]+)*)/g)];
+    if (!matches.length) continue;
+
+    const markdownSnippets: string[] = [];
+    for (const match of matches) {
+      const indexes = (match[1] || '')
+        .split(/[、,，]/)
+        .map(item => Number.parseInt(item.trim(), 10))
+        .filter(Number.isFinite);
+
+      for (const assetIndex of indexes) {
+        const zeroBasedIndex = assetIndex - 1;
+        const asset = assets[zeroBasedIndex];
+        if (!asset?.id || usedAssetIndexes.has(assetIndex)) continue;
+        const imageUrl = `/api/knowledge/assets/${asset.id}/file`;
+        if (content.includes(imageUrl)) continue;
+        const snippet = assetImageMarkdown(asset, assetIndex);
+        if (snippet) {
+          markdownSnippets.push(snippet);
+          usedAssetIndexes.add(assetIndex);
+        }
+      }
+    }
+
+    if (markdownSnippets.length) {
+      output.push(markdownSnippets.join(''));
+    }
+  }
+
+  return output.join('\n');
+}
+
+function uniqueQuestions(questions: string[]): string[] {
+  const seen = new Set<string>();
+  return questions
+    .map(question => question.trim())
+    .filter(Boolean)
+    .filter(question => {
+      if (seen.has(question)) return false;
+      seen.add(question);
+      return true;
+    })
+    .slice(0, 3);
+}
+
+function buildFollowupQuestions(question: string, answer: string, assets?: KnowledgeAsset[], sources?: SourceContext[]): string[] {
+  const text = `${question}\n${answer}\n${(assets || []).map(asset => `${asset.title || ''} ${asset.category || ''} ${(asset.tags || []).join(' ')}`).join('\n')}`;
+  const candidates: string[] = [];
+
+  const hasAssets = Boolean(assets?.length);
+  const hasImages = hasAssets || /图片资产|配图|图片|附件|样张/.test(text);
+  const hasQualification = /资质|资信|证书|营业执照|许可证|安全生产|社保|人员|项目经理|技术负责人/.test(text);
+  const hasPerformance = /业绩|合同|中标|验收|类似项目/.test(text);
+  const hasProduct = /产品|设备|参数|图册|闸门|水泵|水轮机|叶片|材料/.test(text);
+  const hasRisk = /风险|废标|否决|缺失|不满足|不合规|补充/.test(text);
+
+  if (hasImages) {
+    candidates.push('这些图片分别适合放在标书哪些章节？');
+    candidates.push('帮我筛选哪些图片可以插入正文，哪些只能作为附件或占位图。');
+  }
+  if (hasQualification) {
+    candidates.push('帮我检查这些资信材料还缺哪些关键证明。');
+    candidates.push('基于这些资信材料生成资格审查资料章节提纲。');
+  }
+  if (hasPerformance) {
+    candidates.push('这些业绩材料需要补充哪些合同、中标或验收证明？');
+  }
+  if (hasProduct) {
+    candidates.push('把这些产品资料整理成技术响应配图清单。');
+  }
+  if (hasRisk) {
+    candidates.push('这些材料在投标时有哪些废标或否决风险？');
+  }
+  if (sources?.length) {
+    candidates.push('请按标书人员可执行的方式整理成核查清单。');
+  }
+
+  candidates.push('把上面的内容整理成可直接放进标书的段落。');
+  candidates.push('下一步我应该优先补充哪些企业资料？');
+
+  return uniqueQuestions(candidates);
 }
 
 export function KnowledgeSearchDrawer({
@@ -150,7 +249,12 @@ export function KnowledgeSearchDrawer({
           return;
         }
         if (event.type === 'done') {
-          updateAssistant((msg) => ({ ...msg, streaming: false, status: '' }));
+          updateAssistant((msg) => ({
+            ...msg,
+            streaming: false,
+            status: '',
+            followups: buildFollowupQuestions(userMessage.content, msg.content || '', msg.assets, msg.sources),
+          }));
           return;
         }
         if (event.type === 'error') {
@@ -270,11 +374,30 @@ export function KnowledgeSearchDrawer({
                           ),
                         }}
                       >
-                        {msg.content}
+                        {msg.role === 'assistant' ? withInlineAssetImages(msg.content, msg.assets) : msg.content}
                       </ReactMarkdown>
                     ) : null}
                     {msg.streaming && msg.content && <span className="ml-1 inline-block h-4 w-1 animate-pulse rounded bg-blue-500 align-middle" />}
                   </div>
+
+                  {msg.role === 'assistant' && !msg.streaming && msg.followups && msg.followups.length > 0 && (
+                    <div className="mt-4 border-t border-slate-100 pt-4">
+                      <div className="mb-2 text-xs font-bold text-slate-500">你可以继续问</div>
+                      <div className="flex flex-col gap-2">
+                        {msg.followups.map((question) => (
+                          <button
+                            key={question}
+                            type="button"
+                            disabled={loading}
+                            onClick={() => handleSearch(question)}
+                            className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-left text-xs font-bold text-blue-700 transition hover:border-blue-300 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {question}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {msg.role === 'assistant' && !msg.streaming && msg.sources && msg.sources.length > 0 && (
                     <div className="mt-4 border-t border-slate-100 pt-4">

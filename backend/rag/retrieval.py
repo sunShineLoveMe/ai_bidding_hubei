@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from typing import Any, Iterator, List, Dict
 from openai import OpenAI
 
@@ -60,7 +61,100 @@ def search_knowledge_assets(query: str, match_count: int = 8) -> List[Dict[str, 
 
     assets = rerank_documents(query, response.data or [], text_key="searchable_text", top_n=match_count)
     # 过滤掉明显弱相关的资产，保留图片来源展示的准确性。
-    return [asset for asset in assets if float(asset.get("similarity") or 0) >= 0.28]
+    strong_assets = [asset for asset in assets if float(asset.get("similarity") or 0) >= 0.28]
+    if len(strong_assets) >= min(match_count, 3):
+        return strong_assets[:match_count]
+
+    fallback_assets = _keyword_search_knowledge_assets(query, match_count=match_count)
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for asset in [*strong_assets, *fallback_assets]:
+        asset_id = str(asset.get("id") or asset.get("storage_path") or asset.get("title") or "")
+        if asset_id and asset_id in seen:
+            continue
+        if asset_id:
+            seen.add(asset_id)
+        merged.append(asset)
+        if len(merged) >= match_count:
+            break
+    return merged
+
+
+def _keyword_search_knowledge_assets(query: str, match_count: int = 8) -> list[dict[str, Any]]:
+    """
+    企业资信库/产品库里经常是短标题、短说明和图片附件，纯向量召回可能偏弱。
+    这里补一层轻量关键词召回，确保“营业执照图片、社保缴纳证明、类似业绩证明”等私有资产问题不会被误拒。
+    """
+    client = get_supabase_client()
+    response = (
+        client.table("knowledge_assets")
+        .select("*")
+        .eq("status", "indexed")
+        .limit(200)
+        .execute()
+    )
+    rows = response.data or []
+    query_tokens = _asset_query_tokens(query)
+    if not query_tokens:
+        return []
+
+    scored: list[tuple[int, dict[str, Any]]] = []
+    for asset in rows:
+        text = _asset_search_text(asset)
+        score = sum(1 for token in query_tokens if token and token in text)
+        if "图片" in query or "照片" in query or "附件" in query or "材料" in query:
+            mime_type = str(asset.get("mime_type") or "")
+            if mime_type.startswith("image/"):
+                score += 2
+        if any(token in query for token in ["资质", "资信", "证书", "执照", "许可", "社保", "人员"]):
+            if str(asset.get("asset_type") or "") == "qualification_image":
+                score += 3
+        if any(token in query for token in ["产品", "设备", "材料", "闸门", "水泵", "水轮机", "叶片"]):
+            if str(asset.get("asset_type") or "") == "product_image":
+                score += 3
+        if score > 0:
+            enriched = {**asset, "similarity": max(float(asset.get("similarity") or 0), min(score / 10, 0.99))}
+            scored.append((score, enriched))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [asset for _, asset in scored[:match_count]]
+
+
+def _asset_search_text(asset: dict[str, Any]) -> str:
+    parts = [
+        asset.get("title"),
+        asset.get("description"),
+        asset.get("category"),
+        asset.get("asset_type"),
+        asset.get("searchable_text"),
+        asset.get("ai_caption"),
+        asset.get("file_name"),
+        asset.get("attribution"),
+    ]
+    parts.extend(asset.get("tags") or [])
+    parts.extend(asset.get("applicable_sections") or [])
+    specs = asset.get("specs") or {}
+    if isinstance(specs, dict):
+        parts.extend(str(value) for value in specs.values() if value)
+    return " ".join(str(part) for part in parts if part).lower()
+
+
+def _asset_query_tokens(query: str) -> list[str]:
+    synonym_tokens = {
+        "业绩": ["业绩", "类似业绩", "合同", "中标", "验收", "证明材料"],
+        "社保": ["社保", "缴纳", "参保", "人员", "证明"],
+        "营业执照": ["营业执照", "执照", "基础证照", "企业证照"],
+        "安全生产许可证": ["安全生产", "许可证", "安全生产许可", "资质证书"],
+        "资质": ["资质", "证书", "资格", "资信", "许可"],
+        "人员": ["人员", "项目经理", "技术负责人", "职称", "执业", "社保"],
+        "产品": ["产品", "设备", "参数", "图册", "样张"],
+        "图片": ["图片", "照片", "图", "附件", "材料", "样张"],
+    }
+    tokens = set(re.findall(r"[\u4e00-\u9fa5A-Za-z0-9_]+", query.lower()))
+    for key, values in synonym_tokens.items():
+        if key in query:
+            tokens.update(value.lower() for value in values)
+    return [token for token in tokens if token]
 
 def generate_knowledge_answer(
     query: str,
@@ -139,8 +233,9 @@ def build_knowledge_prompt(
 
     context_str = "\n\n---\n\n".join(text_contexts)
     asset_context_str = "\n\n---\n\n".join(asset_contexts) or "无相关图片资产。"
-    prompt = f"""你是一个专业的水利招投标 RAG 知识库问答助手。
-请只依据下方企业知识库检索片段回答用户问题，不要编造未出现在资料中的证书编号、人员姓名、合同金额或具体日期。
+    prompt = f"""你是一个专业的企业私有知识库与水利招投标 RAG 问答助手。
+你可以同时依据“企业知识库检索片段”和“相关图片/资质资产”回答用户问题。用户询问企业资信库、产品库、业绩材料、人员证书、社保缴纳证明、营业执照、产品图片等私有资产时，应优先基于相关图片/资质资产回答。
+不要编造未出现在资料中的证书编号、人员姓名、合同金额或具体日期。
 
 【知识库检索片段】：
 {context_str}
@@ -153,13 +248,14 @@ def build_knowledge_prompt(
 
 回答要求：
 1. 先给出结论，再按要点展开。
-2. 如果资料不足，请明确说明哪些信息需要继续补充。
-3. 涉及投标材料、废标风险、施工组织设计等内容时，尽量给出可执行清单。
-4. 如果相关图片/资质资产适合插入标书正文，请直接在对应说明段落后使用 Markdown 图片语法插入，不要在结尾集中罗列图片。格式必须是：![图片名称](图片地址)
-5. 最多插入 3 张最相关图片。资质证书、营业执照、安全生产许可证类图片只能作为“脱敏示意图/排版占位图”，必须明确说明不能替代正式法定资质文件。
-6. 不要输出 Markdown 表格，图片建议用自然段和项目符号描述，避免表格在聊天窗口中换行错乱。
-7. 结尾列出“参考依据”，用“资料1、资料2...”说明依据来自哪些检索片段；图片资产只作为配图建议，不要把它当成法规依据。
-8. 语言专业、客观、准确，适合非技术标书人员阅读。
+2. 如果只有图片/资质资产命中、没有文本片段，也要基于资产标题、说明、标签和适用章节回答，并明确这些是“可参考/可插入的企业资料”。
+3. 如果资料不足，请明确说明哪些信息需要继续补充。
+4. 涉及投标材料、废标风险、施工组织设计等内容时，尽量给出可执行清单。
+5. 如果相关图片/资质资产适合插入标书正文，请直接在对应说明段落后使用 Markdown 图片语法插入，不要在结尾集中罗列图片。格式必须是：![图片名称](图片地址)
+6. 最多插入 3 张最相关图片。资质证书、营业执照、安全生产许可证、社保缴纳证明类图片如为脱敏样张，必须说明“仅作为脱敏示意图/排版占位图，不能替代正式法定文件”。
+7. 不要输出 Markdown 表格，图片建议用自然段和项目符号描述，避免表格在聊天窗口中换行错乱。
+8. 结尾列出“参考依据”，用“资料1、资料2...”和“图片资产1、图片资产2...”说明依据来自哪些检索片段或资产；图片资产只作为配图/材料建议，不要把它当成法规依据。
+9. 语言专业、客观、准确，适合非技术标书人员阅读。
 """
     return prompt, images
 
@@ -194,7 +290,7 @@ def stream_knowledge_answer(
                 "content": chunk,
             }
     except Exception:
-        result = generate_knowledge_answer(query, contexts)
+        result = generate_knowledge_answer(query, contexts, assets)
         content = result.get("answer") or ""
         for start in range(0, len(content), 120):
             emitted = True

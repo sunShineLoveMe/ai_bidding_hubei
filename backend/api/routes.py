@@ -1764,10 +1764,13 @@ def stream_search_knowledge():
             "评分", "废标", "否决", "施工", "监理", "勘察", "设计", "EPC", "总承包",
             "工期", "质量", "安全", "环保", "水保", "防汛", "度汛", "灌区", "泵站",
             "水闸", "堤防", "河道", "合同", "报价", "工程量清单", "投标文件", "招标文件",
-            "企业知识库", "标准话术", "政策法规", "水利标准", "章节", "正文",
+            "企业知识库", "企业资信", "资信库", "企业产品", "产品库", "标准话术", "政策法规",
+            "水利标准", "章节", "正文", "图片", "附件", "材料", "样张", "业绩", "类似业绩",
+            "营业执照", "执照", "许可证", "安全生产许可", "人员", "社保", "缴纳证明",
+            "证书", "证件", "产品", "设备", "图册", "参考图", "配图",
         ]
         lowered = text.lower()
-        ascii_keywords = ["bid", "tender", "rag", "qualification", "water", "reservoir"]
+        ascii_keywords = ["bid", "tender", "rag", "qualification", "water", "reservoir", "product", "asset", "certificate"]
         return any(keyword in text for keyword in keywords) or any(keyword in lowered for keyword in ascii_keywords)
 
     def emit(payload: dict) -> str:
@@ -1777,17 +1780,16 @@ def stream_search_knowledge():
     def generate():
         yield emit({"type": "start"})
         try:
-            if not is_relevant_knowledge_query(query):
-                yield emit({"type": "status", "message": "正在判断问题是否属于当前知识库范围..."})
+            yield emit({"type": "status", "message": "正在检索企业知识库和图片资产..."})
+            contexts = search_knowledge_base(query, match_threshold=0.3, match_count=8)
+            assets = search_knowledge_assets(query, match_count=8)
+            if not contexts and not assets and not is_relevant_knowledge_query(query):
                 yield emit({
                     "type": "chunk",
-                    "content": "抱歉，当前企业知识库主要服务于水利招投标、标书编制、政策法规、资格材料、施工组织设计和废标风险等问题。这个问题与当前知识库范围不太相关，我暂时不能基于本知识库给出可靠回答。你可以换成类似“水库除险加固投标需要准备哪些资格材料？”这样的问题。",
+                    "content": "抱歉，当前企业知识库主要服务于水利招投标、标书编制、企业资信、产品资料、业绩材料、人员证书、施工组织设计和废标风险等问题。这个问题与当前知识库范围不太相关，我暂时不能基于本知识库给出可靠回答。",
                 })
                 yield emit({"type": "done"})
                 return
-            yield emit({"type": "status", "message": "正在检索知识库资料..."})
-            contexts = search_knowledge_base(query, match_threshold=0.3, match_count=8)
-            assets = search_knowledge_assets(query, match_count=8)
             yield emit({
                 "type": "status",
                 "message": f"已召回 {len(contexts)} 条资料、{len(assets)} 个图片资产，正在生成回答..."
