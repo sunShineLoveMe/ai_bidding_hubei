@@ -47,6 +47,7 @@ interface Message {
   sources?: SourceContext[];
   assets?: KnowledgeAsset[];
   followups?: string[];
+  followupLoading?: boolean;
   streaming?: boolean;
   status?: string;
 }
@@ -210,6 +211,9 @@ export function KnowledgeSearchDrawer({
       const decoder = new TextDecoder('utf-8');
       let buffer = '';
       let hasContent = false;
+      let streamedAnswer = '';
+      let retrievedAssets: KnowledgeAsset[] = [];
+      let retrievedSources: SourceContext[] = [];
 
       const updateAssistant = (updater: (message: Message) => Message) => {
         setMessages((prev) => {
@@ -230,17 +234,20 @@ export function KnowledgeSearchDrawer({
           return;
         }
         if (event.type === 'retrieved') {
+          retrievedAssets = event.assets || [];
+          retrievedSources = event.raw_contexts || [];
           updateAssistant((msg) => ({
             ...msg,
             status: `已召回 ${event.contexts_count || 0} 条资料、${event.assets_count || 0} 个图片资产，正在生成回答...`,
             images: event.images || [],
-            sources: event.raw_contexts || [],
-            assets: event.assets || [],
+            sources: retrievedSources,
+            assets: retrievedAssets,
           }));
           return;
         }
         if (event.type === 'chunk') {
           hasContent = true;
+          streamedAnswer += event.content || '';
           updateAssistant((msg) => ({
             ...msg,
             content: `${msg.content || ''}${event.content || ''}`,
@@ -254,6 +261,7 @@ export function KnowledgeSearchDrawer({
             streaming: false,
             status: '',
             followups: buildFollowupQuestions(userMessage.content, msg.content || '', msg.assets, msg.sources),
+            followupLoading: true,
           }));
           return;
         }
@@ -284,6 +292,34 @@ export function KnowledgeSearchDrawer({
           status: '',
           content: msg.content || '未生成有效回答，请换一个问题重试。',
         }));
+      } else {
+        try {
+          const followupRes = await fetch('/api/knowledge/followups', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              question: userMessage.content,
+              answer: streamedAnswer,
+              assets: retrievedAssets,
+              sources: retrievedSources,
+            }),
+          });
+          if (followupRes.ok) {
+            const followupData = await followupRes.json();
+            const modelFollowups = Array.isArray(followupData.followups)
+              ? followupData.followups.filter((item: unknown): item is string => typeof item === 'string' && Boolean(item.trim()))
+              : [];
+            updateAssistant((msg) => ({
+              ...msg,
+              followups: modelFollowups.length ? uniqueQuestions(modelFollowups) : msg.followups,
+              followupLoading: false,
+            }));
+          } else {
+            updateAssistant((msg) => ({ ...msg, followupLoading: false }));
+          }
+        } catch {
+          updateAssistant((msg) => ({ ...msg, followupLoading: false }));
+        }
       }
     } catch (err: any) {
       setMessages((prev) => {
@@ -294,6 +330,7 @@ export function KnowledgeSearchDrawer({
               ...next[i],
               streaming: false,
               status: '',
+              followupLoading: false,
               content: next[i].content || '检索知识库出错，请稍后重试。',
             };
             break;
@@ -382,7 +419,14 @@ export function KnowledgeSearchDrawer({
 
                   {msg.role === 'assistant' && !msg.streaming && msg.followups && msg.followups.length > 0 && (
                     <div className="mt-4 border-t border-slate-100 pt-4">
-                      <div className="mb-2 text-xs font-bold text-slate-500">你可以继续问</div>
+                      <div className="mb-2 flex items-center gap-2 text-xs font-bold text-slate-500">
+                        <span>你可以继续问</span>
+                        {msg.followupLoading && (
+                          <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] text-blue-600">
+                            AI 正在优化
+                          </span>
+                        )}
+                      </div>
                       <div className="flex flex-col gap-2">
                         {msg.followups.map((question) => (
                           <button

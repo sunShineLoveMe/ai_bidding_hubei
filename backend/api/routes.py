@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import shutil
 from datetime import timedelta
-from backend.core.config import DEFAULT_SETTINGS, build_enterprise_context, load_runtime_settings, save_runtime_settings
+from backend.core.config import DEFAULT_SETTINGS, build_enterprise_context, get_setting, load_runtime_settings, save_runtime_settings
 
 # 操作向量数据库的函数
 from backend.parsing.document_parser import ingest_artifacts as ingest_mineru_artifacts_to_supabase, import_mineru_result_zip, parse_and_index_tender_file, read_parse_status, retry_mineru_result_download, write_parse_status
@@ -1801,6 +1801,129 @@ def stream_search_knowledge():
             yield emit({"type": "error", "error": f"检索问答失败: {str(e)}"})
 
     return Response(generate(), mimetype='text/event-stream')
+
+
+def _compact_followup_assets(assets: list[dict]) -> list[dict]:
+    compacted = []
+    for index, asset in enumerate((assets or [])[:8], 1):
+        compacted.append({
+            "index": index,
+            "title": asset.get("title"),
+            "category": asset.get("category"),
+            "asset_type": asset.get("asset_type"),
+            "description": asset.get("description"),
+            "tags": asset.get("tags") or [],
+            "applicable_sections": asset.get("applicable_sections") or [],
+        })
+    return compacted
+
+
+def _compact_followup_sources(sources: list[dict]) -> list[dict]:
+    compacted = []
+    for index, source in enumerate((sources or [])[:5], 1):
+        metadata = source.get("metadata") or {}
+        compacted.append({
+            "index": index,
+            "title": metadata.get("source_org") or metadata.get("source_file") or metadata.get("category_label") or metadata.get("category"),
+            "doc_type": metadata.get("doc_type"),
+            "content_preview": str(source.get("content") or "").replace("\n", " ")[:240],
+        })
+    return compacted
+
+
+def _normalize_followups(payload: dict) -> dict:
+    intent = str(payload.get("intent") or "general_qa").strip() or "general_qa"
+    followups = payload.get("followups")
+    if not isinstance(followups, list):
+        followups = []
+
+    cleaned = []
+    seen = set()
+    for item in followups:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        if len(text) > 80:
+            text = text[:80].rstrip("，。；;,. ") + "？"
+        if not text.endswith(("?", "？")):
+            text += "？"
+        cleaned.append(text)
+        seen.add(text)
+        if len(cleaned) >= 3:
+            break
+
+    return {
+        "intent": intent,
+        "followups": cleaned,
+    }
+
+
+def _parse_followup_model_content(content) -> dict:
+    if isinstance(content, dict):
+        return content
+    if isinstance(content, str):
+        parsed = strip_llm_json(content)
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+@knowledge_bp.route('/followups', methods=['POST'])
+@bp.route('/knowledge/followups', methods=['POST'])
+def generate_knowledge_followups():
+    data = request.get_json() or {}
+    question = str(data.get("question") or "").strip()
+    answer = str(data.get("answer") or "").strip()
+    if not question or not answer:
+        return jsonify({"intent": "general_qa", "followups": []}), 200
+
+    assets = data.get("assets") if isinstance(data.get("assets"), list) else []
+    sources = data.get("sources") if isinstance(data.get("sources"), list) else []
+    prompt_payload = {
+        "user_question": question[:800],
+        "assistant_answer": answer[:2600],
+        "retrieved_assets": _compact_followup_assets(assets),
+        "retrieved_sources": _compact_followup_sources(sources),
+    }
+    prompt = f"""你是 AI 标书系统的企业知识库问答意图识别器。
+请根据用户问题、助手回答、召回资料和图片资产，判断用户下一步最可能需要什么，并生成 3 个专业、具体、可点击的后续问题。
+
+要求：
+1. 问题必须服务于水利招投标、标书编制、企业资信、产品资料、业绩材料、风险核查或材料入库。
+2. 问题要像业务人员自然会追问的话，不能泛泛而谈。
+3. 如果回答涉及图片资产，要优先引导“图片适合放在哪个章节”“哪些能插入正文/附件”“还缺哪些原件或证明”。
+4. 如果回答涉及资质、人员、社保、营业执照、许可证，要优先引导材料完整性和废标风险核查。
+5. 如果回答涉及产品、设备、参数，要优先引导技术响应配图和参数匹配。
+6. 只输出 JSON，不要输出 Markdown，不要解释。
+
+JSON 格式：
+{{
+  "intent": "asset_lookup | qualification_check | bid_writing | risk_check | product_matching | material_gap | general_qa",
+  "followups": ["问题1", "问题2", "问题3"]
+}}
+
+输入：
+{json.dumps(prompt_payload, ensure_ascii=False)}
+"""
+    try:
+        response = call_dashscope_api(
+            [
+                {"role": "system", "content": "你只输出合法 JSON。"},
+                {"role": "user", "content": prompt},
+            ],
+            model=get_setting("knowledge_followup_model", get_setting("text_model", "qwen-turbo-latest")),
+            json_mode=True,
+        )
+        content = (
+            response.get("output", {})
+            .get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+        parsed = _parse_followup_model_content(content)
+        return jsonify(_normalize_followups(parsed)), 200
+    except Exception:
+        logging.exception("生成知识库追问建议失败")
+        return jsonify({"intent": "general_qa", "followups": []}), 200
 
 from backend.db.supabase_repo import (
     get_knowledge_asset_detail,

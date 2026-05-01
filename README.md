@@ -139,7 +139,8 @@ GET /api/bidding/interpretations/{project_id}/compliance-check
 | 对象存储 | Supabase Storage | 保存原始知识库文件、招标文件和生成文档 |
 | 向量模型 | 默认 DashScope `text-embedding-v4`，维度默认 1024，可在系统设置中调整 | 将用户问题、知识分片和图片资产描述转换为向量 |
 | Rerank 重排 | 默认 DashScope `qwen3-rerank`，可切换 `gte-rerank-v2`，系统设置可关闭 | 对 pgvector 初召回结果二次排序，提升水利术语、设备型号、资质名称匹配准确率 |
-| 问答模型 | 默认 `qwen-long`，可在系统设置中调整 | 基于召回片段生成最终回答 |
+| 问答模型 | 默认 `qwen-long`，可在系统设置中调整 | 基于召回片段和企业图片资产生成最终回答 |
+| 追问意图模型 | 默认读取 `knowledge_followup_model`，未配置时回退到系统文本模型 | 回答结束后识别用户下一步意图，生成 3 个业务追问 |
 | 流式输出 | DashScope SSE / Flask `text/event-stream` | 支持 RAG 回答逐段返回，降低首屏等待体感 |
 | 文本抽取 | PyPDF2 / Mammoth / Markdown 读取 | 处理普通 PDF、DOCX 和 Markdown 文档 |
 | OCR/版面解析 | MinerU，可选 | 处理扫描版 PDF、复杂表格、图片型招标文件 |
@@ -154,7 +155,7 @@ GET /api/bidding/interpretations/{project_id}/compliance-check
 | `backend/rag/retrieval.py` | 用户问题向量化、调用 Supabase RPC 检索、组装 Prompt、生成 RAG 回答 |
 | `rag_seed/water_resources/_scripts/ingest_water_rag_seed.py` | 水利行业种子资料批量入库脚本 |
 | `backend/rag/vector_store.py` | DashScope embedding 封装与 ChromaDB 兼容逻辑 |
-| `backend/api/routes.py` | `/api/knowledge/search` 和 `/api/knowledge/search/stream` API |
+| `backend/api/routes.py` | `/api/knowledge/search`、`/api/knowledge/search/stream` 和 `/api/knowledge/followups` API |
 
 RAG 检索链路：
 
@@ -163,11 +164,26 @@ RAG 检索链路：
 → 系统配置的 Embedding 模型生成 query embedding
 → Supabase RPC: match_knowledge_chunks
 → pgvector 相似度检索 document_chunks
+→ Supabase RPC: match_knowledge_assets 检索企业资信/产品图片资产
+→ 图片资产关键词兜底召回，覆盖营业执照、社保、业绩、产品图片等短文本资产
 → 召回 top-k 文档分片
-→ 组装带来源信息的 Prompt
+→ 组装带来源信息和图片资产信息的 Prompt
 → 系统配置的知识库问答模型生成回答
 → SSE 流式返回答案
-→ 前端展示答案与参考资料来源
+→ 前端展示答案、内联图片、参考资料来源
+→ 回答完成后异步调用 /api/knowledge/followups 生成模型追问建议
+```
+
+追问建议链路：
+
+```text
+RAG 回答完成
+→ 前端先基于规则生成兜底追问，保证用户立即可继续操作
+→ 前端异步提交用户问题、AI 回答、召回资料、图片资产到 /api/knowledge/followups
+→ 后端调用系统配置的追问意图模型
+→ 模型输出固定 JSON: intent + followups
+→ 后端兼容字符串 JSON 和 dict 两种模型返回格式，并做去重、长度和问号规范化
+→ 前端用模型追问替换兜底追问；模型失败时保留规则兜底
 ```
 
 分片与元数据策略：
@@ -176,7 +192,9 @@ RAG 检索链路：
 - 每个分片写入 `document_chunks.content`，向量写入 `document_chunks.embedding`。
 - `document_chunks.metadata` 保存资料分类、文档类型、来源单位、原始 URL、文件路径、标签和 hash。
 - 前端 RAG 回答完成后展示参考资料来源，帮助用户核对答案依据。
-- 当前水利种子库主要是文本 RAG；图片召回能力保留在 `backend/rag/ingestion.py` 的图文节点逻辑中，需上传图文资料并完成 MinerU 解析后使用。
+- 企业资信库、企业产品库上传的图片/附件写入 `knowledge_assets`，可通过向量召回和关键词兜底参与 RAG 问答。
+- RAG 回答若提到 `图片资产1`、`图片资产2、3、4` 等编号，前端会自动把对应图片以 Markdown 图片形式插入到相应段落后，避免只输出文字描述。
+- 图片预览优先加载缩略图，原图保留用于标书正文插图、附件查看和 DOCX 导出。
 
 当前已验证的水利种子库入库结果：
 
@@ -185,6 +203,7 @@ RAG 检索链路：
 - 分类：水利招标文件、水利政策法规、水利标准规范、水利标准话术
 - 检索接口：`POST /api/knowledge/search`
 - 流式检索接口：`POST /api/knowledge/search/stream`
+- 追问建议接口：`POST /api/knowledge/followups`
 
 ### RAG 数据流
 
@@ -562,6 +581,8 @@ docker run -d \
 | `POST /api/bidding/interpretations/<project_id>/sections/stream` | 流式生成章节正文 |
 | `POST /api/knowledge/upload` | 上传知识库资料 |
 | `POST /api/knowledge/search` | RAG 检索问答 |
+| `POST /api/knowledge/search/stream` | SSE 流式 RAG 检索问答 |
+| `POST /api/knowledge/followups` | 基于用户问题、回答、资料和图片资产生成模型追问建议 |
 | `GET /api/knowledge/documents` | 查询知识库文档列表 |
 
 ## 安全与开源注意事项
