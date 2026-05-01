@@ -27,6 +27,7 @@ import { TiptapBidEditor } from '../../components/editor/TiptapBidEditor';
 import type { BidOutline, BidOutlineChapter, BidSection, ChapterWritingPlan, InterpretationResponse } from '../../types/interpretation';
 
 type EditorMode = '正文模式' | '目录模式';
+type VolumeType = 'all' | 'technical' | 'business' | 'qualification' | 'price' | 'attachment' | 'other';
 
 type ChapterDraft = BidOutlineChapter & {
   id: string;
@@ -55,6 +56,16 @@ type BatchTask = {
 };
 
 const BATCH_SECTION_CONCURRENCY = 3;
+
+const volumeOptions: Array<{ value: VolumeType; label: string; shortLabel: string; keywords: RegExp }> = [
+  { value: 'all', label: '全部', shortLabel: '全部', keywords: /.*/ },
+  { value: 'technical', label: '技术标', shortLabel: '技术', keywords: /技术|施工组织|实施方案|施工方案|质量|安全|环保|进度|资源配置|发包人要求|承包人建议|设备|工艺|调试/ },
+  { value: 'business', label: '商务标', shortLabel: '商务', keywords: /商务|合同|付款|履约|服务|税费|廉政|保密|偏离|承诺|投标函|授权委托|保证金/ },
+  { value: 'qualification', label: '资格文件', shortLabel: '资格', keywords: /资格|资质|证书|营业执照|安全生产许可|人员|项目经理|技术负责人|业绩|信誉|社保|建造师/ },
+  { value: 'price', label: '报价文件', shortLabel: '报价', keywords: /报价|清单|价格|单价|工程量|投标总价|分项报价/ },
+  { value: 'attachment', label: '附件材料', shortLabel: '附件', keywords: /附件|图纸|扫描件|证明材料|附录|图片|图册/ },
+  { value: 'other', label: '其他', shortLabel: '其他', keywords: /^$/ },
+];
 
 function asBidOutline(meta: Record<string, unknown> | undefined | null): BidOutline | null {
   return (meta?.bid_outline || null) as BidOutline | null;
@@ -165,6 +176,25 @@ function chapterDisplayTitle(chapter: Pick<ChapterDraft, 'order' | 'title'>): st
   return `${orderPrefix}${cleanTitle}`;
 }
 
+function inferVolumeType(chapter: Pick<ChapterDraft, 'title' | 'purpose' | 'required_materials' | 'response_points' | 'metadata'>): VolumeType {
+  const metadataVolume = String(chapter.metadata?.volume_type || '').trim() as VolumeType;
+  if (volumeOptions.some(item => item.value === metadataVolume && metadataVolume !== 'all')) {
+    return metadataVolume;
+  }
+  const combined = [
+    chapter.title,
+    chapter.purpose,
+    ...(chapter.required_materials || []),
+    ...(chapter.response_points || []),
+  ].filter(Boolean).join(' ');
+  const matched = volumeOptions.find(item => item.value !== 'all' && item.value !== 'other' && item.keywords.test(combined));
+  return matched?.value || 'other';
+}
+
+function volumeLabel(volumeType: VolumeType): string {
+  return volumeOptions.find(item => item.value === volumeType)?.label || '其他';
+}
+
 export function BidEditorPage(): JSX.Element {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -173,6 +203,7 @@ export function BidEditorPage(): JSX.Element {
   const [chapters, setChapters] = useState<ChapterDraft[]>([]);
   const [selectedId, setSelectedId] = useState<string>('');
   const [mode, setMode] = useState<EditorMode>('正文模式');
+  const [activeVolume, setActiveVolume] = useState<VolumeType>('all');
   const [keyword, setKeyword] = useState('');
   const [loading, setLoading] = useState(true);
   const [streaming, setStreaming] = useState(false);
@@ -346,13 +377,24 @@ export function BidEditorPage(): JSX.Element {
 
   const savedOutline = asBidOutline(data?.analysis?.project_meta);
   const outline = outlineMeta || savedOutline;
+  const volumeCounts = useMemo(() => {
+    const counts = Object.fromEntries(volumeOptions.map(item => [item.value, 0])) as Record<VolumeType, number>;
+    chapters.forEach(chapter => {
+      counts[inferVolumeType(chapter)] += 1;
+      counts.all += 1;
+    });
+    return counts;
+  }, [chapters]);
   const filteredChapters = useMemo(() => {
     const term = keyword.trim();
+    const volumeFiltered = activeVolume === 'all'
+      ? chapters
+      : chapters.filter(chapter => inferVolumeType(chapter) === activeVolume);
     if (!term) {
-      return chapters;
+      return volumeFiltered;
     }
-    const matchedIds = new Set(chapters.filter(chapter => (chapter.title || '').includes(term)).map(chapter => chapter.id));
-    const byId = new Map(chapters.map(chapter => [chapter.id, chapter]));
+    const matchedIds = new Set(volumeFiltered.filter(chapter => (chapter.title || '').includes(term)).map(chapter => chapter.id));
+    const byId = new Map(volumeFiltered.map(chapter => [chapter.id, chapter]));
     matchedIds.forEach(id => {
       let parentId = byId.get(id)?.parent_id || null;
       while (parentId) {
@@ -360,21 +402,24 @@ export function BidEditorPage(): JSX.Element {
         parentId = byId.get(parentId)?.parent_id || null;
       }
     });
-    return chapters.filter(chapter => matchedIds.has(chapter.id));
-  }, [chapters, keyword]);
-  const selectedChapter = chapters.find(chapter => chapter.id === selectedId) || chapters[0];
+    return volumeFiltered.filter(chapter => matchedIds.has(chapter.id));
+  }, [activeVolume, chapters, keyword]);
+  const selectedChapter = filteredChapters.find(chapter => chapter.id === selectedId)
+    || filteredChapters[0]
+    || (activeVolume === 'all' ? chapters.find(chapter => chapter.id === selectedId) || chapters[0] : undefined);
   const visibleChapters = useMemo(
     () => filteredChapters.filter(chapter => isVisibleChapter(chapter, filteredChapters)),
     [filteredChapters],
   );
-  const matchText = keyword ? `${filteredChapters.length} / ${chapters.length}` : `0 / ${chapters.length}`;
-  const actualChars = chapters.reduce((sum, chapter) => sum + (isChapterGenerated(chapter) ? chapterActualWords(chapter) : 0), 0);
-  const estimatedTotalChars = chapters.reduce((sum, chapter) => (
+  const scopedChapters = activeVolume === 'all' ? chapters : chapters.filter(chapter => inferVolumeType(chapter) === activeVolume);
+  const matchText = keyword ? `${filteredChapters.length} / ${scopedChapters.length}` : `0 / ${scopedChapters.length}`;
+  const actualChars = scopedChapters.reduce((sum, chapter) => sum + (isChapterGenerated(chapter) ? chapterActualWords(chapter) : 0), 0);
+  const estimatedTotalChars = scopedChapters.reduce((sum, chapter) => (
     sum + (isChapterGenerated(chapter) ? chapterActualWords(chapter) : targetChapterWords(chapter))
   ), 0);
   const estimatedPages = Math.max(1, Math.ceil(estimatedTotalChars / 700));
-  const generatedCount = chapters.filter(isChapterGenerated).length;
-  const generationProgress = chapters.length ? Math.round((generatedCount / chapters.length) * 10000) / 100 : 0;
+  const generatedCount = scopedChapters.filter(isChapterGenerated).length;
+  const generationProgress = scopedChapters.length ? Math.round((generatedCount / scopedChapters.length) * 10000) / 100 : 0;
 
   function chapterActualWords(chapter: ChapterDraft): number {
     return (chapter.content || '').replace(/\s+/g, '').length;
@@ -710,10 +755,11 @@ export function BidEditorPage(): JSX.Element {
       const result = await generateBidDocxDownload(data.project.id, {
         sectionId,
         withImages: !sectionId && withImages,
+        volumeType: !sectionId && activeVolume !== 'all' ? activeVolume : undefined,
       });
       setDownloadUrl(result.downloadUrl);
       window.open(result.downloadUrl, '_blank');
-      message.success(sectionId ? '本章 DOCX 已生成' : withImages ? '图文并茂版全文 DOCX 已生成' : '全文 DOCX 已生成');
+      message.success(sectionId ? '本章 DOCX 已生成' : `${activeVolume === 'all' ? '全文' : volumeLabel(activeVolume)} DOCX 已生成`);
     } catch (error) {
       message.error(error instanceof Error ? error.message : String(error));
     } finally {
@@ -1123,9 +1169,10 @@ export function BidEditorPage(): JSX.Element {
       return;
     }
 
-    const targets = chapters.filter(chapter => !isChapterGenerated(chapter));
+    const sourceChapters = activeVolume === 'all' ? chapters : chapters.filter(chapter => inferVolumeType(chapter) === activeVolume);
+    const targets = sourceChapters.filter(chapter => !isChapterGenerated(chapter));
     if (!targets.length) {
-      message.info('当前章节都已生成，如需重写请点击单章重写正文');
+      message.info(`当前${volumeLabel(activeVolume)}章节都已生成，如需重写请点击单章重写正文`);
       return;
     }
 
@@ -1218,11 +1265,11 @@ export function BidEditorPage(): JSX.Element {
               type="primary"
               icon={<Download size={17} />}
               loading={downloadGenerating === 'full'}
-              disabled={!chapters.length || !!downloadGenerating}
-              onClick={() => void downloadDocx()}
-            >
-              标书下载
-            </Button>
+            disabled={!scopedChapters.length || !!downloadGenerating}
+            onClick={() => void downloadDocx()}
+          >
+            {activeVolume === 'all' ? '标书下载' : `下载${volumeLabel(activeVolume)}`}
+          </Button>
           </Space>
         </header>
 
@@ -1236,8 +1283,20 @@ export function BidEditorPage(): JSX.Element {
                 { label: '目录模式', value: '目录模式' },
               ]}
             />
+            <Segmented<VolumeType>
+              className="volume-segmented"
+              value={activeVolume}
+              onChange={value => {
+                setActiveVolume(value);
+                setSelectedId('');
+              }}
+              options={volumeOptions.map(item => ({
+                label: `${item.shortLabel} ${volumeCounts[item.value] || 0}`,
+                value: item.value,
+              }))}
+            />
             <div className="outline-summary">
-              <span>总章节：{chapters.length}</span>
+              <span>{volumeLabel(activeVolume)}章节：{scopedChapters.length}</span>
               <span>已生成：{generatedCount}</span>
               <span>已完成字数：{actualChars}</span>
               <span>预计总字数：{estimatedTotalChars}（约{estimatedPages}页）</span>
@@ -1431,11 +1490,11 @@ export function BidEditorPage(): JSX.Element {
             type="primary"
             icon={<Download size={17} />}
             loading={downloadGenerating === 'full'}
-            disabled={!chapters.length || !!downloadGenerating}
-            onClick={() => void downloadDocx()}
-          >
-            标书下载
-          </Button>
+              disabled={!scopedChapters.length || !!downloadGenerating}
+              onClick={() => void downloadDocx()}
+            >
+              {activeVolume === 'all' ? '标书下载' : `下载${volumeLabel(activeVolume)}`}
+            </Button>
         </Space>
       </header>
 
@@ -1459,6 +1518,18 @@ export function BidEditorPage(): JSX.Element {
           onChange={event => setKeyword(event.target.value)}
           suffix={<span className="match-count">{matchText}</span>}
           placeholder="输入章节名称搜索"
+        />
+        <Segmented<VolumeType>
+          className="volume-segmented sidebar-volume-segmented"
+          value={activeVolume}
+          onChange={value => {
+            setActiveVolume(value);
+            setSelectedId('');
+          }}
+          options={volumeOptions.map(item => ({
+            label: `${item.shortLabel} ${volumeCounts[item.value] || 0}`,
+            value: item.value,
+          }))}
         />
         <div className={`chapter-tree ${streaming ? 'is-streaming' : ''}`}>
           {streaming ? (
@@ -1537,6 +1608,7 @@ export function BidEditorPage(): JSX.Element {
         </div>
         <footer className="chapter-stats">
           <span>总章节：{chapters.length}</span>
+          <span>当前分册：{volumeLabel(activeVolume)}</span>
           <span>已完成字数：{actualChars}</span>
           <span>约{estimatedPages}页</span>
         </footer>
@@ -1551,6 +1623,7 @@ export function BidEditorPage(): JSX.Element {
           <Space>
             {streaming ? <Tag color="processing">大纲生成中</Tag> : null}
             {sectionStreaming ? <Tag color="processing">正文生成中</Tag> : null}
+            {selectedChapter ? <Tag color="blue">{volumeLabel(inferVolumeType(selectedChapter))}</Tag> : null}
             <Button icon={<Sparkles size={16} />} loading={sectionStreaming} disabled={!selectedChapter || streaming} onClick={() => void generateCurrentSection()}>生成本章正文</Button>
             <Button
               icon={<Download size={16} />}

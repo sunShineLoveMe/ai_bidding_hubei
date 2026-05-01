@@ -22,6 +22,7 @@ from backend.ai.interpreter import generate_ai_interpretation_report
 from backend.ai.compliance_checker import build_compliance_report
 from backend.db.supabase_repo import create_knowledge_asset, delete_bid_project, delete_bid_section, download_bid_file_to_local, download_knowledge_asset_file_variant, get_bid_file, get_latest_bid_file_for_project, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_file_parse_status, update_bid_section_content, upload_knowledge_asset_file, upsert_bid_section
 from backend.core.llm_json_utils import strip_llm_json
+from backend.core.bid_volumes import section_volume_type, volume_name
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import shutil
@@ -358,7 +359,12 @@ def _section_with_descendants(sections: list[dict], section_id: str) -> list[dic
     return [section for section in sections if section.get("id") in selected_ids]
 
 
-def build_project_bid_markdown(project_id: str, focus_section_id: str | None = None, with_images: bool = False) -> tuple[Path, str]:
+def build_project_bid_markdown(
+    project_id: str,
+    focus_section_id: str | None = None,
+    with_images: bool = False,
+    volume_type: str | None = None,
+) -> tuple[Path, str]:
     payload = get_project_interpretation(project_id)
     project = payload.get("project") or {}
     sections = list_bid_sections(project_id)
@@ -376,10 +382,16 @@ def build_project_bid_markdown(project_id: str, focus_section_id: str | None = N
         focus_section = next((section for section in sections if section.get("id") == focus_section_id), None)
         if focus_section:
             sections = _section_with_descendants(sections, focus_section_id)
+    elif volume_type:
+        sections = [section for section in sections if section_volume_type(section) == volume_type]
+        if not sections:
+            raise RuntimeError(f"当前项目暂无{volume_name(volume_type)}章节，请先生成或调整章节分册。")
 
     file_suffix = ""
     if focus_section:
         file_suffix = f"-section-{_slug_filename(focus_section.get('title') or 'section', 'section')}-{focus_section_id[:8]}"
+    elif volume_type:
+        file_suffix = f"-{volume_name(volume_type)}"
     if with_images:
         file_suffix = f"{file_suffix}-illustrated"
     markdown_path = output_dir / f"{folder_name}{file_suffix}.md"
@@ -397,7 +409,8 @@ def build_project_bid_markdown(project_id: str, focus_section_id: str | None = N
             logging.exception("加载知识库图片资产失败，继续生成无配图 DOCX: %s", project_id)
             image_assets = []
 
-    chunks: list[str] = [f"# {project_name}\n\n"]
+    document_title = f"{project_name}-{volume_name(volume_type)}" if volume_type and not focus_section else project_name
+    chunks: list[str] = [f"# {document_title}\n\n"]
     used_asset_ids: set[str] = set()
     for section in sections:
         title = _section_display_title(section)
@@ -411,7 +424,7 @@ def build_project_bid_markdown(project_id: str, focus_section_id: str | None = N
             chunks.append(_build_section_image_markdown(section, image_assets, used_asset_ids))
 
     markdown_path.write_text("".join(chunks), encoding="utf-8")
-    return markdown_path, project_name
+    return markdown_path, document_title
 
 
 def save_onlyoffice_document_mapping(*, document_key: str, project_id: str, title: str, file_path: str, download_url: str) -> None:
@@ -1146,13 +1159,21 @@ def download_bid_docx(project_id):
         request_payload = request.get_json(silent=True) or {}
         section_id = request_payload.get("sectionId")
         with_images = bool(request_payload.get("withImages"))
+        volume_type = request_payload.get("volumeType")
+        if volume_type not in {"technical", "business", "qualification", "price", "attachment", "other"}:
+            volume_type = None
         if section_id:
             try:
                 uuid.UUID(section_id)
             except ValueError:
                 section_id = None
 
-        markdown_path, project_name = build_project_bid_markdown(project_id, section_id, with_images=with_images)
+        markdown_path, project_name = build_project_bid_markdown(
+            project_id,
+            section_id,
+            with_images=with_images,
+            volume_type=None if section_id else volume_type,
+        )
         generated_docx_path = convert_md_to_word(markdown_path)
         if not generated_docx_path or not Path(generated_docx_path).exists():
             raise RuntimeError("DOCX 生成失败，未找到输出文件。")
@@ -1165,6 +1186,7 @@ def download_bid_docx(project_id):
             'projectId': project_id,
             'sectionId': section_id,
             'withImages': with_images,
+            'volumeType': volume_type,
             'projectName': project_name,
             'fileName': generated_docx_path.name,
             'downloadUrl': f"/api/outputs/{relative_path.as_posix()}",

@@ -105,7 +105,7 @@ export async function generateOnlyOfficeConfig(projectId: string, sectionId?: st
 
 export async function generateBidDocxDownload(
   projectId: string,
-  options?: { sectionId?: string; withImages?: boolean },
+  options?: { sectionId?: string; withImages?: boolean; volumeType?: string },
 ): Promise<{ downloadUrl: string; fileName: string }> {
   const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/download-docx`, options || undefined, {
     skipGlobalLoading: true,

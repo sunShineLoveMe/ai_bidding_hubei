@@ -17,7 +17,7 @@ export function SmartBidCard({ onPrimaryAction, onTechnicalAction, onBusinessAct
         <div>
           <h2 className="mb-1 text-2xl font-black text-indigo-600">智能标书</h2>
           <p className="m-0 text-sm font-semibold leading-6 text-slate-500">
-            第一步上传招标文件，系统会解析招标要求，并结合知识库、资信库、产品库生成可编辑初稿
+            上传招标文件后，系统会解析招标要求，并按技术标、商务标、资格文件和报价文件生成可编辑初稿。
           </p>
         </div>
       </div>

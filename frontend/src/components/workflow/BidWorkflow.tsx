@@ -42,8 +42,8 @@ const workflowSteps = [
     description: '资格 / 评分 / 风险',
   },
   {
-    title: '生成章节大纲',
-    description: '匹配知识库资料',
+    title: '生成分册大纲',
+    description: '技术 / 商务 / 资格 / 报价',
   },
   {
     title: '进入标书编制',
@@ -92,7 +92,7 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
   const [busy, setBusy] = useState(false);
   const [current, setCurrent] = useState(0);
   const [statuses, setStatuses] = useState<StepStatus[]>(initialStatuses);
-  const [summary, setSummary] = useState('请选择招标文件。上传后系统会自动完成解析、招标解读和章节大纲生成。');
+  const [summary, setSummary] = useState('请选择招标文件。上传后系统会自动完成解析、招标解读和分册大纲生成。');
   const [detail, setDetail] = useState('支持 Word、PDF、TXT。扫描版 PDF 会自动进入 MinerU/OCR 解析流程。');
   const addTask = useBidProjectStore(state => state.addTask);
 
@@ -217,14 +217,14 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
       if (runTokenRef.current !== token) return;
       finishStep(2);
 
-      updateStep(3, 'process', '正在生成章节大纲...', '正在结合招标解读、企业知识库、资信库和产品库规划标书章节。');
+      updateStep(3, 'process', '正在生成分册大纲...', '正在结合招标解读、企业知识库、资信库和产品库规划技术标、商务标、资格文件和报价文件。');
       await generateBidOutline(uploadResult.projectId);
       if (runTokenRef.current !== token) return;
       finishStep(3);
 
-      updateStep(4, 'finish', '章节大纲已生成，可以进入标书编制。', '后续可在标书编制工作台中编辑章节正文、引用资料并导出 Word。');
+      updateStep(4, 'finish', '分册大纲已生成，可以进入标书编制。', '后续可在标书编制工作台中按分册编辑正文、引用资料并导出 Word。');
       clearActiveWorkflow();
-      message.success('招标解读和章节大纲已生成');
+      message.success('招标解读和分册大纲已生成');
       onTaskChanged?.();
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -248,7 +248,7 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
     activeStepRef.current = 1;
     setStatuses(['finish', 'process', 'wait', 'wait', 'wait']);
     setSummary('正在恢复未完成的招标文件流程...');
-    setDetail(`检测到未完成任务：${active.fileName}。系统将继续解析、解读和生成章节大纲。`);
+    setDetail(`检测到未完成任务：${active.fileName}。系统将继续解析、解读和生成分册大纲。`);
 
     try {
       updateStep(1, 'process', '正在恢复解析进度...', '正在从后台查询 MinerU/OCR 解析状态。');
@@ -261,15 +261,15 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
       if (runTokenRef.current !== token) return;
       finishStep(2);
 
-      updateStep(3, 'process', '正在生成章节大纲...', '正在结合招标解读和知识库规划章节。');
+      updateStep(3, 'process', '正在生成分册大纲...', '正在结合招标解读和知识库规划技术标、商务标、资格文件和报价文件。');
       await generateBidOutline(active.projectId);
       if (runTokenRef.current !== token) return;
       finishStep(3);
 
-      updateStep(4, 'finish', '章节大纲已生成，可以进入标书编制。', '后续可继续编辑章节正文并导出 Word。');
+      updateStep(4, 'finish', '分册大纲已生成，可以进入标书编制。', '后续可继续按分册编辑章节正文并导出 Word。');
       clearActiveWorkflow();
       onTaskChanged?.();
-      message.success('已恢复并完成招标解读和章节大纲生成');
+      message.success('已恢复并完成招标解读和分册大纲生成');
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       setCurrent(activeStepRef.current);
@@ -302,7 +302,7 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
         <div>
           <h2 className="panel-title mb-1">标书生成流程</h2>
           <p className="m-0 text-sm font-semibold text-slate-500">
-            上传一次招标文件，系统自动完成解析、解读和章节大纲生成，减少重复点击。
+            上传一次招标文件，系统自动完成解析、解读和分册大纲生成，减少重复点击。
           </p>
         </div>
         <Tag color={busy ? 'processing' : progressPercent === 100 ? 'success' : 'default'}>

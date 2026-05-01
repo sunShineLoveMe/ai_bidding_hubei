@@ -7,6 +7,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from backend.core.bid_volumes import ensure_section_volume
+
 from backend.db.supabase_client import get_bucket_name, get_supabase_client, reset_supabase_client, upload_file_to_storage
 
 
@@ -232,6 +234,7 @@ def _is_valid_uuid(value: Any) -> bool:
 
 
 def _section_payload(project_id: str, section: dict[str, Any], index: int) -> dict[str, Any]:
+    section = ensure_section_volume(section)
     return {
         "project_id": project_id,
         "parent_id": section.get("parent_id") if _is_valid_uuid(section.get("parent_id")) else None,

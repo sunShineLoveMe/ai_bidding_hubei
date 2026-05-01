@@ -5,6 +5,7 @@ import { HeroBanner } from '../components/home/HeroBanner';
 import { KnowledgeStats } from '../components/home/KnowledgeStats';
 import { RecentTasks } from '../components/home/RecentTasks';
 import { SmartBidCard } from '../components/home/SmartBidCard';
+import { BidVolumeOverview } from '../components/home/BidVolumeOverview';
 import { BidWorkflow } from '../components/workflow/BidWorkflow';
 
 export function HomePage(): JSX.Element {
@@ -24,6 +25,7 @@ export function HomePage(): JSX.Element {
         onTechnicalAction={() => navigate('/history')}
         onBusinessAction={() => navigate('/knowledge')}
       />
+      <BidVolumeOverview />
       <div className="grid grid-cols-[1fr_1.08fr] gap-4 max-[1500px]:grid-cols-1">
         <BasicTools />
         <RecentTasks refreshKey={recentRefreshKey} />

@@ -51,7 +51,12 @@ export interface BidOutlineChapter {
   required_materials?: string[];
   writing_notes?: string[];
   content?: string;
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, unknown> & {
+    volume_type?: string;
+    volume_name?: string;
+    export_group?: string;
+    document_role?: string;
+  };
 }
 
 export interface ChapterWritingPlan {
