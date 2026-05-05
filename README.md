@@ -11,14 +11,14 @@
 - MinerU OCR 解析接入，用于扫描版 PDF、表格和图片型招标文件
 - 招标文件结构化解读：项目概况、资格要求、商务要求、技术要求、评分项、风险项
 - AI 深度解读报告生成
-- 标书章节大纲生成，支持多级章节树
+- 标书章节大纲生成，支持技术标、商务标、资格文件、报价文件、附件材料等分册结构和多级章节树
 - 合规覆盖检查：要求条款、评分项、风险项与标书章节的覆盖度核查
-- 标书编制工作台：章节树、目录模式、章节正文生成、章节维护
+- 标书编制工作台：分册切换、章节树、目录模式、章节正文生成、章节维护
 - 基于 Tiptap 的 AI 章节编辑器，支持标题、列表、表格和 AI 流式内容实时渲染
 - 企业知识库 RAG 检索问答
 - 系统设置：模型参数、企业画像、文档服务、存储路径和备份策略
 - 水利行业种子知识库采集与入库脚本
-- Word 文档生成与下载
+- Word 文档生成与下载，支持完整投标文件和单独分册导出
 - ONLYOFFICE 终稿编辑（可选）
 - Supabase PostgreSQL + pgvector + Storage 数据底座
 
@@ -123,6 +123,54 @@ GET /api/bidding/interpretations/{project_id}/compliance-check
 ```
 
 返回内容包括总检查项、覆盖项、待补强项、未覆盖项、高风险未覆盖数量、明细列表和处理建议。该功能目前是轻量规则版，适合业务人员优先发现“未覆盖的资格要求、否决风险和高分评分项”。后续可升级为 LLM 复核版，进一步检查正文质量、证据材料完整性和格式合规性。
+
+## 技术标 / 商务标分册设计
+
+系统当前采用轻量分册模型：暂不新增 `bid_volumes` 表，而是在章节大纲和 `bid_sections.metadata` 中记录分册归属。章节大纲生成会先判断本项目实际需要的投标文件组成，再输出 `volumes + chapters` 兼容结构。
+
+大纲结构：
+
+```json
+{
+  "version": "ai-volume-v1",
+  "volumes": [
+    {
+      "type": "technical",
+      "name": "技术标",
+      "required": true,
+      "basis": "招标文件要求提交施工组织设计和技术响应文件",
+      "chapters": []
+    }
+  ],
+  "chapters": []
+}
+```
+
+`volumes` 是业务分册结构，`chapters` 是全量扁平章节列表，用于兼容现有工作台、合规检查和 DOCX 导出链路。旧版只返回 `chapters` 的大纲仍可入库，后端会按章节标题、编写目标、响应点和资料需求推断分册。
+
+当前分册类型：
+
+| type | 名称 | 用途 |
+| --- | --- | --- |
+| `qualification` | 资格文件 | 营业执照、资质证书、人员证书、业绩和信誉声明 |
+| `business` | 商务标 | 投标函、商务条款响应、偏离表、承诺函和合同响应 |
+| `technical` | 技术标 | 施工组织设计、技术响应、质量安全环保、进度资源和设备方案 |
+| `price` | 报价文件 | 工程量清单、投标报价、分项报价和单价分析 |
+| `attachment` | 附件材料 | 图纸、证照扫描件、产品图片、业绩证明和其他附件 |
+| `other` | 其他 | 未能自动归类的其他响应材料 |
+
+每个 `bid_sections` 章节会写入：
+
+```json
+{
+  "volume_type": "technical",
+  "volume_name": "技术标",
+  "document_role": "正文",
+  "export_group": "技术标文件"
+}
+```
+
+章节写作计划会优先读取 `metadata.volume_type`，再回退标题关键词推断，以便不同分册采用不同写作策略。
 
 ## RAG 知识库架构
 
@@ -299,7 +347,7 @@ python rag_seed/water_resources/_scripts/ingest_water_rag_seed.py
 | `bid_scoring_items` | 评分项 |
 | `bid_risks` | 风险项、否决项、废标项 |
 | `bid_chapter_suggestions` | 建议响应章节 |
-| `bid_sections` | 标书章节树与章节正文 |
+| `bid_sections` | 标书章节树与章节正文；通过 `metadata.volume_type`、`metadata.volume_name` 记录技术标、商务标、资格文件、报价文件等分册归属 |
 | `knowledge_documents` | 企业知识库文档主表 |
 | `document_chunks` | 文档切片、元数据与向量 |
 | `generation_records` | AI 生成记录 |
@@ -576,14 +624,26 @@ docker run -d \
 | `GET /api/bidding/interpretations/latest` | 获取最近的招标解读 |
 | `GET /api/bidding/interpretations/<project_id>` | 获取项目解读 |
 | `POST /api/bidding/interpretations/<project_id>/ai-report` | 生成 AI 深度解读 |
-| `POST /api/bidding/interpretations/<project_id>/bid-outline` | 生成章节大纲 |
-| `GET /api/bidding/interpretations/<project_id>/bid-outline/stream` | SSE 流式生成章节大纲 |
+| `POST /api/bidding/interpretations/<project_id>/bid-outline` | 生成分册化章节大纲，返回 `volumes + chapters` |
+| `GET /api/bidding/interpretations/<project_id>/bid-outline/stream` | SSE 流式生成分册化章节大纲 |
 | `POST /api/bidding/interpretations/<project_id>/sections/stream` | 流式生成章节正文 |
+| `POST /api/bidding/interpretations/<project_id>/download-docx` | 生成 DOCX；可传 `volumeType` 单独导出技术标、商务标、资格文件、报价文件或附件材料 |
 | `POST /api/knowledge/upload` | 上传知识库资料 |
 | `POST /api/knowledge/search` | RAG 检索问答 |
 | `POST /api/knowledge/search/stream` | SSE 流式 RAG 检索问答 |
 | `POST /api/knowledge/followups` | 基于用户问题、回答、资料和图片资产生成模型追问建议 |
 | `GET /api/knowledge/documents` | 查询知识库文档列表 |
+
+分册导出示例：
+
+```json
+{
+  "volumeType": "technical",
+  "withImages": true
+}
+```
+
+不传 `volumeType` 时导出完整投标文件；传入 `technical`、`business`、`qualification`、`price`、`attachment` 或 `other` 时只导出对应分册。
 
 ## 安全与开源注意事项
 
@@ -692,6 +752,8 @@ docker run -d \
 
 ### P5：标书核心能力增强
 
+- [x] 章节大纲生成已升级为轻量分册模型：AI Prompt 输出 `volumes`，规则 fallback 输出 `volumes`，同时保留扁平 `chapters` 兼容现有工作台。
+- [ ] 分册模型稳定后新增正式 `bid_volumes` 表，承载分册状态、顺序、完成率、风险数量和用户自定义分册名称。
 - [ ] 将合规检查升级为 LLM 语义复核：逐条检查要求项、评分项、风险项是否被正文实质响应。
 - [ ] 增加评分点覆盖报告，按评分项输出“已覆盖 / 待补强 / 高风险缺失”。
 - [ ] 增加 AI 伴写能力：选中文字润色、扩写、缩写、改写为更正式、补充证明材料、生成表格。

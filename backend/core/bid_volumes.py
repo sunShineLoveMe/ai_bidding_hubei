@@ -32,6 +32,8 @@ VOLUME_DEFINITIONS: dict[str, dict[str, str]] = {
     },
 }
 
+VOLUME_ORDER = ["qualification", "business", "technical", "price", "attachment", "other"]
+
 
 def _text(value: Any) -> str:
     return str(value) if value is not None else ""
@@ -50,6 +52,10 @@ def volume_name(volume_type: Any) -> str:
     return VOLUME_DEFINITIONS.get(normalize_volume_type(volume_type), VOLUME_DEFINITIONS["other"])["name"]
 
 
+def volume_description(volume_type: Any) -> str:
+    return VOLUME_DEFINITIONS.get(normalize_volume_type(volume_type), VOLUME_DEFINITIONS["other"])["description"]
+
+
 def infer_volume_type(section: dict[str, Any]) -> str:
     metadata = section.get("metadata") if isinstance(section.get("metadata"), dict) else {}
     existing = metadata.get("volume_type")
@@ -62,14 +68,14 @@ def infer_volume_type(section: dict[str, Any]) -> str:
     response_points = " ".join(_text(item) for item in section.get("response_points") or [])
     combined = f"{title} {purpose} {materials} {response_points}"
 
-    if _contains_any(combined, ["报价", "清单", "价格", "单价", "工程量", "投标总价", "分项报价"]):
-        return "price"
-    if _contains_any(combined, ["施工组织", "技术", "实施方案", "施工方案", "质量", "安全", "环保", "进度", "资源配置", "发包人要求", "承包人建议", "设备", "工艺", "调试"]):
-        return "technical"
     if _contains_any(combined, ["资格", "资质", "证书", "营业执照", "安全生产许可", "人员", "项目经理", "技术负责人", "业绩", "信誉", "社保", "建造师"]):
         return "qualification"
     if _contains_any(combined, ["商务", "合同", "付款", "履约", "服务", "税费", "廉政", "保密", "偏离", "承诺", "投标函", "授权委托", "保证金"]):
         return "business"
+    if _contains_any(combined, ["报价", "清单", "价格", "单价", "工程量", "投标总价", "分项报价"]):
+        return "price"
+    if _contains_any(combined, ["施工组织", "技术", "实施方案", "施工方案", "质量", "安全", "环保", "进度", "资源配置", "发包人要求", "承包人建议", "设备", "工艺", "调试"]):
+        return "technical"
     if _contains_any(combined, ["附件", "图纸", "扫描件", "证明材料", "附录", "图片", "图册"]):
         return "attachment"
     return "other"
@@ -92,4 +98,3 @@ def ensure_section_volume(section: dict[str, Any]) -> dict[str, Any]:
 
 def section_volume_type(section: dict[str, Any]) -> str:
     return infer_volume_type(section)
-

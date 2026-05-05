@@ -255,13 +255,55 @@ def _section_payload(project_id: str, section: dict[str, Any], index: int) -> di
     }
 
 
+def _outline_flat_sections(outline: dict[str, Any]) -> list[dict[str, Any]]:
+    chapters = outline.get("chapters")
+    if isinstance(chapters, list) and chapters:
+        return chapters
+
+    flat_sections: list[dict[str, Any]] = []
+    root_offset = 0
+    volumes = outline.get("volumes") if isinstance(outline.get("volumes"), list) else []
+    for volume in volumes:
+        if not isinstance(volume, dict):
+            continue
+        volume_chapters = volume.get("chapters") if isinstance(volume.get("chapters"), list) else []
+        root_orders = [
+            str(chapter.get("order") or index + 1)
+            for index, chapter in enumerate(volume_chapters)
+            if "." not in str(chapter.get("order") or index + 1)
+        ]
+        root_map = {
+            old_order: str(root_offset + index)
+            for index, old_order in enumerate(root_orders, start=1)
+        }
+        volume_type = volume.get("type")
+        volume_title = volume.get("name")
+        for chapter in volume_chapters:
+            metadata = chapter.get("metadata") if isinstance(chapter.get("metadata"), dict) else {}
+            section = {
+                **chapter,
+                "metadata": {
+                    **metadata,
+                    "volume_type": metadata.get("volume_type") or volume_type,
+                    "volume_name": metadata.get("volume_name") or volume_title,
+                },
+            }
+            old_order = str(section.get("order") or "")
+            old_root, _, suffix = old_order.partition(".")
+            new_root = root_map.get(old_root, str(root_offset + len(root_map) + 1))
+            section["order"] = f"{new_root}.{suffix}" if suffix else new_root
+            flat_sections.append(section)
+        root_offset += len(root_orders)
+    return flat_sections
+
+
 def replace_bid_sections_from_outline(project_id: str, outline: dict[str, Any]) -> list[dict[str, Any]]:
     client = get_supabase_client()
     client.table("bid_sections").delete().eq("project_id", project_id).execute()
 
     inserted_rows: list[dict[str, Any]] = []
     order_to_id: dict[str, str] = {}
-    for index, section in enumerate(outline.get("chapters") or []):
+    for index, section in enumerate(_outline_flat_sections(outline)):
         section_order = str(section.get("order") or index + 1)
         parent_id = section.get("parent_id")
         if not parent_id and "." in section_order:

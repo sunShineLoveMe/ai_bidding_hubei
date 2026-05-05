@@ -59,6 +59,14 @@ export interface BidOutlineChapter {
   };
 }
 
+export interface BidOutlineVolume {
+  type?: 'qualification' | 'business' | 'technical' | 'price' | 'attachment' | 'other' | string;
+  name?: string;
+  required?: boolean;
+  basis?: string;
+  chapters?: BidOutlineChapter[];
+}
+
 export interface ChapterWritingPlan {
   importance?: 'high' | 'medium' | 'low' | string;
   min_words?: number;
@@ -93,6 +101,7 @@ export interface BidOutline {
   project_name?: string;
   tender_no?: string;
   summary?: string;
+  volumes?: BidOutlineVolume[];
   chapters?: BidOutlineChapter[];
   next_steps?: string[];
 }

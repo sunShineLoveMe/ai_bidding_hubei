@@ -131,7 +131,17 @@ function normalizeChapterHierarchy(items: ChapterDraft[]): ChapterDraft[] {
 }
 
 function flattenChapters(outline: BidOutline | null): ChapterDraft[] {
-  return normalizeChapterHierarchy((outline?.chapters || []).map((chapter, index) => ({
+  const outlineChapters = outline?.chapters?.length
+    ? outline.chapters
+    : (outline?.volumes || []).flatMap(volume => (volume.chapters || []).map(chapter => ({
+      ...chapter,
+      metadata: {
+        ...(chapter.metadata || {}),
+        volume_type: chapter.metadata?.volume_type || volume.type,
+        volume_name: chapter.metadata?.volume_name || volume.name,
+      },
+    })));
+  return normalizeChapterHierarchy((outlineChapters || []).map((chapter, index) => ({
     ...chapter,
     id: makeChapterId(chapter, index),
     content: initialContent(chapter),

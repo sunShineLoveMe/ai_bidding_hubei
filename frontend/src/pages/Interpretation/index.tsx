@@ -126,6 +126,8 @@ export function InterpretationPage(): JSX.Element {
   const report = asReport(projectMeta);
   const aiReport = asAIReport(projectMeta);
   const bidOutline = asBidOutline(projectMeta);
+  const bidOutlineChapterCount = bidOutline?.chapters?.length
+    || (bidOutline?.volumes || []).reduce((sum, volume) => sum + (volume.chapters?.length || 0), 0);
   const mineruQuality = asQuality(projectMeta);
   const relatedChunks = useMemo(() => {
     if (!sourceTrace?.sourcePage || !data?.documentChunks.length) {
@@ -149,9 +151,9 @@ export function InterpretationPage(): JSX.Element {
       { title: '要求条款', value: data?.requirements.length ?? 0, desc: '资格/商务/技术/文件', icon: ListChecks, colorClass: 'bg-blue-50 text-blue-600' },
       { title: '风险条款', value: data?.risks.length ?? 0, desc: '否决/无效/合规风险', icon: ShieldAlert, colorClass: 'bg-rose-50 text-rose-600' },
       { title: '评分项', value: data?.scoringItems.length ?? 0, desc: '评分办法初步拆解', icon: ClipboardCheck, colorClass: 'bg-emerald-50 text-emerald-600' },
-      { title: '章节大纲', value: bidOutline?.chapters?.length ?? 0, desc: '进入编制后继续编辑', icon: FileText, colorClass: 'bg-violet-50 text-violet-600' },
+      { title: '章节大纲', value: bidOutlineChapterCount, desc: `${bidOutline?.volumes?.length || 0} 个分册`, icon: FileText, colorClass: 'bg-violet-50 text-violet-600' },
     ],
-    [bidOutline?.chapters?.length, data],
+    [bidOutlineChapterCount, bidOutline?.volumes?.length, data],
   );
 
   const complianceColumns: ColumnsType<ComplianceRow> = [

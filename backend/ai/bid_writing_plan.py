@@ -16,6 +16,9 @@ def build_chapter_writing_plan(chapter: dict[str, Any]) -> dict[str, Any]:
     section writer to control target length and supporting materials.
     """
 
+    metadata = chapter.get("metadata") if isinstance(chapter.get("metadata"), dict) else {}
+    volume_type = _text(metadata.get("volume_type")).strip().lower()
+    has_explicit_volume = volume_type in {"qualification", "business", "technical", "price", "attachment"}
     title = _text(chapter.get("title"))
     purpose = _text(chapter.get("purpose"))
     combined = f"{title} {purpose}"
@@ -27,10 +30,10 @@ def build_chapter_writing_plan(chapter: dict[str, Any]) -> dict[str, Any]:
     material_count = len(chapter.get("required_materials") or [])
 
     is_format = _contains_any(combined, ["投标函", "格式", "授权委托", "保证金", "声明", "承诺函", "偏离表"])
-    is_qualification = _contains_any(combined, ["资格", "资质", "证书", "营业执照", "安全生产许可", "人员", "项目经理", "技术负责人"])
-    is_technical = _contains_any(combined, ["技术", "施工组织", "实施方案", "施工方案", "质量", "安全", "环保", "进度", "资源配置", "发包人要求", "承包人建议"])
-    is_commercial = _contains_any(combined, ["商务", "合同", "付款", "履约", "服务", "税费", "廉政", "保密"])
-    is_price = _contains_any(combined, ["报价", "清单", "价格", "单价", "工程量"])
+    is_qualification = volume_type == "qualification" or (not has_explicit_volume and _contains_any(combined, ["资格", "资质", "证书", "营业执照", "安全生产许可", "人员", "项目经理", "技术负责人"]))
+    is_technical = volume_type == "technical" or (not has_explicit_volume and _contains_any(combined, ["技术", "施工组织", "实施方案", "施工方案", "质量", "安全", "环保", "进度", "资源配置", "发包人要求", "承包人建议"]))
+    is_commercial = volume_type == "business" or (not has_explicit_volume and _contains_any(combined, ["商务", "合同", "付款", "履约", "服务", "税费", "廉政", "保密"]))
+    is_price = volume_type == "price" or (not has_explicit_volume and _contains_any(combined, ["报价", "清单", "价格", "单价", "工程量"]))
     is_case = _contains_any(combined, ["业绩", "案例", "类似项目", "经验"])
 
     score = 0
@@ -49,14 +52,14 @@ def build_chapter_writing_plan(chapter: dict[str, Any]) -> dict[str, Any]:
     else:
         importance = "low"
 
-    if is_technical:
-        base_min, base_max = (3500, 9000) if level <= 2 else (1800, 4500)
-    elif is_qualification:
+    if is_qualification:
         base_min, base_max = (1800, 4200) if level <= 2 else (900, 2200)
     elif is_price:
         base_min, base_max = (900, 2200)
     elif is_commercial:
         base_min, base_max = (1200, 3000)
+    elif is_technical:
+        base_min, base_max = (3500, 9000) if level <= 2 else (1800, 4500)
     elif is_case:
         base_min, base_max = (1500, 3600)
     elif is_format:
@@ -81,12 +84,14 @@ def build_chapter_writing_plan(chapter: dict[str, Any]) -> dict[str, Any]:
     needs_case = is_case or _contains_any(combined, ["施工组织", "技术", "质量", "安全"])
     generation_mode = "multi_pass" if target_words >= 3500 else "single_pass"
 
-    if is_technical:
-        strategy = "按招标技术要求和评分点展开，优先覆盖施工部署、关键工序、质量安全、进度资源和风险控制，可分段续写。"
-    elif is_qualification:
+    if is_qualification:
         strategy = "以资质、人员、证书、业绩材料为主，正文应短而准，关键编号和日期使用占位符等待企业资料补齐。"
     elif is_price:
         strategy = "以报价口径、清单说明、风险边界和人工复核提示为主，表格信息必须保留可校验字段。"
+    elif is_commercial:
+        strategy = "按商务标口径响应投标函、合同条款、承诺、偏离和服务要求，金额、日期、签章和保证金信息必须使用占位符或人工复核提示。"
+    elif is_technical:
+        strategy = "按招标技术要求和评分点展开，优先覆盖施工部署、关键工序、质量安全、进度资源和风险控制，可分段续写。"
     elif is_format:
         strategy = "按招标文件格式响应，避免扩写过度，重点保留签章、日期、金额、附件页码等占位。"
     else:

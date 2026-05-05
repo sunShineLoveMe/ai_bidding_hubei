@@ -9,6 +9,14 @@ from backend.db.supabase_repo import get_project_interpretation, get_supabase_cl
 from backend.core.llm_json_utils import strip_llm_json
 from backend.ai.qwen_client import call_dashscope_api
 from backend.ai.bid_writing_plan import build_chapter_writing_plan
+from backend.core.bid_volumes import (
+    VOLUME_ORDER,
+    ensure_section_volume,
+    infer_volume_type,
+    normalize_volume_type,
+    volume_description,
+    volume_name,
+)
 
 
 def _compact_items(items: list[dict[str, Any]], fields: list[str], limit: int) -> list[dict[str, Any]]:
@@ -31,9 +39,16 @@ def _contains_keyword(item: dict[str, Any], keyword: str, fields: list[str]) -> 
     return any(keyword in _text(item.get(field)) for field in fields)
 
 
-def _normalize_outline_chapters(chapters: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _normalize_outline_chapters(
+    chapters: list[dict[str, Any]],
+    *,
+    volume_type: str | None = None,
+    volume_name_override: str | None = None,
+) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     order_index = 0
+    normalized_volume_type = normalize_volume_type(volume_type) if volume_type else None
+    normalized_volume_name = volume_name_override or (volume_name(normalized_volume_type) if normalized_volume_type else None)
 
     def visit(items: list[dict[str, Any]], level: int, prefix: str = "") -> None:
         nonlocal order_index
@@ -55,16 +70,143 @@ def _normalize_outline_chapters(chapters: list[dict[str, Any]]) -> list[dict[str
             row["required_materials"] = row.get("required_materials") or []
             row["writing_notes"] = row.get("writing_notes") or []
             metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            previous_volume_type = metadata.get("volume_type")
+            if normalized_volume_type:
+                metadata = {
+                    **metadata,
+                    "volume_type": normalized_volume_type,
+                    "volume_name": normalized_volume_name or volume_name(normalized_volume_type),
+                    "document_role": metadata.get("document_role") or "正文",
+                    "export_group": metadata.get("export_group") or f"{normalized_volume_name or volume_name(normalized_volume_type)}文件",
+                }
+            row["metadata"] = metadata
+            existing_writing_plan = metadata.get("writing_plan")
+            should_rebuild_plan = bool(normalized_volume_type)
             row["metadata"] = {
                 **metadata,
-                "writing_plan": metadata.get("writing_plan") or build_chapter_writing_plan(row),
+                "writing_plan": None if should_rebuild_plan else existing_writing_plan,
             }
+            if not row["metadata"].get("writing_plan"):
+                row["metadata"]["writing_plan"] = build_chapter_writing_plan(row)
+            row = ensure_section_volume(row)
             normalized.append(row)
             if isinstance(children, list) and children:
                 visit(children, min(level + 1, 4), str(order))
 
     visit(chapters, 1)
     return normalized
+
+
+def _build_volume(
+    volume_type: str,
+    *,
+    required: bool = True,
+    basis: str | None = None,
+    chapters: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    normalized_type = normalize_volume_type(volume_type)
+    return {
+        "type": normalized_type,
+        "name": volume_name(normalized_type),
+        "required": required,
+        "basis": basis or volume_description(normalized_type),
+        "chapters": chapters or [],
+    }
+
+
+def _outline_chapters_from_volumes(volumes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    chapters: list[dict[str, Any]] = []
+    root_offset = 0
+    for volume in volumes:
+        volume_type = normalize_volume_type(volume.get("type"))
+        volume_title = _text(volume.get("name")) or volume_name(volume_type)
+        volume_chapters = volume.get("chapters") if isinstance(volume.get("chapters"), list) else []
+        local_chapters = _normalize_outline_chapters(
+            volume_chapters,
+            volume_type=volume_type,
+            volume_name_override=volume_title,
+        )
+        local_roots = [
+            chapter for chapter in local_chapters
+            if "." not in str(chapter.get("order") or "")
+        ]
+        root_map: dict[str, str] = {}
+        for root_index, root in enumerate(local_roots, start=1):
+            old_root = str(root.get("order") or root_index)
+            root_map[old_root] = str(root_offset + root_index)
+
+        for chapter in local_chapters:
+            old_order = str(chapter.get("order") or "")
+            old_root, _, suffix = old_order.partition(".")
+            new_root = root_map.get(old_root, str(root_offset + len(root_map) + 1))
+            chapter["order"] = f"{new_root}.{suffix}" if suffix else new_root
+            chapters.append(chapter)
+        root_offset += len(local_roots)
+    return sorted(chapters, key=lambda item: int(item.get("order_index") or 0))
+
+
+def _normalize_outline_structure(outline: dict[str, Any]) -> dict[str, Any]:
+    """Return an outline that always has both business volumes and flat chapters."""
+    raw_volumes = outline.get("volumes") if isinstance(outline.get("volumes"), list) else []
+    normalized_volumes: list[dict[str, Any]] = []
+
+    for raw_volume in raw_volumes:
+        if not isinstance(raw_volume, dict):
+            continue
+        raw_chapters = raw_volume.get("chapters") if isinstance(raw_volume.get("chapters"), list) else []
+        volume_type = normalize_volume_type(raw_volume.get("type"))
+        normalized_volumes.append({
+            **raw_volume,
+            "type": volume_type,
+            "name": raw_volume.get("name") or volume_name(volume_type),
+            "required": bool(raw_volume.get("required", True)),
+            "basis": raw_volume.get("basis") or volume_description(volume_type),
+            "chapters": _normalize_outline_chapters(
+                raw_chapters,
+                volume_type=volume_type,
+                volume_name_override=raw_volume.get("name") or volume_name(volume_type),
+            ),
+        })
+
+    if normalized_volumes:
+        flat_chapters = _outline_chapters_from_volumes(normalized_volumes)
+    else:
+        flat_chapters = _normalize_outline_chapters(outline.get("chapters") or [])
+        by_volume: dict[str, list[dict[str, Any]]] = {item: [] for item in VOLUME_ORDER}
+        for chapter in flat_chapters:
+            by_volume.setdefault(infer_volume_type(chapter), []).append(chapter)
+        normalized_volumes = [
+            _build_volume(
+                volume_type,
+                required=bool(by_volume.get(volume_type)),
+                basis="由历史 chapters 结构按章节标题、响应点和资料需求兼容推断。",
+                chapters=by_volume.get(volume_type) or [],
+            )
+            for volume_type in VOLUME_ORDER
+            if by_volume.get(volume_type)
+        ]
+        normalized_volumes = [
+            {
+                **volume,
+                "chapters": _normalize_outline_chapters(
+                    volume.get("chapters") or [],
+                    volume_type=volume.get("type"),
+                    volume_name_override=volume.get("name"),
+                ),
+            }
+            for volume in normalized_volumes
+        ]
+        flat_chapters = _outline_chapters_from_volumes(normalized_volumes)
+
+    for index, chapter in enumerate(flat_chapters, start=1):
+        chapter["order_index"] = index
+
+    return {
+        **outline,
+        "version": outline.get("version") or "ai-volume-v1",
+        "volumes": normalized_volumes,
+        "chapters": flat_chapters,
+    }
 
 
 def _build_rule_outline(payload: dict[str, Any]) -> dict[str, Any]:
@@ -204,19 +346,19 @@ def _build_rule_outline(payload: dict[str, Any]) -> dict[str, Any]:
 
     chapters = _normalize_outline_chapters([enrich_node(node, 1) for node in base_chapters])
 
-    return {
-        "version": "rule-v1",
+    return _normalize_outline_structure({
+        "version": "rule-volume-v1",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "project_name": project_meta.get("project_name") or project.get("project_name"),
         "tender_no": project_meta.get("tender_no") or project.get("project_no"),
-        "summary": "基于招标解读结果生成的第一版投标文件章节大纲，可作为后续正文生成和 Word 排版输入。",
+        "summary": "基于招标解读结果生成的分册化投标文件章节大纲，可作为后续正文生成和 Word 排版输入。",
         "chapters": chapters,
         "next_steps": [
             "先人工确认章节是否覆盖招标文件格式和实质性条款。",
             "补齐企业资信、人员证书、业绩和产品资料后，再进入单章节正文生成。",
             "优先生成资格审查资料、技术响应及施工组织设计等高风险章节。",
         ],
-    }
+    })
 
 
 def _build_prompt(payload: dict[str, Any]) -> str:
@@ -257,35 +399,31 @@ def _build_prompt(payload: dict[str, Any]) -> str:
     }
 
     return f"""
-你是资深水利工程投标文件编制负责人。请基于招标文件结构化解读，生成“投标文件章节目录 + 章节大纲”。
+你是资深水利工程投标文件编制负责人。请基于招标文件结构化解读，生成“真实投标分册组成 + 各分册章节大纲”。
 
 要求：
 1. 面向后续自动生成标书正文，不要写完整正文。
-2. 章节要覆盖资格、商务、技术、报价、格式文件、风险响应和评分响应。
-3. 每个章节必须说明编写目标、响应点、关联要求、关联评分项、风险提醒、需要准备的资料、来源页码和写作注意事项。
-4. 目录层级必须灵活处理：简单章节可以只保留一级，复杂章节可以展开到二级、三级，必要时四级；不要机械地让每章层级一致。
-5. 不要编造招标文件没有的信息；无法确认的写“需人工复核”。
-6. 输出必须是严格 JSON，不要 Markdown，不要代码块。
+2. 先判断本项目实际需要提交哪些投标文件分册，再分别生成分册章节。
+3. 分册 type 只能使用：qualification、business、technical、price、attachment、other。
+4. 章节要覆盖资格、商务、技术、报价、格式文件、风险响应和评分响应。
+5. 每个章节必须说明编写目标、响应点、关联要求、关联评分项、风险提醒、需要准备的资料、来源页码和写作注意事项。
+6. 目录层级必须灵活处理：简单章节可以只保留一级，复杂章节可以展开到二级、三级，必要时四级；不要机械地让每章层级一致。
+7. 不要编造招标文件没有的信息；无法确认的写“需人工复核”。
+8. 输出必须是严格 JSON，不要 Markdown，不要代码块。
 
 输出 JSON 格式：
 {{
-  "version": "ai-v1",
+  "version": "ai-volume-v1",
   "project_name": "...",
   "tender_no": "...",
   "summary": "...",
-  "chapters": [
+  "volumes": [
     {{
-      "title": "...",
-      "priority": "high/medium/low",
-      "purpose": "...",
-      "response_points": ["..."],
-      "mapped_requirements": ["..."],
-      "mapped_scoring_items": ["..."],
-      "mapped_risks": ["..."],
-      "source_pages": [1, 2],
-      "required_materials": ["..."],
-      "writing_notes": ["..."],
-      "children": [
+      "type": "technical",
+      "name": "技术标",
+      "required": true,
+      "basis": "招标文件要求提交施工组织设计和技术响应文件",
+      "chapters": [
         {{
           "title": "...",
           "priority": "high/medium/low",
@@ -302,6 +440,7 @@ def _build_prompt(payload: dict[str, Any]) -> str:
       ]
     }}
   ],
+  "chapters": [],
   "next_steps": ["..."]
 }}
 
@@ -323,13 +462,18 @@ def _generate_outline_from_ai_or_rule(payload: dict[str, Any]) -> dict[str, Any]
         ai_outline["fallback_reason"] = f"AI 章节大纲生成失败，已使用规则版大纲: {exc}"
         return ai_outline
 
-    if not isinstance(ai_outline.get("chapters"), list) or not ai_outline["chapters"]:
+    has_volumes = isinstance(ai_outline.get("volumes"), list) and any(
+        isinstance(volume, dict) and isinstance(volume.get("chapters"), list) and volume.get("chapters")
+        for volume in ai_outline.get("volumes") or []
+    )
+    has_chapters = isinstance(ai_outline.get("chapters"), list) and bool(ai_outline.get("chapters"))
+    if not has_volumes and not has_chapters:
         ai_outline = fallback_outline
         ai_outline["version"] = "rule-v1-fallback"
-        ai_outline["fallback_reason"] = "AI 返回结果缺少 chapters，已使用规则版大纲。"
+        ai_outline["fallback_reason"] = "AI 返回结果缺少 volumes[].chapters 或 chapters，已使用规则版分册大纲。"
         return ai_outline
 
-    ai_outline["chapters"] = _normalize_outline_chapters(ai_outline["chapters"])
+    ai_outline = _normalize_outline_structure(ai_outline)
     ai_outline["version"] = ai_outline.get("version") or "ai-v1"
     ai_outline["generated_at"] = datetime.now(timezone.utc).isoformat()
     if "model" not in ai_outline:
