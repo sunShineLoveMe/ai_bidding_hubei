@@ -25,6 +25,19 @@
 - 工作台 Tabs 已改为 `全部 / 技术标 / 商务标`，章节正文标题区同时显示用户侧分册和内部资料类型。
 - 后端 DOCX 导出 `volumeType=business` 时会聚合非技术标章节，符合多数施工类招标文件的最终提交习惯。
 
+## Current Implementation Notes: DOCX 正式导出规范
+- `backend/api/routes.py` 将内部输出目录 slug 和用户可见文件名拆开：目录仍可使用 ASCII，下载 DOCX 文件名保留中文项目名、分册名和章节名。
+- OnlyOffice 和下载接口返回的 `downloadUrl` 会对中文路径做 URL 编码，避免浏览器或文档服务解析失败。
+- `backend/export/md_to_word.py` 在 Markdown 转 DOCX 时清理 emoji、图钉、告警图标、变体选择符和零宽字符，页眉使用清理后的中文文档标题。
+- `backend/ai/section_writer.py` 已在生成 Prompt 中明确禁止正式标书正文使用 emoji、图标符号或装饰性提示符。
+
+## Current Implementation Notes: 条款响应覆盖率
+- 新增 `docs/合规覆盖度整改TODO.md` 作为合规覆盖度整改的跨模型交接清单，按 P0/P1/P2/P3 跟踪。
+- 当前“覆盖率”已改名为“条款响应覆盖率”，强调它是招标条款、评分项、风险项到当前章节映射/正文片段的响应追踪，不是最终 Word 标书合规结论。
+- 解读页顶部指标卡直接展示条款响应率、未响应数量和高风险未响应数量，原 `合规覆盖` Tab 改为 `条款响应`。
+- 顶部指标卡图标支持鼠标悬浮说明，用于解释每个指标的统计口径和业务用途，减少页面常驻文字噪音。
+- 标书工作台下载完整文件或分册前会实时拉取条款响应报告；存在未响应或高风险未响应项时弹窗提示，用户可继续下载或返回补强。
+
 ## Archived Previous Notes: 本地带图片标书 MVP
 
 ### Existing Project Findings

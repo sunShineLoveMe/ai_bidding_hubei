@@ -131,7 +131,7 @@ def build_compliance_report(project_id: str) -> dict[str, Any]:
 
     recommendations = []
     if missing:
-        recommendations.append("优先补齐未覆盖的资格要求、否决风险和强制性响应条款。")
+        recommendations.append("该指标为条款响应追踪，不等同于最终 Word 合规结论；建议优先补齐未响应的资格要求、否决风险和强制性条款。")
     if partial:
         recommendations.append("评分项中“待补强”的内容建议补充证明材料、页码索引和可量化承诺。")
     if not sections:
@@ -143,6 +143,8 @@ def build_compliance_report(project_id: str) -> dict[str, Any]:
         "projectId": project_id,
         "projectName": project.get("project_name") if project else None,
         "summary": {
+            "metricName": "条款响应覆盖率",
+            "scopeNote": "基于招标条款、评分项、风险项与当前章节映射/正文片段的响应追踪结果，不等同于最终 Word 标书合规结论。",
             "total": total,
             "covered": covered,
             "partial": partial,

@@ -138,6 +138,8 @@ export function InterpretationPage(): JSX.Element {
 
   const complianceRows = complianceReport?.rows || [];
   const complianceSummary = complianceReport?.summary || {
+    metricName: '条款响应覆盖率',
+    scopeNote: '基于招标条款与当前章节/正文的响应追踪结果，不等同于最终 Word 标书合规结论。',
     total: 0,
     covered: 0,
     partial: 0,
@@ -148,12 +150,13 @@ export function InterpretationPage(): JSX.Element {
 
   const metrics = useMemo(
     () => [
-      { title: '要求条款', value: data?.requirements.length ?? 0, desc: '资格/商务/技术/文件', icon: ListChecks, colorClass: 'bg-blue-50 text-blue-600' },
-      { title: '风险条款', value: data?.risks.length ?? 0, desc: '否决/无效/合规风险', icon: ShieldAlert, colorClass: 'bg-rose-50 text-rose-600' },
-      { title: '评分项', value: data?.scoringItems.length ?? 0, desc: '评分办法初步拆解', icon: ClipboardCheck, colorClass: 'bg-emerald-50 text-emerald-600' },
-      { title: '章节大纲', value: bidOutlineChapterCount, desc: `${bidOutline?.volumes?.length || 0} 个分册`, icon: FileText, colorClass: 'bg-violet-50 text-violet-600' },
+      { title: '要求条款', value: data?.requirements.length ?? 0, desc: '资格/商务/技术/文件', icon: ListChecks, colorClass: 'bg-blue-50 text-blue-600', tooltip: '从招标文件中抽取的资格要求、商务要求、技术要求和文件格式要求，用于后续章节大纲、正文生成和条款响应追踪。' },
+      { title: '风险条款', value: data?.risks.length ?? 0, desc: '否决/无效/合规风险', icon: ShieldAlert, colorClass: 'bg-rose-50 text-rose-600', tooltip: '从招标文件中识别的废标、否决、无效投标和关键合规风险。该数量越高，越需要优先逐条确认响应。' },
+      { title: '评分项', value: data?.scoringItems.length ?? 0, desc: '评分办法初步拆解', icon: ClipboardCheck, colorClass: 'bg-emerald-50 text-emerald-600', tooltip: '从评分办法中拆解出的得分点。后续标书正文应围绕高分项补充施工细节、证明材料、页码索引和可量化承诺。' },
+      { title: '条款响应率', value: `${complianceSummary.percent}%`, desc: `${complianceSummary.missing} 项未响应 / ${complianceSummary.highRiskMissing || 0} 项高风险`, icon: CheckCircle2, colorClass: complianceSummary.missing ? 'bg-amber-50 text-amber-600' : 'bg-emerald-50 text-emerald-600', tooltip: complianceSummary.scopeNote || '基于招标条款、评分项、风险项与当前章节映射/正文片段的响应追踪结果，不等同于最终 Word 标书合规结论。' },
+      { title: '章节大纲', value: bidOutlineChapterCount, desc: `${bidOutline?.volumes?.length || 0} 个分册`, icon: FileText, colorClass: 'bg-violet-50 text-violet-600', tooltip: '当前项目已生成的标书章节数量和分册数量。章节大纲是正文生成、条款响应和分册导出的基础。' },
     ],
-    [bidOutlineChapterCount, bidOutline?.volumes?.length, data],
+    [bidOutlineChapterCount, bidOutline?.volumes?.length, complianceSummary.highRiskMissing, complianceSummary.missing, complianceSummary.percent, data],
   );
 
   const complianceColumns: ColumnsType<ComplianceRow> = [
@@ -652,14 +655,14 @@ export function InterpretationPage(): JSX.Element {
                 },
                 {
                   key: 'compliance',
-                  label: '合规覆盖',
+                  label: '条款响应',
                   children: (
                     <div className="space-y-4">
                       <Alert
                         type={complianceSummary.missing ? 'warning' : 'success'}
                         showIcon
-                        message={`当前覆盖度 ${complianceSummary.percent}%`}
-                        description={`共检查 ${complianceSummary.total} 项，其中已覆盖 ${complianceSummary.covered} 项、待补强 ${complianceSummary.partial} 项、未覆盖 ${complianceSummary.missing} 项，高风险未覆盖 ${complianceSummary.highRiskMissing || 0} 项。请优先处理未覆盖的资格要求、否决风险和高分评分项。`}
+                        message={`${complianceSummary.metricName || '条款响应覆盖率'} ${complianceSummary.percent}%`}
+                        description={`${complianceSummary.scopeNote || '该指标用于追踪招标条款与当前章节/正文的响应关系，不等同于最终 Word 标书合规结论。'} 共检查 ${complianceSummary.total} 项，其中已响应 ${complianceSummary.covered} 项、待补强 ${complianceSummary.partial} 项、未响应 ${complianceSummary.missing} 项，高风险未响应 ${complianceSummary.highRiskMissing || 0} 项。`}
                       />
                       {complianceReport?.recommendations?.length ? (
                         <div className="rounded-md bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-800">

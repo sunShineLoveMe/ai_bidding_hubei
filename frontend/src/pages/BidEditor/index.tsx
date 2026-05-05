@@ -21,10 +21,10 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { deleteBidSection, generateBidDocxDownload, getInterpretation, getLatestInterpretation, reorderBidSections, resetBidSectionsGeneration, saveBidSection } from '../../api/bidProject';
+import { deleteBidSection, generateBidDocxDownload, getComplianceCheck, getInterpretation, getLatestInterpretation, reorderBidSections, resetBidSectionsGeneration, saveBidSection } from '../../api/bidProject';
 import { BrandMark } from '../../components/common/BrandMark';
 import { TiptapBidEditor } from '../../components/editor/TiptapBidEditor';
-import type { BidOutline, BidOutlineChapter, BidSection, ChapterWritingPlan, InterpretationResponse } from '../../types/interpretation';
+import type { BidOutline, BidOutlineChapter, BidSection, ChapterWritingPlan, ComplianceReport, InterpretationResponse } from '../../types/interpretation';
 
 type EditorMode = '正文模式' | '目录模式';
 type VolumeType = 'all' | 'technical' | 'business';
@@ -776,10 +776,62 @@ export function BidEditorPage(): JSX.Element {
     }
   }
 
+  async function confirmDownloadWithCompliance(projectId: string): Promise<boolean> {
+    let report: ComplianceReport;
+    try {
+      report = await getComplianceCheck(projectId);
+    } catch (error) {
+      message.warning(error instanceof Error ? `条款响应检查失败：${error.message}` : '条款响应检查失败，仍可继续下载。');
+      return true;
+    }
+
+    const summary = report.summary;
+    if (!summary.missing && !summary.highRiskMissing) {
+      return true;
+    }
+
+    return new Promise(resolve => {
+      Modal.confirm({
+        title: '下载前条款响应检查',
+        okText: '继续下载',
+        cancelText: '返回补强',
+        width: 560,
+        content: (
+          <div className="space-y-3 text-sm">
+            <Alert
+              type="warning"
+              showIcon
+              message={`${summary.metricName || '条款响应覆盖率'} ${summary.percent}%`}
+              description={summary.scopeNote || '该指标用于追踪招标条款与当前章节/正文的响应关系，不等同于最终 Word 标书合规结论。'}
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <Tag color="blue">共检查 {summary.total} 项</Tag>
+              <Tag color="green">已响应 {summary.covered} 项</Tag>
+              <Tag color="orange">待补强 {summary.partial} 项</Tag>
+              <Tag color="red">未响应 {summary.missing} 项</Tag>
+            </div>
+            <p className="text-slate-600">
+              当前仍有 {summary.highRiskMissing || 0} 项高风险未响应。建议优先补齐资格要求、否决风险和高分评分项后再提交正式投标文件。
+            </p>
+          </div>
+        ),
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false),
+      });
+    });
+  }
+
   async function downloadDocx(sectionId?: string): Promise<void> {
     if (!data?.project?.id) {
       message.warning('当前项目不存在，无法下载');
       return;
+    }
+    if (!sectionId) {
+      const confirmed = await confirmDownloadWithCompliance(data.project.id);
+      if (!confirmed) {
+        message.info('已取消下载，请先处理条款响应补强项。');
+        return;
+      }
     }
     setDownloadGenerating(sectionId ? 'section' : 'full');
     try {

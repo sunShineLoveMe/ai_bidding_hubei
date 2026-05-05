@@ -14,8 +14,9 @@ import re
 from werkzeug.utils import secure_filename
 import codecs
 import PyPDF2
+from urllib.parse import quote
 from backend.ai.qwen_client import call_dashscope_api, generate_bid_section
-from backend.export.md_to_word import convert_md_to_word
+from backend.export.md_to_word import clean_formal_bid_text, convert_md_to_word
 from backend.ai.chapter_planner import generate_bid_outline, stream_bid_outline
 from backend.ai.section_writer import stream_bid_section
 from backend.ai.interpreter import generate_ai_interpretation_report
@@ -170,6 +171,24 @@ def merge_sections(output_dir, tender_name, sections):
 def _slug_filename(name: str, fallback: str = "bid-document") -> str:
     base = secure_filename(unidecode(name or "").strip()) or fallback
     return base
+
+
+def _display_filename(name: str, fallback: str = "投标文件") -> str:
+    """Keep Chinese project names in user-facing generated document filenames."""
+    value = clean_formal_bid_text(name or "") or fallback
+    value = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", value)
+    value = re.sub(r"\s+", " ", value).strip(" ._-")
+    return (value or fallback)[:120]
+
+
+def _output_url_for_path(path: Path) -> str:
+    gen_folder = Path(current_app.config.get('GENERATED_FOLDER', 'outputs')).resolve()
+    relative_path = Path(path).resolve().relative_to(gen_folder).as_posix()
+    return f"/api/outputs/{quote(relative_path)}"
+
+
+def _absolute_output_url_for_path(path: Path) -> str:
+    return f"{get_backend_public_base_url()}{_output_url_for_path(path)}"
 
 
 def _section_markdown_heading(level: int, title: str) -> str:
@@ -432,6 +451,7 @@ def build_project_bid_markdown(
     project_name = (
         (payload.get("analysis") or {}).get("project_meta", {}) or {}
     ).get("project_name") or project.get("project_name") or "投标文件"
+    project_name = clean_formal_bid_text(project_name) or "投标文件"
     folder_name = _slug_filename(project_name, f"project-{project_id[:8]}")
     output_dir = Path(current_app.config.get('GENERATED_FOLDER', 'outputs')) / folder_name
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -448,14 +468,14 @@ def build_project_bid_markdown(
         if not sections:
             raise RuntimeError(f"当前项目暂无{volume_name(volume_type)}章节，请先生成或调整章节分册。")
 
-    file_suffix = ""
+    display_suffix = ""
     if focus_section:
-        file_suffix = f"-section-{_slug_filename(focus_section.get('title') or 'section', 'section')}-{focus_section_id[:8]}"
+        section_title = clean_formal_bid_text(focus_section.get('title') or "章节")
+        display_suffix = f"-{section_title}-{focus_section_id[:8]}"
     elif volume_type:
-        file_suffix = f"-{volume_name(volume_type)}"
+        display_suffix = f"-{volume_name(volume_type)}"
     if with_images:
-        file_suffix = f"{file_suffix}-illustrated"
-    markdown_path = output_dir / f"{folder_name}{file_suffix}.md"
+        display_suffix = f"{display_suffix}-图文"
 
     image_assets: list[dict] = []
     if with_images:
@@ -471,6 +491,8 @@ def build_project_bid_markdown(
             image_assets = []
 
     document_title = f"{project_name}-{volume_name(volume_type)}" if volume_type and not focus_section else project_name
+    file_stem = _display_filename(f"{project_name}{display_suffix}", fallback=document_title)
+    markdown_path = output_dir / f"{file_stem}.md"
     chunks: list[str] = [f"# {document_title}\n\n"]
     used_asset_ids: set[str] = set()
     for section in sections:
@@ -1134,7 +1156,7 @@ def generate_onlyoffice_config(project_id):
             shutil.copy2(str(generated_docx_path), str(target))
 
         backend_url = get_backend_public_base_url()
-        file_url = f"{backend_url}/api/outputs/{target.name}"
+        file_url = _absolute_output_url_for_path(target)
         callback_url = f"{backend_url}/api/bidding/save-callback"
         doc_key = str(uuid.uuid4())
         display_title = f"{project_name}.docx"
@@ -1193,7 +1215,7 @@ def generate_onlyoffice_config(project_id):
             project_id=project_id,
             title=project_name,
             file_path=str(target),
-            download_url=f"/api/outputs/{target.name}",
+            download_url=_output_url_for_path(target),
         )
 
         return jsonify({
@@ -1201,7 +1223,7 @@ def generate_onlyoffice_config(project_id):
             'markdown': str(markdown_path),
             'editorConfig': editor_config_with_token,
             'fileUrl': file_url,
-            'downloadUrl': f"/api/outputs/{target.name}",
+            'downloadUrl': _output_url_for_path(target),
         }), 201
     except Exception as e:
         logging.exception("生成 ONLYOFFICE 配置失败: %s", project_id)
@@ -1240,8 +1262,6 @@ def download_bid_docx(project_id):
             raise RuntimeError("DOCX 生成失败，未找到输出文件。")
 
         generated_docx_path = Path(generated_docx_path)
-        gen_folder = Path(current_app.config.get('GENERATED_FOLDER', 'outputs')).resolve()
-        relative_path = generated_docx_path.resolve().relative_to(gen_folder)
         return jsonify({
             'message': 'DOCX 已生成。',
             'projectId': project_id,
@@ -1250,7 +1270,7 @@ def download_bid_docx(project_id):
             'volumeType': volume_type,
             'projectName': project_name,
             'fileName': generated_docx_path.name,
-            'downloadUrl': f"/api/outputs/{relative_path.as_posix()}",
+            'downloadUrl': _output_url_for_path(generated_docx_path),
         }), 201
     except Exception as e:
         logging.exception("生成 DOCX 下载文件失败: %s", project_id)
@@ -1659,13 +1679,13 @@ def generate_bid_document():
         gen_folder = Path(current_app.config.get('GENERATED_FOLDER', 'outputs'))
         gen_folder.mkdir(parents=True, exist_ok=True)
 
-        safe_name = secure_filename(generated_docx_path.name)
-        target = gen_folder / safe_name
+        target = gen_folder / _display_filename(generated_docx_path.stem, "投标文件")
+        target = target.with_suffix(generated_docx_path.suffix)
         if generated_docx_path.resolve() != target.resolve():
             shutil.copy2(str(generated_docx_path), str(target))
 
         backend_url = get_backend_public_base_url()
-        file_url = f"{backend_url}/api/outputs/{target.name}"
+        file_url = _absolute_output_url_for_path(target)
         callback_url = f"{backend_url}/api/bidding/save-callback"
 
         # document key（用于 OnlyOffice 缓存），使用 DB 中已有的或者新生成
@@ -1709,7 +1729,7 @@ def generate_bid_document():
             'markdown': str(markdown_file if markdown_file.exists() else merged_md_path),
             'editorConfig': editor_config_with_token,
             'fileUrl': file_url,
-            'downloadUrl': f"/api/outputs/{target.name}"
+            'downloadUrl': _output_url_for_path(target)
         }), 201
 
     except Exception as e:

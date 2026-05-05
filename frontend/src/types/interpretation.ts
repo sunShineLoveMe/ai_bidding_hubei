@@ -226,6 +226,8 @@ export interface ComplianceReport {
   projectId: string;
   projectName?: string | null;
   summary: {
+    metricName?: string;
+    scopeNote?: string;
     total: number;
     covered: number;
     partial: number;

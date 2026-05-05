@@ -20,6 +20,31 @@ MARKDOWN_IMAGE_CONNECT_TIMEOUT = 4
 MARKDOWN_IMAGE_READ_TIMEOUT = 8
 MARKDOWN_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 MARKDOWN_IMAGE_MAX_COUNT = int(os.getenv("DOCX_MAX_IMAGES", "24"))
+FORMAL_TEXT_SYMBOL_RE = re.compile(
+    "["
+    "\U0001f300-\U0001f5ff"
+    "\U0001f600-\U0001f64f"
+    "\U0001f680-\U0001f6ff"
+    "\U0001f700-\U0001f77f"
+    "\U0001f780-\U0001f7ff"
+    "\U0001f800-\U0001f8ff"
+    "\U0001f900-\U0001f9ff"
+    "\U0001fa00-\U0001faff"
+    "\u2600-\u26ff"
+    "\u2700-\u27bf"
+    "]"
+)
+FORMAL_TEXT_CONTROL_RE = re.compile(r"[\u200b\u200c\u200d\ufe0e\ufe0f]")
+
+
+def clean_formal_bid_text(text):
+    """Remove emoji/decorative symbols that are unsuitable for formal bid DOCX output."""
+    if text is None:
+        return ""
+    cleaned = FORMAL_TEXT_CONTROL_RE.sub("", str(text))
+    cleaned = FORMAL_TEXT_SYMBOL_RE.sub("", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    return cleaned.strip()
 
 
 def apply_run_font(run, *, east_asia='宋体', latin='Times New Roman', size=None, bold=None):
@@ -284,6 +309,7 @@ def set_document_language(doc):
 
 def set_document_format(doc, project_name):
     """设置文档格式"""
+    project_name = clean_formal_bid_text(project_name) or "投标文件"
     # 设置页面边距
     sections = doc.sections
     for section in sections:
@@ -351,7 +377,7 @@ def process_table(md_table, doc):
     # 添加表头
     header_row = table.rows[0]
     for i, cell in enumerate(header_cells):
-        header_row.cells[i].text = cell.strip()
+        header_row.cells[i].text = clean_formal_bid_text(cell)
         # 设置表头格式
         for paragraph in header_row.cells[i].paragraphs:
             paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -365,7 +391,7 @@ def process_table(md_table, doc):
         if len(cells) == col_count:
             row = table.add_row()
             for i, cell in enumerate(cells):
-                row.cells[i].text = cell.strip()
+                row.cells[i].text = clean_formal_bid_text(cell)
                 # 设置单元格格式
                 for paragraph in row.cells[i].paragraphs:
                     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -376,7 +402,7 @@ def convert_md_to_word(md_file):
     """将Markdown文件转换为Word文档"""
     # 读取Markdown文件
     with open(md_file, 'r', encoding='utf-8') as f:
-        md_content = f.read()
+        md_content = clean_formal_bid_text(f.read())
     
     # 创建Word文档
     doc = Document()
@@ -385,7 +411,7 @@ def convert_md_to_word(md_file):
     
     # 设置文档格式
     title_match = re.search(r'^\s*#\s+(.+?)\s*$', md_content, re.MULTILINE)
-    project_name = title_match.group(1).strip() if title_match else Path(md_file).stem
+    project_name = clean_formal_bid_text(title_match.group(1).strip()) if title_match else Path(md_file).stem
     set_document_format(doc, project_name)
     
     # 处理Markdown内容
@@ -420,7 +446,7 @@ def convert_md_to_word(md_file):
         if line.startswith('#'):
             level = len(re.match(r'^#+', line).group())
             # 移除标题中的加粗标记
-            text = re.sub(r'\*\*(.*?)\*\*', r'\1', line.lstrip('#').strip())
+            text = clean_formal_bid_text(re.sub(r'\*\*(.*?)\*\*', r'\1', line.lstrip('#').strip()))
             if level == 1:
                 # 一级标题作为文档标题
                 p = doc.add_heading(text, level=0)
@@ -445,7 +471,7 @@ def convert_md_to_word(md_file):
             # 移除列表标记
             text = line[2:].strip()
             # 移除加粗标记
-            text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+            text = clean_formal_bid_text(re.sub(r'\*\*(.*?)\*\*', r'\1', text))
             p = doc.add_paragraph(style='List Bullet')
             run = p.add_run(text)
             apply_run_font(run, east_asia='宋体', size=12)
@@ -456,7 +482,7 @@ def convert_md_to_word(md_file):
             # 移除数字和点
             text = re.sub(r'^\d+\.', '', line).strip()
             # 移除加粗标记
-            text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+            text = clean_formal_bid_text(re.sub(r'\*\*(.*?)\*\*', r'\1', text))
             p = doc.add_paragraph(style='List Number')
             run = p.add_run(text)
             apply_run_font(run, east_asia='宋体', size=12)
@@ -465,7 +491,7 @@ def convert_md_to_word(md_file):
         # 处理普通段落
         elif line:
             # 移除加粗标记
-            text = re.sub(r'\*\*(.*?)\*\*', r'\1', line)
+            text = clean_formal_bid_text(re.sub(r'\*\*(.*?)\*\*', r'\1', line))
             p = doc.add_paragraph()
             run = p.add_run(text)
             apply_run_font(run, east_asia='宋体', size=12)
