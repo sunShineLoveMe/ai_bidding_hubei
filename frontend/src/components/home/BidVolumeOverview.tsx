@@ -1,30 +1,28 @@
 import { Button, Tag } from 'antd';
-import { BriefcaseBusiness, ClipboardCheck, FileBadge2, FileSpreadsheet, FileText } from 'lucide-react';
+import { BriefcaseBusiness, ClipboardCheck } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiClient } from '../../api/client';
 import type { BidSection, InterpretationResponse } from '../../types/interpretation';
 
-type VolumeType = 'technical' | 'business' | 'qualification' | 'price' | 'attachment';
+type DeliveryVolumeType = 'technical' | 'business';
+type InternalVolumeType = 'technical' | 'business' | 'qualification' | 'price' | 'attachment' | 'other';
 
 const volumes: Array<{
-  type: VolumeType;
+  type: DeliveryVolumeType;
   name: string;
   desc: string;
-  icon: typeof FileText;
+  icon: typeof ClipboardCheck;
   color: string;
 }> = [
   { type: 'technical', name: '技术标', desc: '施工组织设计、技术响应、质量安全环保', icon: ClipboardCheck, color: 'blue' },
-  { type: 'business', name: '商务标', desc: '投标函、合同条款、偏离表和承诺函', icon: BriefcaseBusiness, color: 'purple' },
-  { type: 'qualification', name: '资格文件', desc: '营业执照、资质证书、人员证书和业绩', icon: FileBadge2, color: 'green' },
-  { type: 'price', name: '报价文件', desc: '工程量清单、报价说明和单价分析', icon: FileSpreadsheet, color: 'orange' },
-  { type: 'attachment', name: '附件材料', desc: '图纸、证照扫描件、产品图片和证明材料', icon: FileText, color: 'default' },
+  { type: 'business', name: '商务标', desc: '投标函、资格资料、报价文件、承诺函和附件材料', icon: BriefcaseBusiness, color: 'purple' },
 ];
 
-function sectionVolume(section: BidSection): string {
+function internalSectionVolume(section: BidSection): InternalVolumeType {
   const metadata = section.metadata || {};
-  const volumeType = String(metadata.volume_type || '');
-  if (volumeType) return volumeType;
+  const volumeType = String(metadata.volume_type || '') as InternalVolumeType;
+  if (['technical', 'business', 'qualification', 'price', 'attachment', 'other'].includes(volumeType)) return volumeType;
   const text = `${section.title || ''} ${section.purpose || ''}`;
   if (/报价|清单|价格|单价|工程量/.test(text)) return 'price';
   if (/技术|施工组织|实施方案|质量|安全|环保|进度|设备|工艺/.test(text)) return 'technical';
@@ -32,6 +30,10 @@ function sectionVolume(section: BidSection): string {
   if (/商务|合同|付款|履约|服务|偏离|承诺|投标函|授权|保证金/.test(text)) return 'business';
   if (/附件|图纸|扫描件|证明材料|图片|图册/.test(text)) return 'attachment';
   return 'other';
+}
+
+function deliverySectionVolume(section: BidSection): DeliveryVolumeType {
+  return internalSectionVolume(section) === 'technical' ? 'technical' : 'business';
 }
 
 function isGenerated(section: BidSection): boolean {
@@ -60,7 +62,7 @@ export function BidVolumeOverview(): JSX.Element {
   }, []);
 
   const stats = useMemo(() => volumes.map(volume => {
-    const scoped = sections.filter(section => sectionVolume(section) === volume.type);
+    const scoped = sections.filter(section => deliverySectionVolume(section) === volume.type);
     const done = scoped.filter(isGenerated).length;
     const failed = scoped.filter(section => section.status === 'failed').length;
     return {
@@ -76,13 +78,13 @@ export function BidVolumeOverview(): JSX.Element {
       <div className="mb-3 flex items-start justify-between gap-4">
         <div>
           <h2 className="panel-title mb-1">标书分册工作区</h2>
-          <p className="m-0 text-xs font-semibold text-slate-500">上传一次招标文件后，系统会按真实投标流程组织技术标、商务标、资格文件和报价文件。</p>
+          <p className="m-0 text-xs font-semibold text-slate-500">上传一次招标文件后，系统按真实投标习惯组织为技术标和商务标；资格、报价、附件作为商务标内部资料管理。</p>
         </div>
         <Button disabled={!projectId} onClick={() => navigate(projectId ? `/bid-editor?projectId=${projectId}` : '/history')}>
           进入分册编制
         </Button>
       </div>
-      <div className="grid grid-cols-5 gap-3 max-[1500px]:grid-cols-3 max-[1100px]:grid-cols-2">
+      <div className="grid grid-cols-2 gap-3 max-[900px]:grid-cols-1">
         {stats.map(item => {
           const Icon = item.icon;
           const status = item.total ? (item.failed ? '有风险' : item.done === item.total ? '已完成' : '编写中') : '待生成';
@@ -109,4 +111,3 @@ export function BidVolumeOverview(): JSX.Element {
     </section>
   );
 }
-

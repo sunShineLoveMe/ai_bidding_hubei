@@ -27,7 +27,8 @@ import { TiptapBidEditor } from '../../components/editor/TiptapBidEditor';
 import type { BidOutline, BidOutlineChapter, BidSection, ChapterWritingPlan, InterpretationResponse } from '../../types/interpretation';
 
 type EditorMode = '正文模式' | '目录模式';
-type VolumeType = 'all' | 'technical' | 'business' | 'qualification' | 'price' | 'attachment' | 'other';
+type VolumeType = 'all' | 'technical' | 'business';
+type InternalVolumeType = 'technical' | 'business' | 'qualification' | 'price' | 'attachment' | 'other';
 
 type ChapterDraft = BidOutlineChapter & {
   id: string;
@@ -57,14 +58,19 @@ type BatchTask = {
 
 const BATCH_SECTION_CONCURRENCY = 3;
 
-const volumeOptions: Array<{ value: VolumeType; label: string; shortLabel: string; keywords: RegExp }> = [
-  { value: 'all', label: '全部', shortLabel: '全部', keywords: /.*/ },
-  { value: 'technical', label: '技术标', shortLabel: '技术', keywords: /技术|施工组织|实施方案|施工方案|质量|安全|环保|进度|资源配置|发包人要求|承包人建议|设备|工艺|调试/ },
-  { value: 'business', label: '商务标', shortLabel: '商务', keywords: /商务|合同|付款|履约|服务|税费|廉政|保密|偏离|承诺|投标函|授权委托|保证金/ },
-  { value: 'qualification', label: '资格文件', shortLabel: '资格', keywords: /资格|资质|证书|营业执照|安全生产许可|人员|项目经理|技术负责人|业绩|信誉|社保|建造师/ },
-  { value: 'price', label: '报价文件', shortLabel: '报价', keywords: /报价|清单|价格|单价|工程量|投标总价|分项报价/ },
-  { value: 'attachment', label: '附件材料', shortLabel: '附件', keywords: /附件|图纸|扫描件|证明材料|附录|图片|图册/ },
-  { value: 'other', label: '其他', shortLabel: '其他', keywords: /^$/ },
+const volumeOptions: Array<{ value: VolumeType; label: string; shortLabel: string }> = [
+  { value: 'all', label: '全部', shortLabel: '全部' },
+  { value: 'technical', label: '技术标', shortLabel: '技术' },
+  { value: 'business', label: '商务标', shortLabel: '商务' },
+];
+
+const internalVolumeOptions: Array<{ value: InternalVolumeType; label: string; keywords: RegExp }> = [
+  { value: 'technical', label: '技术标', keywords: /技术|施工组织|实施方案|施工方案|质量|安全|环保|进度|资源配置|发包人要求|承包人建议|设备|工艺|调试/ },
+  { value: 'business', label: '商务响应', keywords: /商务|合同|付款|履约|服务|税费|廉政|保密|偏离|承诺|投标函|授权委托|保证金/ },
+  { value: 'qualification', label: '资格文件', keywords: /资格|资质|证书|营业执照|安全生产许可|人员|项目经理|技术负责人|业绩|信誉|社保|建造师/ },
+  { value: 'price', label: '报价文件', keywords: /报价|清单|价格|单价|工程量|投标总价|分项报价/ },
+  { value: 'attachment', label: '附件材料', keywords: /附件|图纸|扫描件|证明材料|附录|图片|图册/ },
+  { value: 'other', label: '其他', keywords: /^$/ },
 ];
 
 function asBidOutline(meta: Record<string, unknown> | undefined | null): BidOutline | null {
@@ -186,9 +192,9 @@ function chapterDisplayTitle(chapter: Pick<ChapterDraft, 'order' | 'title'>): st
   return `${orderPrefix}${cleanTitle}`;
 }
 
-function inferVolumeType(chapter: Pick<ChapterDraft, 'title' | 'purpose' | 'required_materials' | 'response_points' | 'metadata'>): VolumeType {
-  const metadataVolume = String(chapter.metadata?.volume_type || '').trim() as VolumeType;
-  if (volumeOptions.some(item => item.value === metadataVolume && metadataVolume !== 'all')) {
+function inferVolumeType(chapter: Pick<ChapterDraft, 'title' | 'purpose' | 'required_materials' | 'response_points' | 'metadata'>): InternalVolumeType {
+  const metadataVolume = String(chapter.metadata?.volume_type || '').trim() as InternalVolumeType;
+  if (internalVolumeOptions.some(item => item.value === metadataVolume)) {
     return metadataVolume;
   }
   const combined = [
@@ -197,12 +203,27 @@ function inferVolumeType(chapter: Pick<ChapterDraft, 'title' | 'purpose' | 'requ
     ...(chapter.required_materials || []),
     ...(chapter.response_points || []),
   ].filter(Boolean).join(' ');
-  const matched = volumeOptions.find(item => item.value !== 'all' && item.value !== 'other' && item.keywords.test(combined));
+  const matched = internalVolumeOptions.find(item => item.value !== 'other' && item.keywords.test(combined));
   return matched?.value || 'other';
 }
 
 function volumeLabel(volumeType: VolumeType): string {
   return volumeOptions.find(item => item.value === volumeType)?.label || '其他';
+}
+
+function internalVolumeLabel(volumeType: InternalVolumeType): string {
+  return internalVolumeOptions.find(item => item.value === volumeType)?.label || '其他';
+}
+
+function deliveryVolumeType(chapter: Pick<ChapterDraft, 'title' | 'purpose' | 'required_materials' | 'response_points' | 'metadata'>): VolumeType {
+  return inferVolumeType(chapter) === 'technical' ? 'technical' : 'business';
+}
+
+function matchesActiveVolume(chapter: ChapterDraft, activeVolume: VolumeType): boolean {
+  if (activeVolume === 'all') {
+    return true;
+  }
+  return deliveryVolumeType(chapter) === activeVolume;
 }
 
 export function BidEditorPage(): JSX.Element {
@@ -390,7 +411,7 @@ export function BidEditorPage(): JSX.Element {
   const volumeCounts = useMemo(() => {
     const counts = Object.fromEntries(volumeOptions.map(item => [item.value, 0])) as Record<VolumeType, number>;
     chapters.forEach(chapter => {
-      counts[inferVolumeType(chapter)] += 1;
+      counts[deliveryVolumeType(chapter)] += 1;
       counts.all += 1;
     });
     return counts;
@@ -399,7 +420,7 @@ export function BidEditorPage(): JSX.Element {
     const term = keyword.trim();
     const volumeFiltered = activeVolume === 'all'
       ? chapters
-      : chapters.filter(chapter => inferVolumeType(chapter) === activeVolume);
+      : chapters.filter(chapter => matchesActiveVolume(chapter, activeVolume));
     if (!term) {
       return volumeFiltered;
     }
@@ -421,7 +442,7 @@ export function BidEditorPage(): JSX.Element {
     () => filteredChapters.filter(chapter => isVisibleChapter(chapter, filteredChapters)),
     [filteredChapters],
   );
-  const scopedChapters = activeVolume === 'all' ? chapters : chapters.filter(chapter => inferVolumeType(chapter) === activeVolume);
+  const scopedChapters = activeVolume === 'all' ? chapters : chapters.filter(chapter => matchesActiveVolume(chapter, activeVolume));
   const matchText = keyword ? `${filteredChapters.length} / ${scopedChapters.length}` : `0 / ${scopedChapters.length}`;
   const actualChars = scopedChapters.reduce((sum, chapter) => sum + (isChapterGenerated(chapter) ? chapterActualWords(chapter) : 0), 0);
   const estimatedTotalChars = scopedChapters.reduce((sum, chapter) => (
@@ -1179,7 +1200,7 @@ export function BidEditorPage(): JSX.Element {
       return;
     }
 
-    const sourceChapters = activeVolume === 'all' ? chapters : chapters.filter(chapter => inferVolumeType(chapter) === activeVolume);
+    const sourceChapters = activeVolume === 'all' ? chapters : chapters.filter(chapter => matchesActiveVolume(chapter, activeVolume));
     const targets = sourceChapters.filter(chapter => !isChapterGenerated(chapter));
     if (!targets.length) {
       message.info(`当前${volumeLabel(activeVolume)}章节都已生成，如需重写请点击单章重写正文`);
@@ -1633,7 +1654,8 @@ export function BidEditorPage(): JSX.Element {
           <Space>
             {streaming ? <Tag color="processing">大纲生成中</Tag> : null}
             {sectionStreaming ? <Tag color="processing">正文生成中</Tag> : null}
-            {selectedChapter ? <Tag color="blue">{volumeLabel(inferVolumeType(selectedChapter))}</Tag> : null}
+            {selectedChapter ? <Tag color="blue">{volumeLabel(deliveryVolumeType(selectedChapter))}</Tag> : null}
+            {selectedChapter ? <Tag color="default">{internalVolumeLabel(inferVolumeType(selectedChapter))}</Tag> : null}
             <Button icon={<Sparkles size={16} />} loading={sectionStreaming} disabled={!selectedChapter || streaming} onClick={() => void generateCurrentSection()}>生成本章正文</Button>
             <Button
               icon={<Download size={16} />}

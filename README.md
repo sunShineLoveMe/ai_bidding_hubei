@@ -128,6 +128,8 @@ GET /api/bidding/interpretations/{project_id}/compliance-check
 
 系统当前采用轻量分册模型：暂不新增 `bid_volumes` 表，而是在章节大纲和 `bid_sections.metadata` 中记录分册归属。章节大纲生成会先判断本项目实际需要的投标文件组成，再输出 `volumes + chapters` 兼容结构。
 
+面向真实投标用户，第一层工作区默认只展示 `技术标` 和 `商务标`。多数施工类招标文件会把资格资料、报价文件、附件材料纳入商务标或投标文件格式部分，因此系统内部仍保留 `qualification`、`price`、`attachment` 等细分类，但 UI 和商务标导出会把这些非技术章节聚合到商务标投标包里。
+
 大纲结构：
 
 ```json
@@ -171,6 +173,18 @@ GET /api/bidding/interpretations/{project_id}/compliance-check
 ```
 
 章节写作计划会优先读取 `metadata.volume_type`，再回退标题关键词推断，以便不同分册采用不同写作策略。
+
+### 分册正文生成策略
+
+正文生成会按 `metadata.volume_type` 注入分册策略、强制约束、资料召回侧重点和图片/附件策略。
+
+| 分册 | 正文侧重点 | 强制约束 | 资料和图片策略 |
+| --- | --- | --- | --- |
+| 技术标 | 施工组织、技术方案、质量安全环保、进度资源、设备配置 | 设备参数、工艺指标、资源投入缺失时必须占位 | 优先召回施工方案、标准话术、产品库和设备/工艺图片，可自动插入相关图 |
+| 商务标 | 投标函、合同条款响应、承诺函、偏离表、服务承诺 | 金额、日期、签章、保证金、保函编号不得编造，必须人工复核 | 优先召回商务条款、合同响应模板和承诺函；默认谨慎插图 |
+| 资格文件 | 营业执照、资质证书、安全生产许可证、人员证书、业绩证明 | 证书编号、人员姓名、注册编号、业绩金额和日期不得编造 | 优先召回企业资信库和证照/业绩样张，插图必须标明脱敏或需替换 |
+| 报价文件 | 报价口径、工程量清单、分项报价说明、税费和风险边界 | 禁止编造金额、单价、总价、税率和工程量 | 优先召回报价说明和风险提示；默认不自动插图 |
+| 附件材料 | 附件清单、来源、适用章节、缺失状态和替换要求 | 不把附件清单写成正式事实证明 | 可按附件清单插入相关图片或证明样张，并标明来源 |
 
 ## RAG 知识库架构
 
@@ -627,7 +641,7 @@ docker run -d \
 | `POST /api/bidding/interpretations/<project_id>/bid-outline` | 生成分册化章节大纲，返回 `volumes + chapters` |
 | `GET /api/bidding/interpretations/<project_id>/bid-outline/stream` | SSE 流式生成分册化章节大纲 |
 | `POST /api/bidding/interpretations/<project_id>/sections/stream` | 流式生成章节正文 |
-| `POST /api/bidding/interpretations/<project_id>/download-docx` | 生成 DOCX；可传 `volumeType` 单独导出技术标、商务标、资格文件、报价文件或附件材料 |
+| `POST /api/bidding/interpretations/<project_id>/download-docx` | 生成 DOCX；可传 `volumeType` 单独导出技术标或商务标 |
 | `POST /api/knowledge/upload` | 上传知识库资料 |
 | `POST /api/knowledge/search` | RAG 检索问答 |
 | `POST /api/knowledge/search/stream` | SSE 流式 RAG 检索问答 |
@@ -643,7 +657,7 @@ docker run -d \
 }
 ```
 
-不传 `volumeType` 时导出完整投标文件；传入 `technical`、`business`、`qualification`、`price`、`attachment` 或 `other` 时只导出对应分册。
+不传 `volumeType` 时导出完整投标文件；传入 `technical` 时导出技术标；传入 `business` 时导出商务标，并自动包含内部的商务响应、资格文件、报价文件、附件材料和其他非技术章节。
 
 ## 安全与开源注意事项
 
@@ -753,6 +767,7 @@ docker run -d \
 ### P5：标书核心能力增强
 
 - [x] 章节大纲生成已升级为轻量分册模型：AI Prompt 输出 `volumes`，规则 fallback 输出 `volumes`，同时保留扁平 `chapters` 兼容现有工作台。
+- [x] 分册正文生成策略已接入：技术标、商务标、资格文件、报价文件和附件材料分别注入不同写作约束、资料召回侧重点和图片策略。
 - [ ] 分册模型稳定后新增正式 `bid_volumes` 表，承载分册状态、顺序、完成率、风险数量和用户自定义分册名称。
 - [ ] 将合规检查升级为 LLM 语义复核：逐条检查要求项、评分项、风险项是否被正文实质响应。
 - [ ] 增加评分点覆盖报告，按评分项输出“已覆盖 / 待补强 / 高风险缺失”。

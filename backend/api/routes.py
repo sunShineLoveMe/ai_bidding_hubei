@@ -22,7 +22,7 @@ from backend.ai.interpreter import generate_ai_interpretation_report
 from backend.ai.compliance_checker import build_compliance_report
 from backend.db.supabase_repo import create_knowledge_asset, delete_bid_project, delete_bid_section, download_bid_file_to_local, download_knowledge_asset_file_variant, get_bid_file, get_latest_bid_file_for_project, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_file_parse_status, update_bid_section_content, upload_knowledge_asset_file, upsert_bid_section
 from backend.core.llm_json_utils import strip_llm_json
-from backend.core.bid_volumes import section_volume_type, volume_name
+from backend.core.bid_volumes import delivery_volume_type, section_volume_type, volume_name
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import shutil
@@ -231,6 +231,12 @@ def _section_text(section: dict) -> str:
 def _section_needs_image(section: dict) -> bool:
     metadata = section.get("metadata") or {}
     plan = metadata.get("writing_plan") or {}
+    volume_type = section_volume_type(section)
+    if volume_type == "price":
+        return False
+    if volume_type == "business":
+        text = _section_text(section)
+        return any(keyword in text for keyword in ["附件", "证明材料", "授权委托", "保证金", "保函", "扫描件"])
     if plan.get("needs_image"):
         return True
     text = _section_text(section)
@@ -244,6 +250,7 @@ def _section_needs_image(section: dict) -> bool:
 def _score_asset_for_section(asset: dict, section: dict) -> int:
     asset_text = _asset_text(asset)
     section_text = _section_text(section)
+    volume_type = section_volume_type(section)
     score = 0
 
     for token in re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,}", section_text):
@@ -252,6 +259,34 @@ def _score_asset_for_section(asset: dict, section: dict) -> int:
 
     category = str(asset.get("category") or "")
     asset_type = str(asset.get("asset_type") or "")
+    library_type = ""
+    metadata = asset.get("metadata") or {}
+    specs = asset.get("specs") or {}
+    if isinstance(metadata, dict):
+        library_type = str(metadata.get("library_type") or "")
+    if not library_type and isinstance(specs, dict):
+        library_type = str(specs.get("library_type") or "")
+
+    if volume_type == "technical":
+        if library_type == "product" or any(keyword in asset_text for keyword in ["产品", "设备", "参数", "工艺", "水轮机", "泵", "闸门", "控制柜"]):
+            score += 22
+        if library_type == "qualification":
+            score -= 10
+    elif volume_type == "qualification":
+        if library_type == "qualification" or any(keyword in asset_text for keyword in ["资质", "证书", "营业执照", "许可", "业绩", "人员", "社保"]):
+            score += 24
+        if library_type == "product":
+            score -= 12
+    elif volume_type == "business":
+        if any(keyword in asset_text for keyword in ["授权", "保证金", "保函", "承诺", "证明", "营业执照", "资质"]):
+            score += 10
+        if any(keyword in asset_text for keyword in ["产品", "设备", "工艺", "施工现场"]):
+            score -= 18
+    elif volume_type == "attachment":
+        score += 6
+    elif volume_type == "price":
+        return -100
+
     if any(keyword in section_text for keyword in ["资质", "证书", "营业执照", "许可"]):
         if any(keyword in asset_text for keyword in ["资质", "证书", "营业执照", "许可", "脱敏"]):
             score += 18
@@ -290,8 +325,30 @@ def _asset_image_ref(asset: dict) -> str:
 def _asset_caption(asset: dict) -> str:
     title = str(asset.get("title") or "知识库图片资产").strip()
     category = str(asset.get("category") or "水利行业资料").strip()
-    sensitive_note = "，脱敏示意图，不替代正式资质文件" if asset.get("is_sensitive") else ""
+    sensitive_note = "，脱敏示意图，不替代正式资质文件" if asset.get("is_sensitive") or asset.get("anonymized") else ""
     return f"图示：{title}（{category}{sensitive_note}）"
+
+
+def _asset_allowed_for_volume(asset: dict, section: dict) -> bool:
+    volume_type = section_volume_type(section)
+    if volume_type == "price":
+        return False
+    asset_text = _asset_text(asset)
+    metadata = asset.get("metadata") or {}
+    specs = asset.get("specs") or {}
+    library_type = ""
+    if isinstance(metadata, dict):
+        library_type = str(metadata.get("library_type") or "")
+    if not library_type and isinstance(specs, dict):
+        library_type = str(specs.get("library_type") or "")
+
+    if volume_type == "technical":
+        return library_type != "qualification" or any(keyword in asset_text for keyword in ["设备", "产品", "参数", "工艺", "施工", "现场"])
+    if volume_type == "qualification":
+        return library_type != "product" or any(keyword in asset_text for keyword in ["业绩", "证明", "资质", "证书"])
+    if volume_type == "business":
+        return any(keyword in asset_text for keyword in ["授权", "保证金", "保函", "承诺", "证明", "营业执照", "资质", "扫描件"])
+    return True
 
 
 def _build_section_image_markdown(section: dict, assets: list[dict], used_asset_ids: set[str]) -> str:
@@ -304,6 +361,8 @@ def _build_section_image_markdown(section: dict, assets: list[dict], used_asset_
         if not image_ref:
             continue
         asset_id = str(asset.get("id") or image_ref)
+        if not _asset_allowed_for_volume(asset, section):
+            continue
         score = _score_asset_for_section(asset, section)
         if asset_id in used_asset_ids:
             score -= 8
@@ -324,7 +383,8 @@ def _build_section_image_markdown(section: dict, assets: list[dict], used_asset_
             return ""
 
     candidates.sort(key=lambda item: item[0], reverse=True)
-    max_images = 2 if any(keyword in _section_text(section) for keyword in ["资质", "证书", "产品", "设备"]) else 1
+    volume_type = section_volume_type(section)
+    max_images = 2 if volume_type in {"technical", "qualification", "attachment"} and any(keyword in _section_text(section) for keyword in ["资质", "证书", "产品", "设备", "附件"]) else 1
     snippets: list[str] = []
     for _, asset in candidates[:max_images]:
         image_ref = _asset_image_ref(asset)
@@ -336,8 +396,6 @@ def _build_section_image_markdown(section: dict, assets: list[dict], used_asset_
 
 
 def _asset_allowed_for_bid(asset: dict) -> bool:
-    if asset.get("is_sensitive"):
-        return False
     metadata = asset.get("metadata") or {}
     specs = asset.get("specs") or {}
     if isinstance(metadata, dict) and metadata.get("allowed_for_bid") is False:
@@ -383,7 +441,10 @@ def build_project_bid_markdown(
         if focus_section:
             sections = _section_with_descendants(sections, focus_section_id)
     elif volume_type:
-        sections = [section for section in sections if section_volume_type(section) == volume_type]
+        if volume_type in {"technical", "business"}:
+            sections = [section for section in sections if delivery_volume_type(section) == volume_type]
+        else:
+            sections = [section for section in sections if section_volume_type(section) == volume_type]
         if not sections:
             raise RuntimeError(f"当前项目暂无{volume_name(volume_type)}章节，请先生成或调整章节分册。")
 

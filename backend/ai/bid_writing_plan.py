@@ -1,5 +1,7 @@
 from typing import Any
 
+from backend.core.bid_volumes import volume_generation_strategy
+
 
 def _text(value: Any) -> str:
     return str(value) if value is not None else ""
@@ -96,6 +98,11 @@ def build_chapter_writing_plan(chapter: dict[str, Any]) -> dict[str, Any]:
         strategy = "按招标文件格式响应，避免扩写过度，重点保留签章、日期、金额、附件页码等占位。"
     else:
         strategy = "围绕章节目标、招标要求、评分点和风险项形成正式响应，缺失事实信息使用占位符。"
+    if has_explicit_volume:
+        volume_strategy = volume_generation_strategy(volume_type)
+        focus = "；".join(volume_strategy.get("focus") or [])
+        constraints = "；".join(volume_strategy.get("constraints") or [])
+        strategy = f"{strategy} 分册策略：{focus} 强制约束：{constraints}"
 
     return {
         "importance": importance,

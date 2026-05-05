@@ -34,6 +34,91 @@ VOLUME_DEFINITIONS: dict[str, dict[str, str]] = {
 
 VOLUME_ORDER = ["qualification", "business", "technical", "price", "attachment", "other"]
 
+VOLUME_GENERATION_STRATEGIES: dict[str, dict[str, Any]] = {
+    "technical": {
+        "focus": [
+            "围绕施工组织、技术方案、关键工序、质量安全环保、进度资源、设备配置展开。",
+            "优先回应技术标准、发包人要求、评分办法和实施风险。",
+            "可以使用施工方案、标准话术、产品库、设备图片和工艺流程作为支撑。",
+        ],
+        "constraints": [
+            "不得把商务承诺、投标函格式内容写成技术方案主体。",
+            "涉及设备参数、工艺指标和施工资源时，缺失数据必须使用【待补充：...】。",
+            "流程图、产品图、设备图只作为辅助说明，不能替代文字响应。",
+        ],
+        "retrieval_hint": "优先召回施工方案、技术标准话术、产品库、设备图片、工艺流程和质量安全环保资料。",
+        "image_policy": "可以自动插入产品图、设备图、工艺图、施工现场示意图；图片应与章节技术内容直接相关。",
+    },
+    "business": {
+        "focus": [
+            "围绕投标函、合同条款响应、商务偏离表、承诺函、服务承诺和履约安排展开。",
+            "表达应短而准，优先保证格式响应和实质性条款不遗漏。",
+            "商务条款应逐项响应付款、履约、税费、廉政、保密、服务等要求。",
+        ],
+        "constraints": [
+            "不得编造金额、日期、签章、保证金账号、保函编号、合同编号。",
+            "金额、日期、签章、保证金等信息必须使用【待补充：人工复核】类占位符。",
+            "不要插入与商务条款无关的产品图或施工图。",
+        ],
+        "retrieval_hint": "优先召回商务条款话术、合同响应模板、承诺函模板、偏离表和历史商务响应。",
+        "image_policy": "默认谨慎插图；仅当章节明确为格式附件、证明材料或用户要求图文导出时才插入证明类图片。",
+    },
+    "qualification": {
+        "focus": [
+            "围绕营业执照、资质证书、安全生产许可证、人员证书、业绩证明和信誉声明展开。",
+            "正文应说明资料组成、响应关系、有效性复核点和附件索引。",
+            "优先引用企业资信库、证照图片、人员资料、业绩材料。",
+        ],
+        "constraints": [
+            "不得编造证书编号、人员姓名、身份证号、注册编号、合同金额、业绩日期。",
+            "缺失证照、人员、业绩信息必须使用【待补充：...】并提示人工替换。",
+            "插入图片时必须标明样张、脱敏或需人工替换，不得表述为正式原件。",
+        ],
+        "retrieval_hint": "优先召回企业资信库、证照图片、人员证书、业绩证明、信誉声明和社保资料。",
+        "image_policy": "可以插入证照、证书、业绩证明样张；必须提示脱敏样张/需替换，不替代正式法定文件。",
+    },
+    "price": {
+        "focus": [
+            "围绕报价口径、工程量清单、分项报价说明、税费口径、单价分析和风险边界展开。",
+            "重点说明报价依据、人工复核点、暂估价/暂列金/清单差异风险。",
+            "正文以说明和复核提示为主，不替代造价人员填报。",
+        ],
+        "constraints": [
+            "禁止编造任何具体金额、单价、总价、税率、工程量和报价汇总。",
+            "涉及金额或清单数据时必须使用【待补充：造价人员复核】。",
+            "报价文件默认不自动插图，除非用户明确要求。",
+        ],
+        "retrieval_hint": "优先召回报价说明、工程量清单模板、报价风险提示、税费和单价分析口径。",
+        "image_policy": "默认不插图；只在明确需要清单截图或格式附件时由用户人工确认。",
+    },
+    "attachment": {
+        "focus": [
+            "汇总需要提交的附件清单，说明附件来源、适用章节、是否缺失和替换要求。",
+            "按资格、商务、技术、报价等分册建立索引，便于评审查找。",
+            "对缺失附件给出人工补齐提示。",
+        ],
+        "constraints": [
+            "不得把附件清单写成正式证照或业绩事实。",
+            "所有缺失附件必须明确标记【待补充】。",
+            "图片和附件应保留来源、用途和是否脱敏说明。",
+        ],
+        "retrieval_hint": "优先召回企业资信库、产品库、图纸、证照扫描件、业绩证明和其他附件资产。",
+        "image_policy": "可以按附件清单插入相关图片或证明样张，并标明来源和替换要求。",
+    },
+    "other": {
+        "focus": [
+            "围绕章节目标和招标文件要求形成稳健响应。",
+            "无法确认所属分册时，应提示人工复核章节归属。",
+        ],
+        "constraints": [
+            "不得编造企业事实、金额、证书编号、人员姓名和具体日期。",
+            "缺失信息统一使用【待补充：...】。",
+        ],
+        "retrieval_hint": "按章节标题和响应要点召回相关知识库资料。",
+        "image_policy": "仅当章节明确需要图片或附件时插入。",
+    },
+}
+
 
 def _text(value: Any) -> str:
     return str(value) if value is not None else ""
@@ -54,6 +139,13 @@ def volume_name(volume_type: Any) -> str:
 
 def volume_description(volume_type: Any) -> str:
     return VOLUME_DEFINITIONS.get(normalize_volume_type(volume_type), VOLUME_DEFINITIONS["other"])["description"]
+
+
+def volume_generation_strategy(volume_type: Any) -> dict[str, Any]:
+    return VOLUME_GENERATION_STRATEGIES.get(
+        normalize_volume_type(volume_type),
+        VOLUME_GENERATION_STRATEGIES["other"],
+    )
 
 
 def infer_volume_type(section: dict[str, Any]) -> str:
@@ -98,3 +190,13 @@ def ensure_section_volume(section: dict[str, Any]) -> dict[str, Any]:
 
 def section_volume_type(section: dict[str, Any]) -> str:
     return infer_volume_type(section)
+
+
+def delivery_volume_type(section: dict[str, Any]) -> str:
+    """User-facing delivery package: technical vs business.
+
+    Internally qualification, price, attachment and other remain useful for
+    writing strategy and asset matching, but most tender documents present
+    them under the business/commercial package.
+    """
+    return "technical" if section_volume_type(section) == "technical" else "business"

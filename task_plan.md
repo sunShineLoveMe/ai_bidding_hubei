@@ -1,30 +1,30 @@
-# Task Plan: 技术标 / 商务标分册大纲升级
+# Task Plan: 用户侧二分法投标包调整
 
 ## Goal
-按 `docs/技术标商务标分册整改TODO.md` 推进下一阶段编码，让章节大纲生成支持真实投标分册结构，并同步 TODO 与 README 状态。
+从真实用户使用角度，把第一层分册体验调整为技术标 / 商务标二分法；资格、报价、附件继续作为商务标内部资料类型保留，并同步 TODO 与 README 状态。
 
 ## Phases
-- [x] Phase 1: 读取整改 TODO、README 和现有章节生成链路
-- [x] Phase 2: 后端分册大纲结构改造
-- [x] Phase 3: 前端类型兼容与文档同步
-- [x] Phase 4: 构建/静态验证
-- [x] Phase 5: 总结交付
+- [x] Phase 1: 定位首页分册概览、工作台 Tabs 和导出过滤逻辑
+- [x] Phase 2: 前端第一层改为全部 / 技术标 / 商务标
+- [x] Phase 3: 后端商务标导出聚合资格、报价、附件和其他内部类型
+- [x] Phase 4: 同步 TODO、README 和 notes
+- [x] Phase 5: 构建/静态验证与交付
 
 ## Key Questions
-1. 如何在不破坏现有 `chapters` 前端消费方式的前提下支持 `volumes`？
-2. 规则版 fallback 和 AI 输出是否都能稳定写入 `metadata.volume_type`？
-3. README 与 TODO 如何准确反映已完成和仍待办事项？
+1. 如何不丢失资格、报价、附件的内部策略能力，同时避免用户误以为要提交多个独立文件？
+2. 商务标导出是否应包含内部 `business`、`qualification`、`price`、`attachment` 和 `other`？
+3. 章节正文顶部是否需要同时显示用户侧分册和内部资料类型？
 
 ## Decisions Made
-- 采用兼容结构：后端保存 `volumes` 作为业务分册结构，同时继续输出扁平 `chapters` 给现有工作台、解读页和导出接口使用。
-- 暂不新增数据库表，继续通过 `bid_sections.metadata.volume_type`、`volume_name`、`export_group` 承载分册归属。
-- 本轮优先完成 TODO 阶段三，并同步 README 阶段十相关文档项。
+- 用户第一层只展示 `技术标` 和 `商务标`，`全部` 作为总览保留。
+- 内部 `qualification`、`price`、`attachment`、`other` 全部归入用户侧 `商务标`，继续用于写作策略、资料召回和风险控制。
+- 商务标 DOCX 导出按用户侧投标包聚合，而不是只导出内部 `business` 小类。
 
 ## Errors Encountered
 - None.
 
 ## Status
-**Complete** - 阶段三分册大纲升级已完成，TODO 与 README 已同步，构建验证通过。
+**Complete** - 用户侧二分法投标包调整已完成，TODO 与 README 已同步，后端编译和前端构建验证通过。
 
 ## Archived Previous Plan: 本地带图片标书 MVP
 

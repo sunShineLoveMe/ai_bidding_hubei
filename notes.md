@@ -12,6 +12,19 @@
 - AI Prompt 已改为优先输出 `ai-volume-v1` 的 `volumes[].chapters`。
 - 章节写作计划现在优先读取 `metadata.volume_type`，再回退标题关键词。
 
+## Current Implementation Notes: 分册正文生成策略升级
+- `backend/core/bid_volumes.py` 新增 `VOLUME_GENERATION_STRATEGIES`，集中定义技术标、商务标、资格文件、报价文件、附件材料的写作侧重点、强制约束、资料召回提示和图片策略。
+- `backend/ai/section_writer.py` 在 Prompt 中注入所属分册、分册策略、强制约束、资料召回侧重点、图片/附件策略和按分册筛选的企业资料候选。
+- `backend/ai/bid_writing_plan.py` 的写作计划会把分册策略合并进 `strategy`，并在已有 `metadata.volume_type` 时减少标题关键词误判。
+- `backend/api/routes.py` 的自动配图按分册过滤：技术标偏产品/设备/工艺图，资格文件偏证照/业绩样张，商务标谨慎插证明类图片，报价文件默认不自动插图。
+
+## Current Implementation Notes: 用户侧二分法投标包
+- 真实用户第一层只需要理解和操作 `技术标`、`商务标` 两个投标包；`全部` 仅作为总览。
+- 内部细分类继续保留：`qualification`、`price`、`attachment`、`other` 均归入用户侧商务标，用于资料匹配、写作策略和风险约束。
+- 首页 `BidVolumeOverview` 已改为两个工作区卡片：技术标、商务标。
+- 工作台 Tabs 已改为 `全部 / 技术标 / 商务标`，章节正文标题区同时显示用户侧分册和内部资料类型。
+- 后端 DOCX 导出 `volumeType=business` 时会聚合非技术标章节，符合多数施工类招标文件的最终提交习惯。
+
 ## Archived Previous Notes: 本地带图片标书 MVP
 
 ### Existing Project Findings
