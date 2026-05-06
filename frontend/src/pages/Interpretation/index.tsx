@@ -65,6 +65,14 @@ function asBidOutline(meta: Record<string, unknown>): BidOutline | null {
   return (meta.bid_outline || null) as BidOutline | null;
 }
 
+function formatDateTime(isoString?: string | null): string {
+  if (!isoString) return '-';
+  const date = new Date(isoString);
+  if (isNaN(date.getTime())) return isoString;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 function TextList({ title, items }: { title: string; items?: string[] }): JSX.Element {
   return (
     <section className="report-section">
@@ -480,7 +488,7 @@ export function InterpretationPage(): JSX.Element {
               <Descriptions.Item label="项目类型">{String(data.project?.project_type || projectMeta.document_type || '-')}</Descriptions.Item>
               <Descriptions.Item label="招标人">{data.project?.tender_unit || '-'}</Descriptions.Item>
               <Descriptions.Item label="代理机构">{data.project?.agency || '-'}</Descriptions.Item>
-              <Descriptions.Item label="创建时间">{data.project?.created_at || '-'}</Descriptions.Item>
+              <Descriptions.Item label="创建时间">{formatDateTime(data.project?.created_at)}</Descriptions.Item>
               <Descriptions.Item label="解读摘要" span={4}>
                 {data.analysis.summary || '-'}
               </Descriptions.Item>

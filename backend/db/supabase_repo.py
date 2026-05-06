@@ -337,6 +337,18 @@ def upsert_bid_section(project_id: str, section: dict[str, Any]) -> dict[str, An
     payload = _section_payload(project_id, section, int(section.get("order_index") or section.get("order") or 1) - 1)
     section_id = section.get("id")
     client = get_supabase_client()
+    parent_id = payload.get("parent_id")
+    if parent_id:
+        parent_response = (
+            client.table("bid_sections")
+            .select("id")
+            .eq("id", parent_id)
+            .eq("project_id", project_id)
+            .limit(1)
+            .execute()
+        )
+        if not parent_response.data:
+            payload["parent_id"] = None
     if _is_valid_uuid(section_id):
         response = client.table("bid_sections").update(payload).eq("id", section_id).eq("project_id", project_id).execute()
     else:

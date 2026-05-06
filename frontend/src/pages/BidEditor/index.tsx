@@ -111,15 +111,16 @@ function initialContent(chapter: BidOutlineChapter): string {
 function normalizeChapterHierarchy(items: ChapterDraft[]): ChapterDraft[] {
   const childrenByParent = new Map<string, ChapterDraft[]>();
   const roots: ChapterDraft[] = [];
+  const existingIds = new Set(items.map(item => item.id));
 
   items.forEach(item => {
-    if (item.parent_id) {
+    if (item.parent_id && existingIds.has(item.parent_id)) {
       const siblings = childrenByParent.get(item.parent_id) || [];
       siblings.push(item);
       childrenByParent.set(item.parent_id, siblings);
       return;
     }
-    roots.push(item);
+    roots.push(item.parent_id ? { ...item, parent_id: null } : item);
   });
 
   const ordered: ChapterDraft[] = [];
@@ -230,6 +231,13 @@ function matchesActiveVolume(chapter: ChapterDraft, activeVolume: VolumeType): b
     return true;
   }
   return deliveryVolumeType(chapter) === activeVolume;
+}
+
+function safeParentIdForSave(parentId: string | null | undefined, chapters: ChapterDraft[]): string | null {
+  if (!parentId || !isUuid(parentId)) {
+    return null;
+  }
+  return chapters.some(item => item.id === parentId) ? parentId : null;
 }
 
 export function BidEditorPage(): JSX.Element {
@@ -876,7 +884,7 @@ export function BidEditorPage(): JSX.Element {
         .filter(item => isUuid(item.id))
         .map((item, index) => ({
           id: item.id,
-          parent_id: item.parent_id,
+          parent_id: safeParentIdForSave(item.parent_id, nextChapters),
           level: item.level || 1,
           order_index: index + 1,
         })),
@@ -1017,7 +1025,7 @@ export function BidEditorPage(): JSX.Element {
       try {
         const saved = await saveBidSection(data.project.id, {
           ...chapter,
-          parent_id: parent?.id || null,
+          parent_id: safeParentIdForSave(parent?.id || null, chapters),
           level: chapter.level || 1,
           order_index: nextChapters.findIndex(item => item.id === chapter.id) + 1,
         });
@@ -1050,6 +1058,7 @@ export function BidEditorPage(): JSX.Element {
     try {
       const saved = await saveBidSection(data.project.id, {
         ...selectedChapter,
+        parent_id: safeParentIdForSave(selectedChapter.parent_id, chapters),
         level: selectedChapter.level || 1,
         order_index: chapters.findIndex(item => item.id === selectedChapter.id) + 1,
         status: selectedChapter.status || 'edited',
@@ -1214,6 +1223,7 @@ export function BidEditorPage(): JSX.Element {
           ...chapter,
           title,
           content: chapter.content.replace(/^## .*/m, `## ${title}`),
+          parent_id: safeParentIdForSave(chapter.parent_id, chapters),
           order_index: chapters.findIndex(item => item.id === chapter.id) + 1,
           status: 'edited',
         };
