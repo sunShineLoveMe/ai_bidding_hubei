@@ -295,6 +295,14 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
 
   const completedCount = statuses.filter(status => status === 'finish').length;
   const progressPercent = Math.round((completedCount / workflowSteps.length) * 100);
+  const outlineReady = statuses[3] === 'finish' || progressPercent === 100;
+  const interpretationLabel = current <= 1
+    ? '查看解析结果'
+    : busy && current === 2
+      ? '查看生成中的解读'
+      : '查看招标解读';
+  const interpretationDisabled = !projectId;
+  const editorDisabled = !projectId || !outlineReady;
 
   return (
     <section className="panel-card">
@@ -364,9 +372,9 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
 
         <div className="flex flex-col justify-center gap-3 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-4">
           <Button
-            type="primary"
+            type={editorDisabled ? 'default' : 'primary'}
             icon={<SquarePen size={16} />}
-            disabled={!projectId || progressPercent < 100}
+            disabled={editorDisabled}
             onClick={() => {
               if (projectId) window.location.href = `/bid-editor?projectId=${projectId}`;
             }}
@@ -374,12 +382,13 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
             进入标书编制
           </Button>
           <Button
-            disabled={!projectId}
+            type={!editorDisabled ? 'default' : 'primary'}
+            disabled={interpretationDisabled}
             onClick={() => {
               if (projectId) navigate(`/interpretation?projectId=${projectId}`);
             }}
           >
-            查看招标解读
+            {interpretationLabel}
           </Button>
           <Button
             icon={<RotateCcw size={16} />}

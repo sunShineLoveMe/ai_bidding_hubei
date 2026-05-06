@@ -254,6 +254,7 @@ export function BidEditorPage(): JSX.Element {
   const [complianceLastCheckedAt, setComplianceLastCheckedAt] = useState<Date | null>(null);
   const [complianceError, setComplianceError] = useState('');
   const [complianceDrawerOpen, setComplianceDrawerOpen] = useState(false);
+  const [qualityCollapsed, setQualityCollapsed] = useState(false);
   const [supplementingRowId, setSupplementingRowId] = useState('');
   const [contentDirty, setContentDirty] = useState(false);
   const [batchGenerating, setBatchGenerating] = useState(false);
@@ -577,8 +578,29 @@ export function BidEditorPage(): JSX.Element {
   }
 
   function QualityDashboard(): JSX.Element {
+    if (qualityCollapsed) {
+      return (
+        <aside className="quality-sidebar quality-sidebar-collapsed">
+          <Tooltip title="展开实时质量面板">
+            <Button
+              type="primary"
+              shape="circle"
+              icon={<Gauge size={18} />}
+              aria-label="展开实时质量面板"
+              onClick={() => setQualityCollapsed(false)}
+            />
+          </Tooltip>
+          {complianceSummary.highRiskMissing ? (
+            <Tag color="red">{complianceSummary.highRiskMissing}</Tag>
+          ) : complianceSummary.missing ? (
+            <Tag color="orange">{complianceSummary.missing}</Tag>
+          ) : null}
+        </aside>
+      );
+    }
+
     return (
-      <section className="quality-dashboard">
+      <aside className="quality-dashboard quality-sidebar">
         <div className="quality-dashboard-head">
           <div>
             <span>实时质量仪表盘</span>
@@ -588,6 +610,9 @@ export function BidEditorPage(): JSX.Element {
             {contentDirty ? <Tag color="gold">正文已修改，保存后更新响应率</Tag> : null}
             {complianceRefreshing ? <Tag color="processing">检查中...</Tag> : null}
             {complianceError ? <Tag color="red">检查失败</Tag> : <Tag color={complianceStatus.color}>{complianceStatus.label}</Tag>}
+            <Button size="small" onClick={() => setQualityCollapsed(true)}>
+              收起
+            </Button>
             <Button
               size="small"
               icon={<RefreshCw size={14} />}
@@ -646,7 +671,7 @@ export function BidEditorPage(): JSX.Element {
             </article>
           </Tooltip>
         </div>
-      </section>
+      </aside>
     );
   }
 
@@ -1613,7 +1638,7 @@ export function BidEditorPage(): JSX.Element {
 
   if (mode === '目录模式') {
     return (
-      <div className="bid-editor-shell outline-mode-shell">
+      <div className={`bid-editor-shell outline-mode-shell ${qualityCollapsed ? 'quality-collapsed' : ''}`}>
         <header className="bid-editor-topbar">
           <div className="bid-editor-brand">
             <FileText size={26} />
@@ -1635,7 +1660,6 @@ export function BidEditorPage(): JSX.Element {
         </header>
 
         <main className="outline-workbench">
-          <QualityDashboard />
           <section className="outline-topbar">
             <Segmented<EditorMode>
               value={mode}
@@ -1804,6 +1828,7 @@ export function BidEditorPage(): JSX.Element {
             <span />
           </footer>
         </main>
+        <QualityDashboard />
 
         <Modal
           title="重置章节生成状态"
@@ -1836,7 +1861,7 @@ export function BidEditorPage(): JSX.Element {
   }
 
   return (
-    <div className="bid-editor-shell">
+    <div className={`bid-editor-shell ${qualityCollapsed ? 'quality-collapsed' : ''}`}>
       <header className="bid-editor-topbar">
         <div className="bid-editor-brand">
           <FileText size={26} />
@@ -1971,7 +1996,6 @@ export function BidEditorPage(): JSX.Element {
       </aside>
 
       <main className="bid-editor-main">
-        <QualityDashboard />
         <section className="editor-title-row">
           <div>
             <h1>{selectedChapter ? chapterDisplayTitle(selectedChapter) : '未选择章节'}</h1>
@@ -2015,6 +2039,7 @@ export function BidEditorPage(): JSX.Element {
           <span>Tiptap AI 编辑器</span>
         </footer>
       </main>
+      <QualityDashboard />
       <ComplianceDrawer />
     </div>
   );

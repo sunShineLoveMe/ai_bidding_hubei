@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Descriptions, Drawer, Dropdown, Empty, List, Progress, Space, Table, Tabs, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { AlertTriangle, BrainCircuit, CheckCircle2, ClipboardCheck, Database, Eye, FileSearch, FileText, ListChecks, MoreHorizontal, RefreshCw, ShieldAlert, XCircle } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
-import { generateAIInterpretation, getComplianceCheck, getLatestInterpretation } from '../../api/bidProject';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { generateAIInterpretation, getComplianceCheck, getInterpretation, getLatestInterpretation } from '../../api/bidProject';
 import { MetricCards } from '../../components/common/MetricCards';
 import { ModuleHeader } from '../../components/common/ModuleHeader';
 import type {
@@ -92,6 +92,8 @@ function SourceButton({ onClick }: { onClick: () => void }): JSX.Element {
 
 export function InterpretationPage(): JSX.Element {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const projectIdParam = searchParams.get('projectId');
   const [data, setData] = useState<InterpretationResponse | null>(null);
   const [complianceReport, setComplianceReport] = useState<ComplianceReport | null>(null);
   const [generatingAI, setGeneratingAI] = useState(false);
@@ -101,7 +103,7 @@ export function InterpretationPage(): JSX.Element {
 
   async function load(): Promise<void> {
     try {
-      const result = await getLatestInterpretation();
+      const result = projectIdParam ? await getInterpretation(projectIdParam) : await getLatestInterpretation();
       setData(result);
       if (result.project?.id) {
         try {
@@ -120,7 +122,7 @@ export function InterpretationPage(): JSX.Element {
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [projectIdParam]);
 
   const projectMeta = data?.analysis?.project_meta || {};
   const report = asReport(projectMeta);
