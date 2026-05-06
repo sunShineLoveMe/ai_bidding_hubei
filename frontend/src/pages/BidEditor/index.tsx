@@ -19,6 +19,12 @@ import {
   Trash2,
   SlidersHorizontal,
   RotateCcw,
+  Clock3,
+  Gauge,
+  Save,
+  RefreshCw,
+  AlertTriangle,
+  ShieldAlert,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { deleteBidSection, generateBidDocxDownload, getComplianceCheck, getInterpretation, getLatestInterpretation, reorderBidSections, resetBidSectionsGeneration, saveBidSection } from '../../api/bidProject';
@@ -243,6 +249,11 @@ export function BidEditorPage(): JSX.Element {
   const [streamingChildPlaceholders, setStreamingChildPlaceholders] = useState<StreamingChildPlaceholder[]>([]);
   const [downloadUrl, setDownloadUrl] = useState('');
   const [downloadGenerating, setDownloadGenerating] = useState<'full' | 'section' | null>(null);
+  const [complianceReport, setComplianceReport] = useState<ComplianceReport | null>(null);
+  const [complianceRefreshing, setComplianceRefreshing] = useState(false);
+  const [complianceLastCheckedAt, setComplianceLastCheckedAt] = useState<Date | null>(null);
+  const [complianceError, setComplianceError] = useState('');
+  const [contentDirty, setContentDirty] = useState(false);
   const [batchGenerating, setBatchGenerating] = useState(false);
   const [batchTasks, setBatchTasks] = useState<Record<string, BatchTask>>({});
   const [withImages, setWithImages] = useState(false);
@@ -253,6 +264,28 @@ export function BidEditorPage(): JSX.Element {
   const batchCancelRequestedRef = useRef(false);
   const batchAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
 
+  async function refreshComplianceReport(projectId: string, options?: { silent?: boolean }): Promise<void> {
+    if (!options?.silent) {
+      setComplianceRefreshing(true);
+    }
+    setComplianceError('');
+    try {
+      const report = await getComplianceCheck(projectId);
+      setComplianceReport(report);
+      setComplianceLastCheckedAt(new Date());
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      setComplianceError(reason || '条款响应检查失败');
+      if (!options?.silent) {
+        message.warning(`条款响应检查失败：${reason}`);
+      }
+    } finally {
+      if (!options?.silent) {
+        setComplianceRefreshing(false);
+      }
+    }
+  }
+
   async function load(): Promise<void> {
     setLoading(true);
     setDownloadUrl('');
@@ -260,6 +293,7 @@ export function BidEditorPage(): JSX.Element {
       const projectId = searchParams.get('projectId');
       const result = projectId ? await getInterpretation(projectId) : await getLatestInterpretation();
       setData(result);
+      setContentDirty(false);
       if (searchParams.get('autoGenerate') === 'outline' && result.project?.id) {
         startOutlineStream(result.project.id);
       } else {
@@ -269,6 +303,9 @@ export function BidEditorPage(): JSX.Element {
         const drafts = sectionDrafts.length ? sectionDrafts : flattenChapters(outline);
         setChapters(drafts);
         setSelectedId(current => current || drafts[0]?.id || '');
+      }
+      if (result.project?.id) {
+        void refreshComplianceReport(result.project.id, { silent: true });
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -287,6 +324,8 @@ export function BidEditorPage(): JSX.Element {
     setOutlineMeta(outline);
     setChapters(drafts);
     setSelectedId(current => current || drafts[0]?.id || '');
+    setContentDirty(false);
+    void refreshComplianceReport(projectId, { silent: true });
   }
 
   useEffect(() => {
@@ -301,6 +340,7 @@ export function BidEditorPage(): JSX.Element {
       setChapters(items => items.map(item =>
         item.id === selectedId ? { ...item, content: markdown } : item
       ));
+      setContentDirty(true);
     }
   }, [selectedId]);
 
@@ -451,6 +491,97 @@ export function BidEditorPage(): JSX.Element {
   const estimatedPages = Math.max(1, Math.ceil(estimatedTotalChars / 700));
   const generatedCount = scopedChapters.filter(isChapterGenerated).length;
   const generationProgress = scopedChapters.length ? Math.round((generatedCount / scopedChapters.length) * 10000) / 100 : 0;
+  const complianceSummary = complianceReport?.summary || {
+    metricName: '条款响应覆盖率',
+    scopeNote: '基于招标条款、评分项、风险项与当前章节映射/正文片段的响应追踪结果，不等同于最终 Word 标书合规结论。',
+    total: 0,
+    covered: 0,
+    partial: 0,
+    missing: 0,
+    percent: 0,
+    highRiskMissing: 0,
+  };
+  const complianceStatus = complianceSummary.highRiskMissing
+    ? { label: '高风险未响应', color: 'red' as const }
+    : complianceSummary.missing || complianceSummary.partial
+      ? { label: '有待补强', color: 'orange' as const }
+      : complianceSummary.total
+        ? { label: '可下载', color: 'green' as const }
+        : { label: '待检查', color: 'default' as const };
+  const complianceTimeText = complianceLastCheckedAt
+    ? complianceLastCheckedAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+    : '尚未检查';
+
+  function QualityDashboard(): JSX.Element {
+    return (
+      <section className="quality-dashboard">
+        <div className="quality-dashboard-head">
+          <div>
+            <span>实时质量仪表盘</span>
+            <strong>{volumeLabel(activeVolume)}</strong>
+          </div>
+          <Space size={8} wrap>
+            {contentDirty ? <Tag color="gold">正文已修改，保存后更新响应率</Tag> : null}
+            {complianceRefreshing ? <Tag color="processing">检查中...</Tag> : null}
+            {complianceError ? <Tag color="red">检查失败</Tag> : <Tag color={complianceStatus.color}>{complianceStatus.label}</Tag>}
+            <Button
+              size="small"
+              icon={<RefreshCw size={14} />}
+              loading={complianceRefreshing}
+              disabled={!data?.project?.id}
+              onClick={() => data?.project?.id && void refreshComplianceReport(data.project.id)}
+            >
+              刷新响应率
+            </Button>
+          </Space>
+        </div>
+        <div className="quality-dashboard-grid">
+          <Tooltip title="当前视图下已生成正文的章节数。章节状态为 generated、edited 或 completed，且正文非空时计入。">
+            <article>
+              <CheckCircle2 size={18} />
+              <span>已生成章节</span>
+              <strong>{generatedCount}/{scopedChapters.length}</strong>
+            </article>
+          </Tooltip>
+          <Tooltip title="按当前视图下已生成章节正文去除空白后的字符数估算，用于判断标书厚度和扩写需求。">
+            <article>
+              <FileText size={18} />
+              <span>正文字数</span>
+              <strong>{actualChars}</strong>
+            </article>
+          </Tooltip>
+          <Tooltip title={complianceSummary.scopeNote}>
+            <article>
+              <Gauge size={18} />
+              <span>条款响应率</span>
+              <strong>{complianceSummary.percent}%</strong>
+            </article>
+          </Tooltip>
+          <Tooltip title="仍未在当前章节映射或正文中找到响应证据的要求条款、评分项和风险项。">
+            <article>
+              <AlertTriangle size={18} />
+              <span>未响应项</span>
+              <strong>{complianceSummary.missing}</strong>
+            </article>
+          </Tooltip>
+          <Tooltip title="风险项、否决项、废标项或高优先级条款中仍未找到响应证据的数量。">
+            <article>
+              <ShieldAlert size={18} />
+              <span>高风险未响应</span>
+              <strong>{complianceSummary.highRiskMissing || 0}</strong>
+            </article>
+          </Tooltip>
+          <Tooltip title={complianceError || '最近一次条款响应检查完成时间。保存章节或生成正文后会自动刷新。'}>
+            <article>
+              <Clock3 size={18} />
+              <span>最后检查</span>
+              <strong>{complianceRefreshing ? '检查中' : complianceTimeText}</strong>
+            </article>
+          </Tooltip>
+        </div>
+      </section>
+    );
+  }
 
   function chapterActualWords(chapter: ChapterDraft): number {
     return (chapter.content || '').replace(/\s+/g, '').length;
@@ -769,8 +900,10 @@ export function BidEditorPage(): JSX.Element {
       });
       setChapters(items => normalizeChapterHierarchy(items.map(item => item.id === selectedChapter.id ? { ...item, ...saved } : item)));
       setSelectedId(saved.id);
+      setContentDirty(false);
       message.success('章节已保存到 Supabase');
       setDownloadUrl('');
+      void refreshComplianceReport(data.project.id, { silent: true });
     } catch (error) {
       message.error(error instanceof Error ? error.message : String(error));
     }
@@ -1161,6 +1294,8 @@ export function BidEditorPage(): JSX.Element {
         },
       });
       message.success('章节正文已生成');
+      setContentDirty(false);
+      void refreshComplianceReport(data.project.id, { silent: true });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       setChapters(items => items.map(item => item.id === targetChapter.id ? { ...item, status: 'failed', content: '' } : item));
@@ -1293,6 +1428,8 @@ export function BidEditorPage(): JSX.Element {
         message.info('全文批量编写已停止');
       } else {
         message.success('全文批量编写任务已完成');
+        setContentDirty(false);
+        void refreshComplianceReport(data.project.id, { silent: true });
       }
     } finally {
       setBatchGenerating(false);
@@ -1311,6 +1448,14 @@ export function BidEditorPage(): JSX.Element {
         ? { ...task, status: 'stopped' as BatchTaskStatus, message: '已停止' }
         : task,
     ])));
+  }
+
+  function handleActiveVolumeChange(value: VolumeType): void {
+    setActiveVolume(value);
+    setSelectedId('');
+    if (data?.project?.id) {
+      void refreshComplianceReport(data.project.id, { silent: true });
+    }
   }
 
   if (loading) {
@@ -1357,6 +1502,7 @@ export function BidEditorPage(): JSX.Element {
         </header>
 
         <main className="outline-workbench">
+          <QualityDashboard />
           <section className="outline-topbar">
             <Segmented<EditorMode>
               value={mode}
@@ -1369,10 +1515,7 @@ export function BidEditorPage(): JSX.Element {
             <Segmented<VolumeType>
               className="volume-segmented"
               value={activeVolume}
-              onChange={value => {
-                setActiveVolume(value);
-                setSelectedId('');
-              }}
+              onChange={handleActiveVolumeChange}
               options={volumeOptions.map(item => ({
                 label: `${item.shortLabel} ${volumeCounts[item.value] || 0}`,
                 value: item.value,
@@ -1387,7 +1530,6 @@ export function BidEditorPage(): JSX.Element {
               {batchGenerating ? <span>批量并发：{BATCH_SECTION_CONCURRENCY} 路</span> : null}
             </div>
           </section>
-
           <section className="outline-panel">
             <div className="outline-panel-header">
               <div className="outline-panel-title">
@@ -1605,10 +1747,7 @@ export function BidEditorPage(): JSX.Element {
         <Segmented<VolumeType>
           className="volume-segmented sidebar-volume-segmented"
           value={activeVolume}
-          onChange={value => {
-            setActiveVolume(value);
-            setSelectedId('');
-          }}
+          onChange={handleActiveVolumeChange}
           options={volumeOptions.map(item => ({
             label: `${item.shortLabel} ${volumeCounts[item.value] || 0}`,
             value: item.value,
@@ -1698,6 +1837,7 @@ export function BidEditorPage(): JSX.Element {
       </aside>
 
       <main className="bid-editor-main">
+        <QualityDashboard />
         <section className="editor-title-row">
           <div>
             <h1>{selectedChapter ? chapterDisplayTitle(selectedChapter) : '未选择章节'}</h1>
@@ -1708,6 +1848,7 @@ export function BidEditorPage(): JSX.Element {
             {sectionStreaming ? <Tag color="processing">正文生成中</Tag> : null}
             {selectedChapter ? <Tag color="blue">{volumeLabel(deliveryVolumeType(selectedChapter))}</Tag> : null}
             {selectedChapter ? <Tag color="default">{internalVolumeLabel(inferVolumeType(selectedChapter))}</Tag> : null}
+            <Button icon={<Save size={16} />} disabled={!selectedChapter || !contentDirty} onClick={() => void saveDraft()}>保存章节</Button>
             <Button icon={<Sparkles size={16} />} loading={sectionStreaming} disabled={!selectedChapter || streaming} onClick={() => void generateCurrentSection()}>生成本章正文</Button>
             <Button
               icon={<Download size={16} />}

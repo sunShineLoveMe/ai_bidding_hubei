@@ -1,6 +1,23 @@
+import re
 from typing import Any
 
 from backend.db.supabase_repo import get_project_interpretation
+
+GENERIC_TERMS = {
+    "招标文件",
+    "投标文件",
+    "投标人",
+    "招标人",
+    "本项目",
+    "本工程",
+    "工程项目",
+    "施工工程",
+    "相关要求",
+    "符合要求",
+    "满足要求",
+    "按照要求",
+    "进行响应",
+}
 
 
 def _normalize(value: Any) -> str:
@@ -18,6 +35,53 @@ def _mapped_values(section: dict[str, Any], field: str) -> list[str]:
     return [_normalize(value) for value in values if value]
 
 
+def _keyword_terms(value: str) -> set[str]:
+    text = str(value or "")
+    terms: set[str] = set()
+    for segment in re.findall(r"[\u4e00-\u9fffA-Za-z0-9]+", text):
+        normalized = _normalize(segment)
+        if len(normalized) < 3 or normalized in GENERIC_TERMS:
+            continue
+        if len(normalized) <= 8:
+            terms.add(normalized)
+            continue
+        for size in (6, 5, 4, 3):
+            for index in range(0, len(normalized) - size + 1):
+                term = normalized[index:index + size]
+                if term not in GENERIC_TERMS:
+                    terms.add(term)
+            if len(terms) >= 80:
+                return terms
+    return terms
+
+
+def _section_text(section: dict[str, Any], mapped_field: str) -> str:
+    mapped = " ".join(_mapped_values(section, mapped_field))
+    return _normalize(
+        " ".join([
+            str(section.get("title") or ""),
+            str(section.get("purpose") or ""),
+            str(section.get("content") or ""),
+            mapped,
+        ])
+    )
+
+
+def _content_response_matched(target: str, section_text: str, check_type: str) -> bool:
+    if not _meaningful(section_text, 80):
+        return False
+    terms = _keyword_terms(target)
+    if len(terms) < 3:
+        return False
+    matched = [term for term in terms if term in section_text]
+    ratio = len(matched) / len(terms)
+    if check_type == "scoring":
+        return len(matched) >= 3 or ratio >= 0.16
+    if check_type == "risk":
+        return len(matched) >= 4 and ratio >= 0.2
+    return len(matched) >= 4 and ratio >= 0.18
+
+
 def _match_section(content: str, sections: list[dict[str, Any]], check_type: str) -> dict[str, Any] | None:
     target = _normalize(content)
     mapped_field = {
@@ -33,8 +97,10 @@ def _match_section(content: str, sections: list[dict[str, Any]], check_type: str
         )
         title = _normalize(section.get("title"))
         title_matched = _meaningful(title) and (title in target or target[:16] in title)
-        content_matched = _meaningful(target) and target[:40] in _normalize(section.get("content"))
-        if mapped_matched or title_matched or content_matched:
+        section_text = _section_text(section, mapped_field)
+        exact_content_matched = _meaningful(target) and target[:40] in section_text
+        semantic_content_matched = _content_response_matched(content, section_text, check_type)
+        if mapped_matched or title_matched or exact_content_matched or semantic_content_matched:
             return section
     return None
 

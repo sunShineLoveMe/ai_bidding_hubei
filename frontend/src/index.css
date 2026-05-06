@@ -168,7 +168,7 @@ textarea {
   grid-column: 1 / -1;
   display: grid;
   min-height: 0;
-  grid-template-rows: 58px minmax(0, 1fr) 62px;
+  grid-template-rows: auto 58px minmax(0, 1fr) 62px;
   background: #f7f9fc;
 }
 
@@ -749,9 +749,84 @@ textarea {
   display: grid;
   min-width: 0;
   min-height: 0;
-  grid-template-rows: 82px minmax(0, 1fr) 34px;
+  grid-template-rows: auto 82px minmax(0, 1fr) 34px;
   overflow: hidden;
   background: #f1f3f7;
+}
+
+.quality-dashboard {
+  display: grid;
+  gap: 10px;
+  border-bottom: 1px solid #dfe7f2;
+  background: #f8fbff;
+  padding: 12px 18px;
+}
+
+.quality-dashboard-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.quality-dashboard-head span {
+  display: block;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.quality-dashboard-head strong {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.quality-dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.quality-dashboard-grid article {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  grid-template-areas:
+    "icon label"
+    "icon value";
+  align-items: center;
+  min-width: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 8px 10px;
+  cursor: help;
+}
+
+.quality-dashboard-grid article svg {
+  grid-area: icon;
+  color: #2563eb;
+}
+
+.quality-dashboard-grid article span {
+  grid-area: label;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quality-dashboard-grid article strong {
+  grid-area: value;
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 17px;
+  font-weight: 950;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .onlyoffice-shell {
