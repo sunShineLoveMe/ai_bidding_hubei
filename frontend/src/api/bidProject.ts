@@ -42,8 +42,19 @@ export async function getInterpretation(projectId: string): Promise<Interpretati
   return response.data;
 }
 
-export async function getComplianceCheck(projectId: string): Promise<ComplianceReport> {
+export async function getComplianceCheck(projectId: string, options?: { volumeType?: string }): Promise<ComplianceReport> {
   const response = await apiClient.get(`/api/bidding/interpretations/${projectId}/compliance-check`, {
+    params: options?.volumeType ? { volumeType: options.volumeType } : undefined,
+    skipGlobalLoading: true,
+  });
+  return response.data;
+}
+
+export async function generateComplianceSupplement(
+  projectId: string,
+  payload: { row: unknown; section: unknown },
+): Promise<{ content: string; sectionId?: string; rowId?: string }> {
+  const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/compliance-supplement`, payload, {
     skipGlobalLoading: true,
   });
   return response.data;

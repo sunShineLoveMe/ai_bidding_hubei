@@ -64,6 +64,16 @@ def get_backend_public_base_url():
         or APP_HOST
     )
 
+def get_backend_self_base_url():
+    """Return the backend URL used by this service when it needs to fetch its own files."""
+    return _with_http_scheme(
+        os.getenv('APP_PUBLIC_BASE_URL')
+        or os.getenv('APP_HOST')
+        or APP_HOST
+        or os.getenv('BACKEND_URL_FOR_DOCKER')
+        or BACKEND_URL_FOR_DOCKER
+    )
+
 def get_db():
     """获取数据库连接"""
     conn = sqlite3.connect('bidding.db')
@@ -214,6 +224,22 @@ def _section_display_title(section: dict) -> str:
     return f"{prefix}{title}"
 
 
+def _strip_duplicate_section_heading(content: str, section: dict) -> str:
+    lines = (content or "").strip().splitlines()
+    if not lines:
+        return ""
+    first = lines[0].strip()
+    if not first.startswith("#"):
+        return content.strip()
+    heading_text = re.sub(r"^#{1,6}\s*", "", first).strip()
+    order = section.get("order")
+    clean_heading = _clean_section_title(heading_text, order)
+    clean_title = _clean_section_title(section.get("title") or "未命名章节", order)
+    if clean_heading == clean_title or heading_text == _section_display_title(section):
+        return "\n".join(lines[1:]).strip()
+    return content.strip()
+
+
 def _asset_text(asset: dict) -> str:
     parts = [
         asset.get("title"),
@@ -323,10 +349,6 @@ def _score_asset_for_section(asset: dict, section: dict) -> int:
 
 
 def _asset_image_ref(asset: dict) -> str:
-    public_url = str(asset.get("public_url") or "").strip()
-    if public_url.startswith(("http://", "https://")):
-        return public_url
-
     local_path = str(asset.get("local_path") or "").strip()
     if local_path:
         candidate = Path(local_path)
@@ -335,9 +357,17 @@ def _asset_image_ref(asset: dict) -> str:
         if candidate.exists() and candidate.is_file():
             return str(candidate)
 
+    asset_id = str(asset.get("id") or "").strip()
+    if asset_id:
+        return f"{get_backend_self_base_url()}/api/bidding/knowledge/assets/{quote(asset_id)}/file?variant=original"
+
+    public_url = str(asset.get("public_url") or "").strip()
+    if public_url.startswith(("http://", "https://")):
+        return public_url.replace("variant=thumb", "variant=original")
+
     storage_path = str(asset.get("storage_path") or "").strip()
     if storage_path.startswith(("http://", "https://")):
-        return storage_path
+        return storage_path.replace("variant=thumb", "variant=original")
     return ""
 
 
@@ -497,11 +527,11 @@ def build_project_bid_markdown(
     used_asset_ids: set[str] = set()
     for section in sections:
         title = _section_display_title(section)
-        content = (section.get("content") or "").strip()
+        content = _strip_duplicate_section_heading(section.get("content") or "", section)
+        chunks.append(_section_markdown_heading(int(section.get("level") or 1), title))
         if content:
             chunks.append(f"{content}\n\n" if content.endswith("\n") else f"{content}\n\n")
         else:
-            chunks.append(_section_markdown_heading(int(section.get("level") or 1), title))
             chunks.append("待补充章节正文。\n\n")
         if with_images and "![" not in content:
             chunks.append(_build_section_image_markdown(section, image_assets, used_asset_ids))
@@ -947,7 +977,10 @@ def get_interpretation_compliance_check(project_id):
     """基于结构化条款和标书章节输出合规覆盖检查。"""
     try:
         uuid.UUID(project_id)
-        return jsonify(build_compliance_report(project_id))
+        volume_type = request.args.get("volumeType")
+        if volume_type not in {"technical", "business"}:
+            volume_type = None
+        return jsonify(build_compliance_report(project_id, volume_type=volume_type))
     except ValueError:
         return jsonify({'error': 'project_id 不是合法 UUID。'}), 400
     except Exception as e:
@@ -1046,6 +1079,71 @@ def stream_interpretation_bid_section(project_id):
             'X-Accel-Buffering': 'no',
         },
     )
+
+
+@bp.route('/interpretations/<project_id>/compliance-supplement', methods=['POST'])
+def generate_compliance_supplement(project_id):
+    """Generate a focused supplement paragraph for an uncovered compliance row."""
+    try:
+        uuid.UUID(project_id)
+    except ValueError:
+        return jsonify({'error': 'project_id 不是合法 UUID。'}), 400
+
+    payload = request.get_json(force=True) or {}
+    row = payload.get("row") or {}
+    section = payload.get("section") or {}
+    if not row.get("content"):
+        return jsonify({'error': '缺少待补强检查项内容。'}), 400
+    if not section.get("title"):
+        return jsonify({'error': '缺少建议补强章节。'}), 400
+
+    prompt = f"""
+你是资深投标文件审查与补强专家。请针对一个未响应或待补强的招标检查项，生成一段可直接追加到当前章节中的正式标书补强内容。
+
+要求：
+1. 只输出 Markdown 正文片段，不要解释生成过程。
+2. 语言正式、稳健、可落地，符合国内水利施工投标文件表达习惯。
+3. 不得编造证书编号、人员姓名、合同金额、具体日期、未提供的企业业绩；缺失事实用“【待补充：...】”占位。
+4. 不使用 emoji、图标符号或装饰性提示符。
+5. 内容应紧扣检查项，补充可执行措施、证明材料、页码索引或人工复核提示。
+6. 篇幅控制在 300-600 字。
+
+企业画像：
+{build_enterprise_context()}
+
+当前章节：
+- 标题：{section.get("title")}
+- 编写目标：{section.get("purpose") or "需结合章节正文补强"}
+- 所属分册：{volume_name(section_volume_type(section))}
+
+当前章节已有正文摘要：
+{str(section.get("content") or "")[:1600]}
+
+待补强检查项：
+- 类别：{row.get("category") or "检查项"}
+- 状态：{row.get("status") or "missing"}
+- 重要性：{row.get("importance") or "medium"}
+- 内容：{row.get("content")}
+- 来源页码：{row.get("sourcePage") or "需复核"}
+- 原文依据：{row.get("sourceText") or row.get("content")}
+""".strip()
+
+    try:
+        response = call_dashscope_api([{"role": "user", "content": prompt}], json_mode=False)
+        content = response["output"]["choices"][0]["message"]["content"].strip()
+        content = clean_formal_bid_text(content)
+        if not content:
+            raise RuntimeError("模型未返回有效补强内容。")
+        return jsonify({
+            "projectId": project_id,
+            "sectionId": section.get("id"),
+            "rowId": row.get("id"),
+            "content": content,
+        })
+    except Exception as e:
+        logging.exception("生成条款补强内容失败: %s", project_id)
+        return jsonify({'error': f'生成条款补强内容失败: {str(e)}'}), 500
+
 
 @bp.route('/interpretations/<project_id>/sections', methods=['GET'])
 def get_bid_sections(project_id):

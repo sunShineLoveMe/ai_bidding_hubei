@@ -4,6 +4,7 @@ from docx import Document
 from docx.shared import Pt, RGBColor, Inches, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.enum.style import WD_STYLE_TYPE
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
 from docx.oxml.ns import qn
 import re
 import subprocess
@@ -16,10 +17,19 @@ import uuid
 import requests
 from urllib.parse import urlparse, unquote
 
+try:
+    from PIL import Image, ImageOps
+except Exception:
+    Image = None
+    ImageOps = None
+
 MARKDOWN_IMAGE_CONNECT_TIMEOUT = 4
 MARKDOWN_IMAGE_READ_TIMEOUT = 8
 MARKDOWN_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 MARKDOWN_IMAGE_MAX_COUNT = int(os.getenv("DOCX_MAX_IMAGES", "24"))
+DOCX_IMAGE_MAX_EDGE_PX = int(os.getenv("DOCX_IMAGE_MAX_EDGE_PX", "2400"))
+DOCX_IMAGE_MAX_BYTES = int(os.getenv("DOCX_IMAGE_MAX_BYTES", str(2 * 1024 * 1024)))
+DOCX_IMAGE_JPEG_QUALITY = int(os.getenv("DOCX_IMAGE_JPEG_QUALITY", "90"))
 FORMAL_TEXT_SYMBOL_RE = re.compile(
     "["
     "\U0001f300-\U0001f5ff"
@@ -63,10 +73,11 @@ def apply_run_font(run, *, east_asia='宋体', latin='Times New Roman', size=Non
         run.font.bold = bold
 
 
-def apply_paragraph_format(paragraph, *, first_line_chars=2, line_spacing=1.5, space_before=0, space_after=0):
+def apply_paragraph_format(paragraph, *, first_line_chars=2, line_spacing=28, space_before=0, space_after=0):
     fmt = paragraph.paragraph_format
     fmt.first_line_indent = Pt(first_line_chars * 12)
-    fmt.line_spacing = line_spacing
+    fmt.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+    fmt.line_spacing = Pt(line_spacing)
     fmt.space_before = Pt(space_before)
     fmt.space_after = Pt(space_after)
 
@@ -211,15 +222,58 @@ def _resolve_markdown_image(image_ref, image_cache=None):
     return None, False
 
 
+def _prepare_docx_image(image_path):
+    """Use original image unless it is too large for a practical DOCX payload."""
+    if Image is None or not image_path:
+        return image_path, False
+
+    suffix = Path(image_path).suffix.lower()
+    if suffix not in {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}:
+        return image_path, False
+
+    try:
+        source_size = os.path.getsize(image_path)
+        with Image.open(image_path) as source:
+            image = ImageOps.exif_transpose(source) if ImageOps is not None else source.copy()
+            width, height = image.size
+            needs_resize = max(width, height) > DOCX_IMAGE_MAX_EDGE_PX
+            needs_compress = source_size > DOCX_IMAGE_MAX_BYTES
+            if not needs_resize and not needs_compress:
+                return image_path, False
+
+            image.thumbnail((DOCX_IMAGE_MAX_EDGE_PX, DOCX_IMAGE_MAX_EDGE_PX), Image.Resampling.LANCZOS)
+            has_alpha = image.mode in {"RGBA", "LA"} or ("transparency" in image.info)
+            if has_alpha:
+                if image.mode != "RGBA":
+                    image = image.convert("RGBA")
+                temp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+                temp.close()
+                image.save(temp.name, "PNG", optimize=True)
+                return temp.name, True
+
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            temp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False)
+            temp.close()
+            image.save(temp.name, "JPEG", quality=DOCX_IMAGE_JPEG_QUALITY, optimize=True, progressive=True)
+            return temp.name, True
+    except Exception as e:
+        print(f"图片清晰压缩失败，继续使用原图: {image_path}, {e}")
+        return image_path, False
+
+
 def process_markdown_image(doc, alt_text, image_ref, image_cache=None):
     """处理 Markdown 图片语法，插入居中图片和中文图注。"""
     image_path = None
     cleanup = False
+    prepared_path = None
+    prepared_cleanup = False
     try:
         image_path, cleanup = _resolve_markdown_image(image_ref, image_cache=image_cache)
         if not image_path:
             return False
-        doc.add_picture(image_path, width=Inches(5.8))
+        prepared_path, prepared_cleanup = _prepare_docx_image(image_path)
+        doc.add_picture(prepared_path, width=Inches(5.8))
         image_para = doc.paragraphs[-1]
         image_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
@@ -227,24 +281,28 @@ def process_markdown_image(doc, alt_text, image_ref, image_cache=None):
     except Exception as e:
         print(f"插入图片失败: {image_ref}, {e}")
         return False
+    finally:
+        if prepared_cleanup and prepared_path and os.path.exists(prepared_path):
+            os.unlink(prepared_path)
 
 def set_document_styles(doc):
     """设置文档样式"""
     styles = doc.styles
     normal = styles['Normal']
     normal.font.name = 'Times New Roman'
-    normal._element.rPr.rFonts.set(qn('w:eastAsia'), '宋体')
+    normal._element.rPr.rFonts.set(qn('w:eastAsia'), '仿宋')
     normal.font.size = Pt(12)
-    normal.paragraph_format.line_spacing = 1.5
+    normal.paragraph_format.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+    normal.paragraph_format.line_spacing = Pt(28)
     normal.paragraph_format.first_line_indent = Pt(24)
     normal.paragraph_format.space_before = Pt(0)
     normal.paragraph_format.space_after = Pt(0)
 
     heading_specs = {
-        1: ('黑体', 16, True),
-        2: ('黑体', 15, True),
-        3: ('黑体', 14, True),
-        4: ('宋体', 12, True),
+        1: ('黑体', 18, True),
+        2: ('黑体', 16, True),
+        3: ('黑体', 15, True),
+        4: ('黑体', 12, True),
     }
     for i in range(1, 5):
         style = styles[f'Heading {i}']
@@ -253,17 +311,19 @@ def set_document_styles(doc):
         style._element.rPr.rFonts.set(qn('w:eastAsia'), east_asia)
         style.font.size = Pt(size)
         style.font.bold = bold
-        style.paragraph_format.line_spacing = 1.5
+        style.paragraph_format.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+        style.paragraph_format.line_spacing = Pt(28)
         style.paragraph_format.first_line_indent = Pt(0)
-        style.paragraph_format.space_before = Pt(6 if i <= 2 else 0)
-        style.paragraph_format.space_after = Pt(6 if i <= 2 else 0)
+        style.paragraph_format.space_before = Pt(8 if i <= 2 else 4)
+        style.paragraph_format.space_after = Pt(6 if i <= 2 else 4)
 
     for style_name in ['List Bullet', 'List Number']:
         style = styles[style_name]
         style.font.name = 'Times New Roman'
-        style._element.rPr.rFonts.set(qn('w:eastAsia'), '宋体')
+        style._element.rPr.rFonts.set(qn('w:eastAsia'), '仿宋')
         style.font.size = Pt(12)
-        style.paragraph_format.line_spacing = 1.5
+        style.paragraph_format.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+        style.paragraph_format.line_spacing = Pt(28)
 
 def _set_rpr_language(rpr):
     lang = rpr.find(qn('w:lang'))
@@ -319,6 +379,8 @@ def set_document_format(doc, project_name):
         section.bottom_margin = Cm(2.54)
         section.left_margin = Cm(3.18)
         section.right_margin = Cm(3.18)
+        section.header_distance = Cm(1.5)
+        section.footer_distance = Cm(1.75)
         
         # 添加页眉
         header = section.header
@@ -326,7 +388,7 @@ def set_document_format(doc, project_name):
         header_para.text = f"{project_name}投标文件"
         header_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
         for run in header_para.runs:
-            apply_run_font(run, east_asia='宋体', size=10.5)
+            apply_run_font(run, east_asia='宋体', size=9)
         
         # 添加页脚
         footer = section.footer
@@ -358,7 +420,7 @@ def set_document_format(doc, project_name):
         footer_para.add_run(" 页")
         footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
         for run in footer_para.runs:
-            apply_run_font(run, east_asia='宋体', size=10.5)
+            apply_run_font(run, east_asia='宋体', size=9)
 
 def process_table(md_table, doc):
     """处理 Markdown 表格"""
@@ -378,12 +440,13 @@ def process_table(md_table, doc):
     header_row = table.rows[0]
     for i, cell in enumerate(header_cells):
         header_row.cells[i].text = clean_formal_bid_text(cell)
+        header_row.cells[i].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
         # 设置表头格式
         for paragraph in header_row.cells[i].paragraphs:
             paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
             for run in paragraph.runs:
                 run.bold = True
-                apply_run_font(run, east_asia='黑体', size=12, bold=True)
+                apply_run_font(run, east_asia='黑体', size=10.5, bold=True)
     
     # 添加数据行
     for line in lines[2:]:  # 跳过表头和分隔行
@@ -392,11 +455,12 @@ def process_table(md_table, doc):
             row = table.add_row()
             for i, cell in enumerate(cells):
                 row.cells[i].text = clean_formal_bid_text(cell)
+                row.cells[i].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
                 # 设置单元格格式
                 for paragraph in row.cells[i].paragraphs:
                     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     for run in paragraph.runs:
-                        apply_run_font(run, east_asia='宋体', size=12)
+                        apply_run_font(run, east_asia='仿宋', size=10.5)
 
 def convert_md_to_word(md_file):
     """将Markdown文件转换为Word文档"""
@@ -464,7 +528,7 @@ def convert_md_to_word(md_file):
                     elif level == 3:
                         apply_run_font(run, east_asia='黑体', size=15, bold=True)
                     else:
-                        apply_run_font(run, east_asia='宋体', size=12, bold=True)
+                        apply_run_font(run, east_asia='黑体', size=12, bold=True)
         
         # 处理列表
         elif line.startswith(('- ', '* ', '+ ')):
@@ -474,7 +538,7 @@ def convert_md_to_word(md_file):
             text = clean_formal_bid_text(re.sub(r'\*\*(.*?)\*\*', r'\1', text))
             p = doc.add_paragraph(style='List Bullet')
             run = p.add_run(text)
-            apply_run_font(run, east_asia='宋体', size=12)
+            apply_run_font(run, east_asia='仿宋', size=12)
             apply_paragraph_format(p, first_line_chars=0)
         
         # 处理数字列表
@@ -485,7 +549,7 @@ def convert_md_to_word(md_file):
             text = clean_formal_bid_text(re.sub(r'\*\*(.*?)\*\*', r'\1', text))
             p = doc.add_paragraph(style='List Number')
             run = p.add_run(text)
-            apply_run_font(run, east_asia='宋体', size=12)
+            apply_run_font(run, east_asia='仿宋', size=12)
             apply_paragraph_format(p, first_line_chars=0)
         
         # 处理普通段落
@@ -494,7 +558,7 @@ def convert_md_to_word(md_file):
             text = clean_formal_bid_text(re.sub(r'\*\*(.*?)\*\*', r'\1', line))
             p = doc.add_paragraph()
             run = p.add_run(text)
-            apply_run_font(run, east_asia='宋体', size=12)
+            apply_run_font(run, east_asia='仿宋', size=12)
             apply_paragraph_format(p)
         
         i += 1

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { Alert, Button, Dropdown, Empty, Input, Modal, Progress, Segmented, Space, Tag, Tooltip, message } from 'antd';
+import { Alert, Button, Drawer, Dropdown, Empty, Input, List, Modal, Progress, Segmented, Space, Tag, Tooltip, message } from 'antd';
 import type { MenuProps } from 'antd';
 import {
   BookOpen,
@@ -27,10 +27,10 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { deleteBidSection, generateBidDocxDownload, getComplianceCheck, getInterpretation, getLatestInterpretation, reorderBidSections, resetBidSectionsGeneration, saveBidSection } from '../../api/bidProject';
+import { deleteBidSection, generateBidDocxDownload, generateComplianceSupplement, getComplianceCheck, getInterpretation, getLatestInterpretation, reorderBidSections, resetBidSectionsGeneration, saveBidSection } from '../../api/bidProject';
 import { BrandMark } from '../../components/common/BrandMark';
 import { TiptapBidEditor } from '../../components/editor/TiptapBidEditor';
-import type { BidOutline, BidOutlineChapter, BidSection, ChapterWritingPlan, ComplianceReport, InterpretationResponse } from '../../types/interpretation';
+import type { BidOutline, BidOutlineChapter, BidSection, ChapterWritingPlan, ComplianceReport, ComplianceRow, InterpretationResponse } from '../../types/interpretation';
 
 type EditorMode = '正文模式' | '目录模式';
 type VolumeType = 'all' | 'technical' | 'business';
@@ -253,6 +253,8 @@ export function BidEditorPage(): JSX.Element {
   const [complianceRefreshing, setComplianceRefreshing] = useState(false);
   const [complianceLastCheckedAt, setComplianceLastCheckedAt] = useState<Date | null>(null);
   const [complianceError, setComplianceError] = useState('');
+  const [complianceDrawerOpen, setComplianceDrawerOpen] = useState(false);
+  const [supplementingRowId, setSupplementingRowId] = useState('');
   const [contentDirty, setContentDirty] = useState(false);
   const [batchGenerating, setBatchGenerating] = useState(false);
   const [batchTasks, setBatchTasks] = useState<Record<string, BatchTask>>({});
@@ -264,13 +266,19 @@ export function BidEditorPage(): JSX.Element {
   const batchCancelRequestedRef = useRef(false);
   const batchAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
 
-  async function refreshComplianceReport(projectId: string, options?: { silent?: boolean }): Promise<void> {
+  function complianceVolumeParam(volume: VolumeType = activeVolume): string | undefined {
+    return volume === 'all' ? undefined : volume;
+  }
+
+  async function refreshComplianceReport(projectId: string, options?: { silent?: boolean; volumeType?: VolumeType }): Promise<void> {
     if (!options?.silent) {
       setComplianceRefreshing(true);
     }
     setComplianceError('');
     try {
-      const report = await getComplianceCheck(projectId);
+      const report = await getComplianceCheck(projectId, {
+        volumeType: complianceVolumeParam(options?.volumeType),
+      });
       setComplianceReport(report);
       setComplianceLastCheckedAt(new Date());
     } catch (error) {
@@ -511,6 +519,62 @@ export function BidEditorPage(): JSX.Element {
   const complianceTimeText = complianceLastCheckedAt
     ? complianceLastCheckedAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
     : '尚未检查';
+  const pendingComplianceRows = (complianceReport?.rows || []).filter(row => row.status !== 'covered');
+
+  function jumpToComplianceRow(row: ComplianceRow): void {
+    const targetId = row.suggestedChapterId || row.matchedChapterId;
+    if (!targetId) {
+      message.info('当前检查项暂无可定位章节，建议先新增补强章节或补强段落。');
+      return;
+    }
+    const target = chapters.find(chapter => chapter.id === targetId);
+    if (!target) {
+      message.warning('建议章节不在当前分册视图中，请切换到全部或对应分册后再定位。');
+      return;
+    }
+    setActiveVolume(deliveryVolumeType(target));
+    setSelectedId(target.id);
+    setMode('正文模式');
+    setComplianceDrawerOpen(false);
+  }
+
+  async function generateSupplementForRow(row: ComplianceRow): Promise<void> {
+    if (!data?.project?.id) {
+      message.warning('当前项目不存在，无法生成补强内容');
+      return;
+    }
+    const targetId = row.suggestedChapterId || row.matchedChapterId;
+    const target = chapters.find(chapter => chapter.id === targetId);
+    if (!target) {
+      message.info('当前检查项暂无可补强章节，请先新增或选择补强章节。');
+      return;
+    }
+
+    setSupplementingRowId(row.id);
+    try {
+      const result = await generateComplianceSupplement(data.project.id, { row, section: target });
+      const supplement = `\n\n### 针对${row.category}的补强响应\n\n${result.content}\n`;
+      const nextSection = {
+        ...target,
+        content: `${target.content || `## ${target.title || '未命名章节'}\n`}${supplement}`,
+        status: 'edited',
+        order_index: chapters.findIndex(item => item.id === target.id) + 1,
+      };
+      const saved = await saveBidSection(data.project.id, nextSection);
+      setChapters(items => normalizeChapterHierarchy(items.map(item => item.id === target.id ? { ...item, ...saved } : item)));
+      setSelectedId(saved.id || target.id);
+      setActiveVolume(deliveryVolumeType(target));
+      setMode('正文模式');
+      setContentDirty(false);
+      setComplianceDrawerOpen(false);
+      message.success('补强内容已生成并保存到建议章节');
+      void refreshComplianceReport(data.project.id, { silent: true, volumeType: deliveryVolumeType(target) });
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSupplementingRowId('');
+    }
+  }
 
   function QualityDashboard(): JSX.Element {
     return (
@@ -518,7 +582,7 @@ export function BidEditorPage(): JSX.Element {
         <div className="quality-dashboard-head">
           <div>
             <span>实时质量仪表盘</span>
-            <strong>{volumeLabel(activeVolume)}</strong>
+            <strong>{complianceSummary.volumeName || volumeLabel(activeVolume)}</strong>
           </div>
           <Space size={8} wrap>
             {contentDirty ? <Tag color="gold">正文已修改，保存后更新响应率</Tag> : null}
@@ -532,6 +596,9 @@ export function BidEditorPage(): JSX.Element {
               onClick={() => data?.project?.id && void refreshComplianceReport(data.project.id)}
             >
               刷新响应率
+            </Button>
+            <Button size="small" icon={<Eye size={14} />} disabled={!pendingComplianceRows.length} onClick={() => setComplianceDrawerOpen(true)}>
+              查看未响应
             </Button>
           </Space>
         </div>
@@ -580,6 +647,70 @@ export function BidEditorPage(): JSX.Element {
           </Tooltip>
         </div>
       </section>
+    );
+  }
+
+  function ComplianceDrawer(): JSX.Element {
+    return (
+      <Drawer
+        title={`未响应与待补强项 - ${complianceSummary.volumeName || volumeLabel(activeVolume)}`}
+        width={680}
+        open={complianceDrawerOpen}
+        onClose={() => setComplianceDrawerOpen(false)}
+      >
+        <Alert
+          type="info"
+          showIcon
+          className="mb-3"
+          message="点击“定位章节”可跳转到建议补强位置。"
+          description="建议章节由系统根据条款关键词、章节标题、章节目标和正文内容推断；若无建议章节，通常需要新增补强章节或段落。"
+        />
+        <List
+          dataSource={pendingComplianceRows}
+          locale={{ emptyText: '当前范围暂无未响应或待补强项' }}
+          renderItem={row => (
+            <List.Item
+              actions={[
+                <Button
+                  key="supplement"
+                  size="small"
+                  type="link"
+                  loading={supplementingRowId === row.id}
+                  disabled={!row.suggestedChapterId && !row.matchedChapterId}
+                  onClick={() => void generateSupplementForRow(row)}
+                >
+                  生成补强
+                </Button>,
+                <Button
+                  key="jump"
+                  size="small"
+                  type="link"
+                  disabled={!row.suggestedChapterId && !row.matchedChapterId}
+                  onClick={() => jumpToComplianceRow(row)}
+                >
+                  定位章节
+                </Button>,
+              ]}
+            >
+              <List.Item.Meta
+                title={(
+                  <Space size={6} wrap>
+                    <Tag color={row.category === '风险项' ? 'red' : row.category === '评分项' ? 'green' : 'blue'}>{row.category}</Tag>
+                    <Tag color={row.status === 'missing' ? 'red' : 'orange'}>{row.status === 'missing' ? '未响应' : '待补强'}</Tag>
+                    <span>{row.content}</span>
+                  </Space>
+                )}
+                description={(
+                  <Space direction="vertical" size={2}>
+                    <span>建议补强章节：{row.suggestedChapter || row.matchedChapter || '需新增补强章节/段落'}</span>
+                    <span>来源页码：{row.sourcePage ? `第 ${row.sourcePage} 页` : '需复核'}</span>
+                  </Space>
+                )}
+              />
+            </List.Item>
+          )}
+        />
+      </Drawer>
     );
   }
 
@@ -909,10 +1040,12 @@ export function BidEditorPage(): JSX.Element {
     }
   }
 
-  async function confirmDownloadWithCompliance(projectId: string): Promise<boolean> {
+  async function confirmDownloadWithCompliance(projectId: string, volumeType?: VolumeType): Promise<boolean> {
     let report: ComplianceReport;
     try {
-      report = await getComplianceCheck(projectId);
+      report = await getComplianceCheck(projectId, {
+        volumeType: complianceVolumeParam(volumeType),
+      });
     } catch (error) {
       message.warning(error instanceof Error ? `条款响应检查失败：${error.message}` : '条款响应检查失败，仍可继续下载。');
       return true;
@@ -925,7 +1058,7 @@ export function BidEditorPage(): JSX.Element {
 
     return new Promise(resolve => {
       Modal.confirm({
-        title: '下载前条款响应检查',
+        title: `下载前条款响应检查：${summary.volumeName || volumeLabel(volumeType || 'all')}`,
         okText: '继续下载',
         cancelText: '返回补强',
         width: 560,
@@ -960,7 +1093,7 @@ export function BidEditorPage(): JSX.Element {
       return;
     }
     if (!sectionId) {
-      const confirmed = await confirmDownloadWithCompliance(data.project.id);
+      const confirmed = await confirmDownloadWithCompliance(data.project.id, activeVolume);
       if (!confirmed) {
         message.info('已取消下载，请先处理条款响应补强项。');
         return;
@@ -1454,7 +1587,7 @@ export function BidEditorPage(): JSX.Element {
     setActiveVolume(value);
     setSelectedId('');
     if (data?.project?.id) {
-      void refreshComplianceReport(data.project.id, { silent: true });
+      void refreshComplianceReport(data.project.id, { silent: true, volumeType: value });
     }
   }
 
@@ -1697,6 +1830,7 @@ export function BidEditorPage(): JSX.Element {
             <span>同时清空全部章节正文内容</span>
           </label>
         </Modal>
+        <ComplianceDrawer />
       </div>
     );
   }
@@ -1881,6 +2015,7 @@ export function BidEditorPage(): JSX.Element {
           <span>Tiptap AI 编辑器</span>
         </footer>
       </main>
+      <ComplianceDrawer />
     </div>
   );
 }

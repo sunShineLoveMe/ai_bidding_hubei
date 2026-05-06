@@ -218,6 +218,8 @@ export interface ComplianceRow {
   status: 'covered' | 'partial' | 'missing';
   matchedChapter?: string | null;
   matchedChapterId?: string | null;
+  suggestedChapter?: string | null;
+  suggestedChapterId?: string | null;
   sourcePage?: number | null;
   sourceText?: string | null;
 }
@@ -228,6 +230,8 @@ export interface ComplianceReport {
   summary: {
     metricName?: string;
     scopeNote?: string;
+    volumeType?: string;
+    volumeName?: string;
     total: number;
     covered: number;
     partial: number;

@@ -1,6 +1,7 @@
 import re
 from typing import Any
 
+from backend.core.bid_volumes import delivery_volume_type, volume_name
 from backend.db.supabase_repo import get_project_interpretation
 
 GENERIC_TERMS = {
@@ -17,6 +18,52 @@ GENERIC_TERMS = {
     "满足要求",
     "按照要求",
     "进行响应",
+}
+TECHNICAL_HINTS = {
+    "施工",
+    "组织设计",
+    "技术",
+    "方案",
+    "工艺",
+    "质量",
+    "安全",
+    "环保",
+    "进度",
+    "资源",
+    "设备",
+    "材料",
+    "人员配置",
+    "临时工程",
+    "测量",
+    "试验",
+    "验收",
+    "防渗",
+    "灌浆",
+    "导流",
+    "水土保持",
+}
+BUSINESS_HINTS = {
+    "资格",
+    "资质",
+    "证书",
+    "业绩",
+    "财务",
+    "信誉",
+    "投标函",
+    "授权",
+    "商务",
+    "合同",
+    "偏离",
+    "承诺",
+    "报价",
+    "保证金",
+    "保函",
+    "营业执照",
+    "安全生产许可证",
+    "项目经理",
+    "附件",
+    "签章",
+    "盖章",
 }
 
 
@@ -82,6 +129,35 @@ def _content_response_matched(target: str, section_text: str, check_type: str) -
     return len(matched) >= 4 and ratio >= 0.18
 
 
+def _section_keyword_score(content: str, section: dict[str, Any], mapped_field: str) -> float:
+    section_text = _section_text(section, mapped_field)
+    if not _meaningful(section_text, 20):
+        return 0
+    terms = _keyword_terms(content)
+    if not terms:
+        return 0
+    matched = [term for term in terms if term in section_text]
+    title = _normalize(section.get("title"))
+    title_hits = sum(1 for term in terms if term in title)
+    return len(matched) + title_hits * 1.5 + (len(matched) / len(terms))
+
+
+def _suggest_section(content: str, sections: list[dict[str, Any]], check_type: str) -> dict[str, Any] | None:
+    mapped_field = {
+        "requirement": "mapped_requirements",
+        "scoring": "mapped_scoring_items",
+        "risk": "mapped_risks",
+    }[check_type]
+    best_section = None
+    best_score = 0.0
+    for section in sections:
+        score = _section_keyword_score(content, section, mapped_field)
+        if score > best_score:
+            best_section = section
+            best_score = score
+    return best_section if best_score >= 2 else None
+
+
 def _match_section(content: str, sections: list[dict[str, Any]], check_type: str) -> dict[str, Any] | None:
     target = _normalize(content)
     mapped_field = {
@@ -105,6 +181,23 @@ def _match_section(content: str, sections: list[dict[str, Any]], check_type: str
     return None
 
 
+def _infer_delivery_volume_for_item(content: str, fallback: str = "business") -> str:
+    normalized = _normalize(content)
+    technical_score = sum(1 for term in TECHNICAL_HINTS if term in normalized)
+    business_score = sum(1 for term in BUSINESS_HINTS if term in normalized)
+    if technical_score > business_score:
+        return "technical"
+    if business_score > technical_score:
+        return "business"
+    return fallback
+
+
+def _row_matches_volume(row: dict[str, Any], volume_type: str | None) -> bool:
+    if volume_type not in {"technical", "business"}:
+        return True
+    return row.get("volumeType") == volume_type
+
+
 def _row(
     *,
     row_id: str,
@@ -115,6 +208,8 @@ def _row(
     section: dict[str, Any] | None,
     source_page: int | None,
     source_text: str | None,
+    volume_type: str,
+    suggested_section: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "id": row_id,
@@ -124,23 +219,37 @@ def _row(
         "status": status,
         "matchedChapter": section.get("title") if section else None,
         "matchedChapterId": section.get("id") if section else None,
+        "suggestedChapter": (suggested_section or section or {}).get("title"),
+        "suggestedChapterId": (suggested_section or section or {}).get("id"),
         "sourcePage": source_page,
         "sourceText": source_text or content,
+        "volumeType": volume_type,
+        "volumeName": volume_name(volume_type),
     }
 
 
-def build_compliance_report(project_id: str) -> dict[str, Any]:
+def build_compliance_report(project_id: str, volume_type: str | None = None) -> dict[str, Any]:
     payload = get_project_interpretation(project_id)
     project = payload.get("project")
     sections = payload.get("sections") or []
+    normalized_volume_type = volume_type if volume_type in {"technical", "business"} else None
+    scoped_sections = [
+        section for section in sections
+        if not normalized_volume_type or delivery_volume_type(section) == normalized_volume_type
+    ]
     rows: list[dict[str, Any]] = []
 
     for item in payload.get("requirements") or []:
         content = item.get("content") or item.get("title") or ""
         if not content:
             continue
-        section = _match_section(content, sections, "requirement")
-        rows.append(_row(
+        section = _match_section(content, scoped_sections, "requirement")
+        suggested_section = section or _suggest_section(content, scoped_sections, "requirement")
+        item_volume_type = delivery_volume_type(section) if section else _infer_delivery_volume_for_item(
+            content,
+            fallback="business" if item.get("requirement_type") in {"qualification", "business", "price"} else "technical",
+        )
+        row = _row(
             row_id=f"requirement-{item.get('id')}",
             category="要求条款",
             importance=item.get("priority") or item.get("requirement_type") or "medium",
@@ -149,14 +258,23 @@ def build_compliance_report(project_id: str) -> dict[str, Any]:
             section=section,
             source_page=item.get("source_page"),
             source_text=item.get("source_text") or item.get("content"),
-        ))
+            volume_type=item_volume_type,
+            suggested_section=suggested_section,
+        )
+        if _row_matches_volume(row, normalized_volume_type):
+            rows.append(row)
 
     for item in payload.get("scoringItems") or []:
         content = item.get("item") or item.get("requirement") or ""
         if not content:
             continue
-        section = _match_section(content, sections, "scoring")
-        rows.append(_row(
+        section = _match_section(content, scoped_sections, "scoring")
+        suggested_section = section or _suggest_section(content, scoped_sections, "scoring")
+        item_volume_type = delivery_volume_type(section) if section else _infer_delivery_volume_for_item(
+            f"{item.get('category') or ''} {content}",
+            fallback="technical",
+        )
+        row = _row(
             row_id=f"scoring-{item.get('id')}",
             category="评分项",
             importance=f"{item.get('score')}分" if item.get("score") else item.get("category") or "medium",
@@ -165,14 +283,20 @@ def build_compliance_report(project_id: str) -> dict[str, Any]:
             section=section,
             source_page=item.get("source_page"),
             source_text=item.get("source_text") or item.get("requirement") or item.get("item"),
-        ))
+            volume_type=item_volume_type,
+            suggested_section=suggested_section,
+        )
+        if _row_matches_volume(row, normalized_volume_type):
+            rows.append(row)
 
     for item in payload.get("risks") or []:
         content = item.get("content") or ""
         if not content:
             continue
-        section = _match_section(content, sections, "risk")
-        rows.append(_row(
+        section = _match_section(content, scoped_sections, "risk")
+        suggested_section = section or _suggest_section(content, scoped_sections, "risk")
+        item_volume_type = delivery_volume_type(section) if section else _infer_delivery_volume_for_item(content, fallback="business")
+        row = _row(
             row_id=f"risk-{item.get('id')}",
             category="风险项",
             importance=item.get("risk_level") or item.get("risk_type") or "medium",
@@ -181,7 +305,11 @@ def build_compliance_report(project_id: str) -> dict[str, Any]:
             section=section,
             source_page=item.get("source_page"),
             source_text=item.get("source_text") or item.get("content"),
-        ))
+            volume_type=item_volume_type,
+            suggested_section=suggested_section,
+        )
+        if _row_matches_volume(row, normalized_volume_type):
+            rows.append(row)
 
     total = len(rows)
     covered = sum(1 for row in rows if row["status"] == "covered")
@@ -200,7 +328,7 @@ def build_compliance_report(project_id: str) -> dict[str, Any]:
         recommendations.append("该指标为条款响应追踪，不等同于最终 Word 合规结论；建议优先补齐未响应的资格要求、否决风险和强制性条款。")
     if partial:
         recommendations.append("评分项中“待补强”的内容建议补充证明材料、页码索引和可量化承诺。")
-    if not sections:
+    if not scoped_sections:
         recommendations.append("当前尚未生成标书章节大纲，请先生成章节大纲后再执行覆盖检查。")
     if not recommendations:
         recommendations.append("当前章节已覆盖主要解析项，建议继续做正文质量、格式和附件完整性复核。")
@@ -210,7 +338,9 @@ def build_compliance_report(project_id: str) -> dict[str, Any]:
         "projectName": project.get("project_name") if project else None,
         "summary": {
             "metricName": "条款响应覆盖率",
-            "scopeNote": "基于招标条款、评分项、风险项与当前章节映射/正文片段的响应追踪结果，不等同于最终 Word 标书合规结论。",
+            "scopeNote": f"当前按{volume_name(normalized_volume_type) if normalized_volume_type else '完整投标文件'}统计；基于招标条款、评分项、风险项与当前章节映射/正文片段的响应追踪结果，不等同于最终 Word 标书合规结论。",
+            "volumeType": normalized_volume_type or "all",
+            "volumeName": volume_name(normalized_volume_type) if normalized_volume_type else "完整投标文件",
             "total": total,
             "covered": covered,
             "partial": partial,
