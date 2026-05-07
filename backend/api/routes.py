@@ -21,7 +21,7 @@ from backend.ai.chapter_planner import generate_bid_outline, stream_bid_outline
 from backend.ai.section_writer import stream_bid_section
 from backend.ai.interpreter import generate_ai_interpretation_report
 from backend.ai.compliance_checker import build_compliance_report
-from backend.db.supabase_repo import create_knowledge_asset, delete_bid_project, delete_bid_section, download_bid_file_to_local, download_knowledge_asset_file_variant, get_bid_file, get_latest_bid_file_for_project, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_file_parse_status, update_bid_section_content, upload_knowledge_asset_file, upsert_bid_section
+from backend.db.supabase_repo import create_knowledge_asset, delete_bid_project, delete_bid_section, download_bid_file_to_local, download_knowledge_asset_file_variant, get_ai_usage_overview, get_bid_file, get_latest_bid_file_for_project, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_file_parse_status, update_bid_section_content, upload_knowledge_asset_file, upsert_bid_section
 from backend.core.llm_json_utils import strip_llm_json
 from backend.core.bid_volumes import delivery_volume_type, section_volume_type, volume_name
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -93,6 +93,22 @@ def get_runtime_settings():
             "supabase_service_role_configured": bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY")),
         }
     }), 200
+
+
+@bp.route('/settings/ai-usage', methods=['GET'])
+def get_ai_usage_settings_summary():
+    try:
+        project_id = request.args.get("projectId")
+        days = int(request.args.get("days") or 30)
+        if project_id:
+            try:
+                uuid.UUID(project_id)
+            except ValueError:
+                return jsonify({'error': 'projectId 不是合法 UUID。'}), 400
+        return jsonify(get_ai_usage_overview(project_id=project_id, days=days)), 200
+    except Exception as e:
+        logging.exception("查询 AI 用量统计失败")
+        return jsonify({'error': f'查询 AI 用量统计失败: {str(e)}'}), 500
 
 
 @bp.route('/settings', methods=['POST'])
@@ -1129,7 +1145,16 @@ def generate_compliance_supplement(project_id):
 """.strip()
 
     try:
-        response = call_dashscope_api([{"role": "user", "content": prompt}], json_mode=False)
+        response = call_dashscope_api(
+            [{"role": "user", "content": prompt}],
+            json_mode=False,
+            usage_context={
+                "project_id": project_id,
+                "section_id": section.get("id"),
+                "stage": "compliance_supplement",
+                "metadata": {"row_id": row.get("id"), "row_status": row.get("status")},
+            },
+        )
         content = response["output"]["choices"][0]["message"]["content"].strip()
         content = clean_formal_bid_text(content)
         if not content:

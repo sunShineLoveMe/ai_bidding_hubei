@@ -109,7 +109,14 @@ def generate_ai_interpretation_report(project_id: str) -> dict[str, Any]:
         raise RuntimeError("当前项目尚无结构化解读数据，请先完成 MinerU 解析和落库。")
 
     prompt = _build_prompt(payload)
-    response = call_dashscope_api([{"role": "user", "content": prompt}], json_mode=True)
+    response = call_dashscope_api(
+        [{"role": "user", "content": prompt}],
+        json_mode=True,
+        usage_context={
+            "project_id": project_id,
+            "stage": "ai_interpretation_report",
+        },
+    )
     content = response["output"]["choices"][0]["message"]["content"]
     ai_report = strip_llm_json(content)
 

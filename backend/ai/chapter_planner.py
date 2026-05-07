@@ -453,7 +453,15 @@ def _generate_outline_from_ai_or_rule(payload: dict[str, Any]) -> dict[str, Any]
     fallback_outline = _build_rule_outline(payload)
     try:
         prompt = _build_prompt(payload)
-        response = call_dashscope_api([{"role": "user", "content": prompt}], json_mode=True)
+        project = payload.get("project") or {}
+        response = call_dashscope_api(
+            [{"role": "user", "content": prompt}],
+            json_mode=True,
+            usage_context={
+                "project_id": project.get("id"),
+                "stage": "bid_outline_generation",
+            },
+        )
         content = response["output"]["choices"][0]["message"]["content"]
         ai_outline = strip_llm_json(content)
     except Exception as exc:

@@ -3,8 +3,10 @@ import chromadb
 from chromadb.utils import embedding_functions
 from openai import OpenAI
 import hashlib
+import time
 from pathlib import Path
 from backend.core.config import get_setting
+from backend.db.supabase_repo import record_ai_usage_log
 
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 
@@ -97,12 +99,27 @@ def split_text(text, max_length=8000):
 
 # 修改向量化函数，支持批量处理分片
 
-def get_embeddings(client, texts, batch_size=10):
+def _openai_usage_to_dict(response):
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return {}
+    if hasattr(usage, "model_dump"):
+        return usage.model_dump()
+    if isinstance(usage, dict):
+        return usage
+    return {
+        "total_tokens": getattr(usage, "total_tokens", 0),
+        "prompt_tokens": getattr(usage, "prompt_tokens", 0),
+    }
+
+
+def get_embeddings(client, texts, batch_size=10, usage_context=None):
     """
     批量生成向量，处理分片后的文本
     支持自动分批，确保不超过模型的批量限制
     """
     all_embeddings = []
+    context = usage_context or {}
     # 按批次处理
     for i in range(0, len(texts), batch_size):
         batch_texts = texts[i:i+batch_size]
@@ -113,10 +130,31 @@ def get_embeddings(client, texts, batch_size=10):
         dimensions = get_setting("embedding_dimensions", 1024)
         if dimensions:
             kwargs["dimensions"] = int(dimensions)
+        started_at = time.time()
         response = client.embeddings.create(**kwargs)
         # 提取当前批次的向量并添加到结果列表
         batch_embeddings = [item.embedding for item in response.data]
         all_embeddings.extend(batch_embeddings)
+        model_name = getattr(response, "model", None) or kwargs["model"]
+        record_ai_usage_log(
+            provider="dashscope",
+            region="cn-beijing",
+            api_protocol="openai_compatible",
+            endpoint="/compatible-mode/v1/embeddings",
+            model=model_name,
+            operation_type="embedding",
+            stage=context.get("stage") or "embedding",
+            project_id=context.get("project_id"),
+            file_id=context.get("file_id"),
+            section_id=context.get("section_id"),
+            batch_id=context.get("batch_id"),
+            latency_ms=int((time.time() - started_at) * 1000),
+            raw_usage=_openai_usage_to_dict(response),
+            input_text="\n".join(str(item) for item in batch_texts),
+            document_count=len(batch_texts),
+            character_count=sum(len(str(item)) for item in batch_texts),
+            metadata={"dimensions": dimensions, "batch_index": i // batch_size, **(context.get("metadata") or {})},
+        )
     
     return all_embeddings
 

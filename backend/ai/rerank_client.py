@@ -1,10 +1,12 @@
 import logging
 import os
+import time
 from typing import Any
 
 import requests
 
 from backend.core.config import get_setting
+from backend.db.supabase_repo import record_ai_usage_log
 
 
 RERANK_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
@@ -16,6 +18,7 @@ def rerank_documents(
     *,
     text_key: str,
     top_n: int | None = None,
+    usage_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Rerank retrieved rows with Alibaba Cloud Model Studio / DashScope.
 
@@ -42,6 +45,8 @@ def rerank_documents(
         "top_n": min(top_n, len(indexed_documents)),
         "return_documents": False,
     }
+    context = usage_context or {}
+    started_at = time.time()
 
     try:
         response = requests.post(
@@ -55,6 +60,27 @@ def rerank_documents(
         )
         response.raise_for_status()
         data = response.json()
+        record_ai_usage_log(
+            provider="dashscope",
+            region="cn-beijing",
+            api_protocol="dashscope",
+            endpoint=RERANK_ENDPOINT,
+            model=payload["model"],
+            operation_type="rerank",
+            stage=context.get("stage") or "rerank",
+            project_id=context.get("project_id"),
+            file_id=context.get("file_id"),
+            section_id=context.get("section_id"),
+            batch_id=context.get("batch_id"),
+            request_id=data.get("request_id"),
+            status_code=response.status_code,
+            latency_ms=int((time.time() - started_at) * 1000),
+            raw_usage=data.get("usage") or {},
+            input_text=f"{query}\n" + "\n".join(payload["documents"]),
+            document_count=len(payload["documents"]),
+            character_count=len(query) + sum(len(item) for item in payload["documents"]),
+            metadata={"top_n": payload["top_n"], "return_documents": False, **(context.get("metadata") or {})},
+        )
         results = data.get("output", {}).get("results") or data.get("results") or []
         reranked: list[dict[str, Any]] = []
         for result in results:
@@ -68,4 +94,24 @@ def rerank_documents(
         return reranked or rows[:top_n]
     except Exception:
         logging.exception("DashScope rerank failed; fallback to vector recall")
+        record_ai_usage_log(
+            provider="dashscope",
+            region="cn-beijing",
+            api_protocol="dashscope",
+            endpoint=RERANK_ENDPOINT,
+            model=payload["model"],
+            operation_type="rerank",
+            stage=context.get("stage") or "rerank",
+            project_id=context.get("project_id"),
+            file_id=context.get("file_id"),
+            section_id=context.get("section_id"),
+            batch_id=context.get("batch_id"),
+            latency_ms=int((time.time() - started_at) * 1000),
+            input_text=f"{query}\n" + "\n".join(payload["documents"]),
+            document_count=len(payload["documents"]),
+            character_count=len(query) + sum(len(item) for item in payload["documents"]),
+            success=False,
+            error_message="DashScope rerank failed; fallback to vector recall",
+            metadata={"top_n": payload["top_n"], **(context.get("metadata") or {})},
+        )
         return rows

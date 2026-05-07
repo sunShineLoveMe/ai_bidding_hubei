@@ -235,14 +235,37 @@ def stream_bid_section(project_id: str, chapter: dict[str, Any]) -> Iterator[dic
 
     emitted = False
     try:
-        for chunk in stream_dashscope_api([{"role": "user", "content": prompt}]):
+        for chunk in stream_dashscope_api(
+            [{"role": "user", "content": prompt}],
+            usage_context={
+                "project_id": project_id,
+                "section_id": chapter.get("id"),
+                "stage": "bid_section_stream",
+                "metadata": {
+                    "chapter_title": chapter.get("title"),
+                    "volume_type": section_volume_type(chapter),
+                },
+            },
+        ):
             emitted = True
             yield {
                 "type": "chunk",
                 "content": chunk,
             }
     except Exception:
-        response = call_dashscope_api([{"role": "user", "content": prompt}], json_mode=False)
+        response = call_dashscope_api(
+            [{"role": "user", "content": prompt}],
+            json_mode=False,
+            usage_context={
+                "project_id": project_id,
+                "section_id": chapter.get("id"),
+                "stage": "bid_section_sync_fallback",
+                "metadata": {
+                    "chapter_title": chapter.get("title"),
+                    "volume_type": section_volume_type(chapter),
+                },
+            },
+        )
         content = response["output"]["choices"][0]["message"]["content"]
         for chunk in _chunk_text(content):
             emitted = True

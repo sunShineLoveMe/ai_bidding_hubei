@@ -8,23 +8,39 @@ from werkzeug.utils import secure_filename
 import logging
 import json
 from backend.core.config import build_enterprise_context, get_setting
+from backend.db.supabase_repo import record_ai_usage_log
+import time
 
 # 通义千问API配置
 DASHSCOPE_API_KEY = os.getenv('DASHSCOPE_API_KEY')
 AI_PROVIDER = os.getenv('AI_PROVIDER', 'dashscope')
 
 
-def call_dashscope_api(messages, model=None, json_mode=True):
+def _messages_text(messages) -> str:
+    return "\n".join(str(message.get("content") or "") for message in (messages or []) if isinstance(message, dict))
+
+
+def _response_content(payload: dict) -> str:
+    try:
+        return payload.get("output", {}).get("choices", [{}])[0].get("message", {}).get("content") or ""
+    except Exception:
+        return ""
+
+
+def call_dashscope_api(messages, model=None, json_mode=True, usage_context=None):
     if not DASHSCOPE_API_KEY:
         raise Exception("DASHSCOPE_API_KEY is not set")
     url = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation'
+    resolved_model = model or get_setting("text_model", "qwen-turbo-latest")
+    context = usage_context or {}
+    started_at = time.time()
     headers = {
         'Authorization': f'Bearer {DASHSCOPE_API_KEY}',
         'Content-Type': 'application/json'
     }
 
     data = {
-        'model': model or get_setting("text_model", "qwen-turbo-latest"),
+        'model': resolved_model,
         'input': {
             'messages': messages
         }
@@ -34,21 +50,66 @@ def call_dashscope_api(messages, model=None, json_mode=True):
     else:
         data['parameters'] = {'result_format': 'message'}
     
-    response = requests.post(
-        url,
-        headers=headers,
-        json=data,
-        timeout=int(get_setting("request_timeout_seconds", 120)),
-    )
-    if response.status_code != 200:
-        error_message = f"Dashscope API Error: Status Code: {response.status_code}, Response Body: {response.text}"
-        logging.error(error_message)
-        print(error_message)
-    response.raise_for_status()
-    return response.json()
+    response = None
+    try:
+        response = requests.post(
+            url,
+            headers=headers,
+            json=data,
+            timeout=int(get_setting("request_timeout_seconds", 120)),
+        )
+        if response.status_code != 200:
+            error_message = f"Dashscope API Error: Status Code: {response.status_code}, Response Body: {response.text}"
+            logging.error(error_message)
+            print(error_message)
+        response.raise_for_status()
+        payload = response.json()
+        record_ai_usage_log(
+            provider="dashscope",
+            region="cn-beijing",
+            api_protocol="dashscope",
+            endpoint=url,
+            model=payload.get("model") or resolved_model,
+            operation_type=context.get("operation_type") or "text_generation",
+            stage=context.get("stage") or ("json_generation" if json_mode else "text_generation"),
+            project_id=context.get("project_id"),
+            file_id=context.get("file_id"),
+            section_id=context.get("section_id"),
+            batch_id=context.get("batch_id"),
+            request_id=payload.get("request_id"),
+            status_code=response.status_code,
+            latency_ms=int((time.time() - started_at) * 1000),
+            raw_usage=payload.get("usage") or {},
+            input_text=_messages_text(messages),
+            output_text=_response_content(payload),
+            metadata={"json_mode": json_mode, **(context.get("metadata") or {})},
+        )
+        return payload
+    except Exception as exc:
+        record_ai_usage_log(
+            provider="dashscope",
+            region="cn-beijing",
+            api_protocol="dashscope",
+            endpoint=url,
+            model=resolved_model,
+            operation_type=context.get("operation_type") or "text_generation",
+            stage=context.get("stage") or ("json_generation" if json_mode else "text_generation"),
+            project_id=context.get("project_id"),
+            file_id=context.get("file_id"),
+            section_id=context.get("section_id"),
+            batch_id=context.get("batch_id"),
+            status_code=response.status_code if response is not None else None,
+            latency_ms=int((time.time() - started_at) * 1000),
+            raw_usage={},
+            input_text=_messages_text(messages),
+            success=False,
+            error_message=str(exc),
+            metadata={"json_mode": json_mode, **(context.get("metadata") or {})},
+        )
+        raise
 
 
-def stream_dashscope_api(messages, model=None):
+def stream_dashscope_api(messages, model=None, usage_context=None):
     """Stream DashScope text generation chunks.
 
     DashScope's SSE response usually emits lines prefixed with "data:".
@@ -59,13 +120,16 @@ def stream_dashscope_api(messages, model=None):
         raise Exception("DASHSCOPE_API_KEY is not set")
 
     url = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation'
+    resolved_model = model or get_setting("text_model", "qwen-turbo-latest")
+    context = usage_context or {}
+    started_at = time.time()
     headers = {
         'Authorization': f'Bearer {DASHSCOPE_API_KEY}',
         'Content-Type': 'application/json',
         'X-DashScope-SSE': 'enable',
     }
     data = {
-        'model': model or get_setting("text_model", "qwen-turbo-latest"),
+        'model': resolved_model,
         'input': {
             'messages': messages
         },
@@ -80,31 +144,87 @@ def stream_dashscope_api(messages, model=None):
         int(get_setting("stream_read_timeout_seconds", 180)),
     )
 
-    with requests.post(url, headers=headers, json=data, stream=True, timeout=timeout) as response:
-        if response.status_code != 200:
-            error_message = f"Dashscope Stream API Error: Status Code: {response.status_code}, Response Body: {response.text}"
-            logging.error(error_message)
-        response.raise_for_status()
-        for raw_line in response.iter_lines(decode_unicode=True):
-            if not raw_line:
-                continue
-            line = raw_line.strip()
-            if line.startswith("data:"):
-                line = line[5:].strip()
-            if not line or line == "[DONE]":
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            message = (
-                payload.get("output", {})
-                .get("choices", [{}])[0]
-                .get("message", {})
-            )
-            content = message.get("content")
-            if content:
-                yield content
+    response = None
+    output_parts = []
+    last_usage = {}
+    last_request_id = None
+    try:
+        with requests.post(url, headers=headers, json=data, stream=True, timeout=timeout) as response:
+            if response.status_code != 200:
+                error_message = f"Dashscope Stream API Error: Status Code: {response.status_code}, Response Body: {response.text}"
+                logging.error(error_message)
+            response.raise_for_status()
+            for raw_line in response.iter_lines(decode_unicode=True):
+                if not raw_line:
+                    continue
+                line = raw_line.strip()
+                if line.startswith("data:"):
+                    line = line[5:].strip()
+                if not line or line == "[DONE]":
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if payload.get("usage"):
+                    last_usage = payload.get("usage") or {}
+                last_request_id = payload.get("request_id") or last_request_id
+                message = (
+                    payload.get("output", {})
+                    .get("choices", [{}])[0]
+                    .get("message", {})
+                )
+                content = message.get("content")
+                if content:
+                    output_parts.append(content)
+                    yield content
+        record_ai_usage_log(
+            provider="dashscope",
+            region="cn-beijing",
+            api_protocol="dashscope",
+            endpoint=url,
+            model=resolved_model,
+            operation_type=context.get("operation_type") or "text_generation",
+            stage=context.get("stage") or "stream_text_generation",
+            project_id=context.get("project_id"),
+            file_id=context.get("file_id"),
+            section_id=context.get("section_id"),
+            batch_id=context.get("batch_id"),
+            request_id=last_request_id,
+            is_stream=True,
+            include_usage=bool(last_usage),
+            status_code=response.status_code if response is not None else None,
+            latency_ms=int((time.time() - started_at) * 1000),
+            raw_usage=last_usage,
+            input_text=_messages_text(messages),
+            output_text="".join(output_parts),
+            metadata=context.get("metadata") or {},
+        )
+    except Exception as exc:
+        record_ai_usage_log(
+            provider="dashscope",
+            region="cn-beijing",
+            api_protocol="dashscope",
+            endpoint=url,
+            model=resolved_model,
+            operation_type=context.get("operation_type") or "text_generation",
+            stage=context.get("stage") or "stream_text_generation",
+            project_id=context.get("project_id"),
+            file_id=context.get("file_id"),
+            section_id=context.get("section_id"),
+            batch_id=context.get("batch_id"),
+            is_stream=True,
+            include_usage=bool(last_usage),
+            status_code=response.status_code if response is not None else None,
+            latency_ms=int((time.time() - started_at) * 1000),
+            raw_usage=last_usage,
+            input_text=_messages_text(messages),
+            output_text="".join(output_parts),
+            success=False,
+            error_message=str(exc),
+            metadata=context.get("metadata") or {},
+        )
+        raise
 
 def generate_bid_section(section_title, section_content, tender_content):
     """按小节生成投标文件内容"""

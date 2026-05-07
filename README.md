@@ -16,7 +16,8 @@
 - 标书编制工作台：分册切换、章节树、目录模式、章节正文生成、章节维护
 - 基于 Tiptap 的 AI 章节编辑器，支持标题、列表、表格和 AI 流式内容实时渲染
 - 企业知识库 RAG 检索问答
-- 系统设置：模型参数、企业画像、文档服务、存储路径和备份策略
+- 系统设置：模型参数、企业画像、文档服务、存储路径、备份策略和 AI 用量成本统计
+- Token 用量与成本统计：记录文本生成、流式生成、Embedding、Rerank 等模型调用用量，支持在设置页查看近 30 天 Token、预估费用和调用明细
 - 水利行业种子知识库采集与入库脚本
 - Word 文档生成与下载，支持完整投标文件和单独分册导出，导出配图优先使用原图并对超大图片做清晰压缩
 - ONLYOFFICE 终稿编辑（可选）
@@ -123,6 +124,61 @@ GET /api/bidding/interpretations/{project_id}/compliance-check
 ```
 
 返回内容包括总检查项、已响应项、待补强项、未响应项、高风险未响应数量、明细列表和处理建议。该指标在界面中命名为“条款响应覆盖率”，用于追踪招标条款、评分项、风险项是否被当前章节映射或正文片段承接，不等同于最终 Word 标书合规结论。接口支持 `volumeType=technical|business` 按技术标或商务标统计；标书工作台顶部会常驻显示实时质量仪表盘，并在进入工作台、生成正文、批量生成、保存章节和切换分册后刷新当前分册的条款响应报告。若下载前仍存在未响应或高风险未响应项，会先按当前下载范围弹窗提示风险，再由用户决定继续下载或返回补强。
+
+## Token 用量与成本统计
+
+系统已接入第一版 AI 用量与成本统计，用于评估单次招标解读、章节大纲生成、章节正文生成、知识库检索增强和智能客服问答等流程的大模型调用成本。
+
+### 功能入口
+
+在前端进入「系统设置 → 用量与成本」可以查看近 30 天统计：
+
+- 调用次数
+- 输入 Token
+- 输出 Token
+- 总 Token
+- 预估费用
+- 最近调用明细，包括调用时间、阶段、模型、操作类型、Token、费用、成功状态和是否为估算值
+
+后端接口：
+
+```text
+GET /api/bidding/settings/ai-usage?days=30
+GET /api/bidding/settings/ai-usage?days=30&projectId=<project_id>
+```
+
+### 当前统计范围
+
+| 调用类型 | 统计来源 | 成本口径 |
+| --- | --- | --- |
+| DashScope 文本生成 | 原生返回的 `usage.input_tokens`、`usage.output_tokens`、`usage.total_tokens` | 按 `ai_model_prices` 中的输入 / 输出单价估算 |
+| DashScope 流式生成 | 优先读取流式 payload 中的 `usage`；缺失时按输入输出文本长度估算 | 估算记录会标记 `usage_estimated=true` |
+| OpenAI-compatible Embedding | `usage.prompt_tokens`、`usage.total_tokens` | 按 Embedding 模型单价估算 |
+| DashScope Rerank | 记录模型、文档数量、字符数和调用状态 | 当前按模型单价表估算，缺失 usage 时保留调用记录 |
+| MinerU OCR | SQL 中预留 `mineru-ocr` 价格配置 | 暂未接入真实页数计费，默认 0 元占位 |
+
+费用统计用于业务核算和客户演示，最终账单仍以模型厂商和 OCR 服务商后台实际计费为准。
+
+### 数据表与脚本
+
+请在 Supabase SQL Editor 执行：
+
+```sql
+-- sql/20260507_create_ai_usage_tracking.sql
+```
+
+该脚本会创建：
+
+| 对象 | 用途 |
+| --- | --- |
+| `ai_model_prices` | 维护模型输入、输出、Embedding、Rerank、OCR 等单价 |
+| `ai_usage_logs` | 记录每一次 AI / OCR 调用的 Token、费用、阶段、项目、章节和原始 usage |
+| `ai_usage_project_summary` | 按项目汇总调用次数、Token 和费用 |
+| `ai_usage_project_stage_summary` | 按项目和业务阶段汇总成本 |
+| `ai_usage_daily_summary` | 按日期汇总全局用量 |
+| `get_ai_usage_project_cost(project_id)` | 项目级成本查询 RPC |
+
+当前默认种子价格覆盖 `qwen-turbo-latest`、`qwen-long-latest`、`text-embedding-v4`、`qwen3-rerank` 和 `mineru-ocr`。如果模型厂商价格发生变化，应优先更新 `ai_model_prices`，历史日志中的 `estimated_cost_cny` 不会自动重算。
 
 ## 技术标 / 商务标分册设计
 
@@ -496,16 +552,20 @@ ONLYOFFICE_JWT_SECRET=replace_with_a_strong_secret
 
 ```sql
 -- sql/20260429_app_users_and_onlyoffice_documents.sql
+-- sql/20260507_create_ai_usage_tracking.sql
 ```
 
-该脚本会创建：
+上述脚本会创建：
 
 | 表 | 用途 |
 | --- | --- |
 | `app_users` | 保存浏览器匿名指纹与单机版操作人员 ID，用于替代早期 SQLite `users` 表 |
 | `onlyoffice_documents` | 保存 OnlyOffice 文档 key、项目 ID、文件路径和回调下载地址，用于保存回调定位目标文件 |
+| `ai_model_prices` | 维护模型和 OCR 单价，供 Token 用量成本估算使用 |
+| `ai_usage_logs` | 保存 AI 调用明细，包括项目、阶段、模型、Token、费用和原始 usage |
+| `ai_usage_project_summary` / `ai_usage_daily_summary` | 汇总项目级和日期级调用成本，供设置页面展示 |
 
-如果该脚本尚未执行，系统会尽量回退 SQLite；但推荐新部署直接执行 SQL，确保主链路统一到 Supabase。
+如果 `20260429` 脚本尚未执行，系统会尽量回退 SQLite；但推荐新部署直接执行 SQL，确保主链路统一到 Supabase。`20260507` 脚本是 Token 用量与成本统计的必需表结构，未执行时设置页「用量与成本」无法展示真实统计。
 
 ### 4. 启动后端
 
@@ -785,6 +845,7 @@ docker run -d \
 - [x] 增加章节生成状态重置能力
 - [x] 增加图文并茂 DOCX 导出基础能力
 - [x] 企业资信库和产品库图片上传支持原图 + WebP 缩略图双文件策略，详情预览优先加载缩略图，点击放大再读取原图
+- [x] 增加 AI Token 用量与成本统计：Supabase 记录调用明细，系统设置页展示近 30 天 Token、预估费用和最近调用日志
 
 ## License
 

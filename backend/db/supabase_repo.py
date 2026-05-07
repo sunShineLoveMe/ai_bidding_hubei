@@ -4,6 +4,7 @@ import mimetypes
 import os
 import time
 import uuid
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -114,6 +115,237 @@ def get_latest_bid_file_for_project(project_id: str) -> dict[str, Any] | None:
     return response.data[0] if response.data else None
 
 
+def _as_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _normalize_usage(raw_usage: Any) -> dict[str, Any]:
+    usage = raw_usage if isinstance(raw_usage, dict) else {}
+    prompt_details = usage.get("prompt_tokens_details") or usage.get("input_tokens_details") or {}
+    completion_details = usage.get("completion_tokens_details") or usage.get("output_tokens_details") or {}
+    prompt_tokens = _as_int(usage.get("prompt_tokens") or usage.get("input_tokens"))
+    completion_tokens = _as_int(usage.get("completion_tokens") or usage.get("output_tokens"))
+    input_tokens = _as_int(usage.get("input_tokens") or usage.get("prompt_tokens"))
+    output_tokens = _as_int(usage.get("output_tokens") or usage.get("completion_tokens"))
+    total_tokens = _as_int(usage.get("total_tokens"))
+    if not total_tokens:
+        total_tokens = input_tokens + output_tokens
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "cached_tokens": _as_int(prompt_details.get("cached_tokens") if isinstance(prompt_details, dict) else 0),
+        "reasoning_tokens": _as_int(completion_details.get("reasoning_tokens") if isinstance(completion_details, dict) else 0),
+        "image_tokens": _as_int(usage.get("image_tokens")),
+        "video_tokens": _as_int(usage.get("video_tokens")),
+        "audio_tokens": _as_int(usage.get("audio_tokens")),
+        "prompt_tokens_details": prompt_details if isinstance(prompt_details, dict) else {},
+        "completion_tokens_details": completion_details if isinstance(completion_details, dict) else {},
+        "raw_usage": usage,
+    }
+
+
+def _estimate_tokens_from_text(text: str) -> int:
+    value = str(text or "")
+    # 粗估：中文字符约 1 token，英文按 4 字符约 1 token。仅用于厂商未返回 usage 的兜底。
+    cjk = sum(1 for char in value if "\u4e00" <= char <= "\u9fff")
+    other = max(len(value) - cjk, 0)
+    return max(1, int(cjk * 1.2 + other / 4)) if value else 0
+
+
+def _lookup_ai_price(provider: str, region: str | None, model: str | None, operation_type: str) -> dict[str, Any] | None:
+    if not model:
+        return None
+    client = get_supabase_client()
+    query = (
+        client.table("ai_model_prices")
+        .select("*")
+        .eq("provider", provider)
+        .eq("model", model)
+        .eq("operation_type", operation_type)
+        .eq("active", True)
+        .order("effective_from", desc=True)
+        .limit(1)
+    )
+    if region:
+        query = query.eq("region", region)
+    response = query.execute()
+    if response.data:
+        return response.data[0]
+    response = (
+        client.table("ai_model_prices")
+        .select("*")
+        .eq("provider", provider)
+        .eq("model", model)
+        .eq("active", True)
+        .order("effective_from", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return response.data[0] if response.data else None
+
+
+def record_ai_usage_log(
+    *,
+    provider: str = "dashscope",
+    region: str | None = "cn-beijing",
+    api_protocol: str = "dashscope",
+    operation_type: str,
+    stage: str,
+    model: str | None = None,
+    project_id: str | None = None,
+    file_id: str | None = None,
+    section_id: str | None = None,
+    user_id: str | None = None,
+    batch_id: str | None = None,
+    request_id: str | None = None,
+    endpoint: str | None = None,
+    is_stream: bool = False,
+    include_usage: bool = False,
+    success: bool = True,
+    status_code: int | None = None,
+    latency_ms: int | None = None,
+    raw_usage: dict[str, Any] | None = None,
+    input_text: str | None = None,
+    output_text: str | None = None,
+    request_count: int = 1,
+    page_count: int = 0,
+    document_count: int = 0,
+    character_count: int = 0,
+    error_code: str | None = None,
+    error_message: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    try:
+        normalized = _normalize_usage(raw_usage or {})
+        usage_estimated = False
+        if not normalized["total_tokens"] and (input_text or output_text):
+            usage_estimated = True
+            normalized["input_tokens"] = _estimate_tokens_from_text(input_text or "")
+            normalized["output_tokens"] = _estimate_tokens_from_text(output_text or "")
+            normalized["prompt_tokens"] = normalized["input_tokens"]
+            normalized["completion_tokens"] = normalized["output_tokens"]
+            normalized["total_tokens"] = normalized["input_tokens"] + normalized["output_tokens"]
+
+        price = _lookup_ai_price(provider, region, model, operation_type)
+        currency = (price or {}).get("currency") or "USD"
+        input_cost = 0.0
+        output_cost = 0.0
+        other_cost = 0.0
+        if price:
+            billing_unit = price.get("billing_unit")
+            input_rate = float(price.get("input_price_per_million") or 0)
+            output_rate = float(price.get("output_price_per_million") or 0)
+            if billing_unit in {"token_pair", "input_token"}:
+                input_cost = normalized["input_tokens"] / 1_000_000 * input_rate
+            if billing_unit in {"token_pair", "output_token"}:
+                output_cost = normalized["output_tokens"] / 1_000_000 * output_rate
+            if billing_unit == "page":
+                other_cost = page_count * float(price.get("price_per_page") or 0)
+            if billing_unit == "request":
+                other_cost = request_count * float(price.get("price_per_request") or 0)
+
+        payload = {
+            "provider": provider,
+            "region": region,
+            "api_protocol": api_protocol,
+            "endpoint": endpoint,
+            "model": model,
+            "operation_type": operation_type,
+            "stage": stage,
+            "project_id": project_id,
+            "file_id": file_id,
+            "section_id": section_id,
+            "user_id": user_id,
+            "batch_id": batch_id,
+            "request_id": request_id,
+            "is_stream": is_stream,
+            "include_usage": include_usage,
+            "success": success,
+            "status_code": status_code,
+            "latency_ms": latency_ms,
+            **normalized,
+            "request_count": request_count,
+            "page_count": page_count,
+            "document_count": document_count,
+            "character_count": character_count,
+            "currency": currency,
+            "input_cost": input_cost,
+            "output_cost": output_cost,
+            "other_cost": other_cost,
+            "total_cost": input_cost + output_cost + other_cost,
+            "usage_estimated": usage_estimated,
+            "cost_estimated": True,
+            "error_code": error_code,
+            "error_message": str(error_message or "")[:1000] or None,
+            "metadata": metadata or {},
+        }
+        clean_payload = {key: value for key, value in payload.items() if value is not None}
+        get_supabase_client().table("ai_usage_logs").insert(clean_payload).execute()
+    except Exception:
+        logging.exception("记录 AI 用量失败")
+
+
+def get_ai_usage_overview(project_id: str | None = None, days: int = 30) -> dict[str, Any]:
+    client = get_supabase_client()
+    if project_id:
+        project_response = client.rpc("get_ai_usage_project_cost", {"p_project_id": project_id}).execute()
+        stages_response = (
+            client.table("ai_usage_project_stage_summary")
+            .select("*")
+            .eq("project_id", project_id)
+            .order("total_cost", desc=True)
+            .execute()
+        )
+        logs_response = (
+            client.table("ai_usage_logs")
+            .select("id,project_id,section_id,provider,model,operation_type,stage,input_tokens,output_tokens,total_tokens,total_cost,currency,success,usage_estimated,created_at")
+            .eq("project_id", project_id)
+            .order("created_at", desc=True)
+            .limit(80)
+            .execute()
+        )
+        return {
+            "summary": (project_response.data or [{}])[0] if project_response.data else {},
+            "stages": stages_response.data or [],
+            "recentLogs": logs_response.data or [],
+        }
+
+    since = (date.today() - timedelta(days=max(1, min(days, 365)))).isoformat()
+    daily_response = (
+        client.table("ai_usage_daily_summary")
+        .select("*")
+        .gte("usage_date", since)
+        .order("usage_date", desc=True)
+        .execute()
+    )
+    logs_response = (
+        client.table("ai_usage_logs")
+        .select("id,project_id,section_id,provider,model,operation_type,stage,input_tokens,output_tokens,total_tokens,total_cost,currency,success,usage_estimated,created_at")
+        .order("created_at", desc=True)
+        .limit(80)
+        .execute()
+    )
+    rows = logs_response.data or []
+    daily_rows = daily_response.data or []
+    return {
+        "summary": {
+            "call_count": sum(_as_int(row.get("call_count")) for row in daily_rows),
+            "input_tokens": sum(_as_int(row.get("input_tokens")) for row in daily_rows),
+            "output_tokens": sum(_as_int(row.get("output_tokens")) for row in daily_rows),
+            "total_tokens": sum(_as_int(row.get("total_tokens")) for row in daily_rows),
+            "total_cost": sum(float(row.get("total_cost") or 0) for row in daily_rows),
+        },
+        "daily": daily_rows,
+        "recentLogs": rows,
+    }
+
+
 def download_bid_file_to_local(file_record: dict[str, Any], target_dir: str | Path) -> Path:
     bucket = file_record.get("bucket")
     object_path = file_record.get("object_path")
@@ -140,6 +372,7 @@ def download_bid_file_to_local(file_record: dict[str, Any], target_dir: str | Pa
 def delete_bid_project(project_id: str) -> None:
     client = get_supabase_client()
     for table in [
+        "ai_usage_logs",
         "bid_sections",
         "bid_chapter_suggestions",
         "bid_scoring_items",
