@@ -15,7 +15,7 @@ from docx.oxml import OxmlElement
 import shutil
 import uuid
 import requests
-from urllib.parse import urlparse, unquote
+from urllib.parse import parse_qs, urlparse, unquote
 
 try:
     from PIL import Image, ImageOps
@@ -45,16 +45,38 @@ FORMAL_TEXT_SYMBOL_RE = re.compile(
     "]"
 )
 FORMAL_TEXT_CONTROL_RE = re.compile(r"[\u200b\u200c\u200d\ufe0e\ufe0f]")
+FORMAL_BID_GENERATION_NOTE_RE = re.compile(
+    r"[（(]\s*本章(?:节)?正文[^）)]{0,120}?(?:目标字数|结构完整|可用于|直接插入|共计约)[^）)]{0,240}?[）)]",
+    re.S,
+)
+FORMAL_VOLUME_HEADING_RE = re.compile(
+    r"^(?:第[一二三四五六七八九十]+[册卷篇部分][：:、.\s]*)?"
+    r"(?:技术|商务|资格|报价|附件|投标|响应|投标资格|资格审查)"
+    r".{0,16}(?:文件|分册|响应|资料|清单)$"
+)
 
 
 def clean_formal_bid_text(text):
     """Remove emoji/decorative symbols that are unsuitable for formal bid DOCX output."""
     if text is None:
         return ""
-    cleaned = FORMAL_TEXT_CONTROL_RE.sub("", str(text))
+    cleaned = FORMAL_BID_GENERATION_NOTE_RE.sub("", str(text))
+    cleaned = FORMAL_TEXT_CONTROL_RE.sub("", cleaned)
     cleaned = FORMAL_TEXT_SYMBOL_RE.sub("", cleaned)
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     return cleaned.strip()
+
+
+def should_start_heading_on_new_page(level: int, text: str, heading_count: int) -> bool:
+    """Formal bid exports should start major volumes/chapters on a fresh page."""
+    if heading_count <= 0:
+        return False
+    clean_text = clean_formal_bid_text(text)
+    if level == 1:
+        return True
+    if level == 2 and FORMAL_VOLUME_HEADING_RE.match(clean_text):
+        return True
+    return False
 
 
 def apply_run_font(run, *, east_asia='宋体', latin='Times New Roman', size=None, bold=None):
@@ -80,6 +102,16 @@ def apply_paragraph_format(paragraph, *, first_line_chars=2, line_spacing=28, sp
     fmt.line_spacing = Pt(line_spacing)
     fmt.space_before = Pt(space_before)
     fmt.space_after = Pt(space_after)
+
+
+def apply_image_paragraph_format(paragraph):
+    """Prevent formal fixed body line spacing from clipping inline images in Word."""
+    fmt = paragraph.paragraph_format
+    fmt.first_line_indent = Pt(0)
+    fmt.line_spacing_rule = WD_LINE_SPACING.SINGLE
+    fmt.line_spacing = 1.0
+    fmt.space_before = Pt(6)
+    fmt.space_after = Pt(6)
 
 def convert_mermaid_to_image(mermaid_code):
     """将 Mermaid 代码转换为图片"""
@@ -154,6 +186,7 @@ def process_mermaid(doc, mermaid_code):
             # 设置图片居中
             last_paragraph = doc.paragraphs[-1]
             last_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            apply_image_paragraph_format(last_paragraph)
             
             # 添加图片说明（可选）
             caption = doc.add_paragraph()
@@ -184,12 +217,52 @@ def _image_suffix_from_response(image_ref, response=None):
     return '.png'
 
 
+def _resolve_api_asset_image(image_ref):
+    parsed = urlparse(image_ref)
+    match = re.match(r"^/api/(?:bidding/)?knowledge/assets/([^/]+)/file$", parsed.path)
+    if not match:
+        return None
+
+    asset_id = unquote(match.group(1))
+    variant = (parse_qs(parsed.query).get("variant") or ["original"])[0] or "original"
+    from backend.db.supabase_repo import download_knowledge_asset_file_variant
+
+    result = download_knowledge_asset_file_variant(asset_id, variant=variant)
+    if not result:
+        return None
+    asset, data = result
+    if len(data) > MARKDOWN_IMAGE_MAX_BYTES:
+        raise ValueError(f"图片超过大小限制: {image_ref}")
+
+    mime_type = str(asset.get("mime_type") or "").lower()
+    file_suffix = Path(str(asset.get("file_name") or "")).suffix.lower()
+    suffix = file_suffix if file_suffix in {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'} else ".png"
+    if not file_suffix:
+        if "jpeg" in mime_type or "jpg" in mime_type:
+            suffix = ".jpg"
+        elif "webp" in mime_type:
+            suffix = ".webp"
+        elif "gif" in mime_type:
+            suffix = ".gif"
+        elif "bmp" in mime_type:
+            suffix = ".bmp"
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp:
+        temp.write(data)
+        return temp.name, True
+
+
 def _resolve_markdown_image(image_ref, image_cache=None):
     image_ref = (image_ref or '').strip().strip('"').strip("'")
     if not image_ref:
         return None, False
     if image_cache is not None and image_ref in image_cache:
         return image_cache[image_ref]
+    api_image = _resolve_api_asset_image(image_ref)
+    if api_image:
+        if image_cache is not None:
+            image_cache[image_ref] = api_image
+        return api_image
     if image_ref.startswith(('http://', 'https://')):
         response = requests.get(
             image_ref,
@@ -276,6 +349,7 @@ def process_markdown_image(doc, alt_text, image_ref, image_cache=None):
         doc.add_picture(prepared_path, width=Inches(5.8))
         image_para = doc.paragraphs[-1]
         image_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        apply_image_paragraph_format(image_para)
 
         return True
     except Exception as e:
@@ -483,6 +557,7 @@ def convert_md_to_word(md_file):
     i = 0
     image_cache = {}
     inserted_image_count = 0
+    heading_count = 0
     while i < len(lines):
         line = lines[i].strip()
         if re.match(r'^(-{3,}|\*{3,}|_{3,})$', line):
@@ -511,6 +586,8 @@ def convert_md_to_word(md_file):
             level = len(re.match(r'^#+', line).group())
             # 移除标题中的加粗标记
             text = clean_formal_bid_text(re.sub(r'\*\*(.*?)\*\*', r'\1', line.lstrip('#').strip()))
+            if should_start_heading_on_new_page(level, text, heading_count):
+                doc.add_page_break()
             if level == 1:
                 # 一级标题作为文档标题
                 p = doc.add_heading(text, level=0)
@@ -529,6 +606,7 @@ def convert_md_to_word(md_file):
                         apply_run_font(run, east_asia='黑体', size=15, bold=True)
                     else:
                         apply_run_font(run, east_asia='黑体', size=12, bold=True)
+            heading_count += 1
         
         # 处理列表
         elif line.startswith(('- ', '* ', '+ ')):

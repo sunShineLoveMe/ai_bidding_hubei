@@ -359,7 +359,7 @@ def _asset_image_ref(asset: dict) -> str:
 
     asset_id = str(asset.get("id") or "").strip()
     if asset_id:
-        return f"{get_backend_self_base_url()}/api/bidding/knowledge/assets/{quote(asset_id)}/file?variant=original"
+        return f"/api/bidding/knowledge/assets/{quote(asset_id)}/file?variant=original"
 
     public_url = str(asset.get("public_url") or "").strip()
     if public_url.startswith(("http://", "https://")):

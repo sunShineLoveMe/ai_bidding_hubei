@@ -1,44 +1,35 @@
-# Task Plan: 企业资信库/产品库图片批量导入
+# Task Plan: Word 图片显示不完整修复
 
 ## Goal
-将 `assets/credit_database` 和 `assets/product_database` 中的脱敏合成图片批量导入知识库，并补充结构化属性、语义标签、适用章节和检索文本，支撑后续标书编制和智能客服图文检索。
+修复下载后的标书 DOCX 中图片只显示局部、被裁成横条的问题。
 
-## Scope
-- 企业资信库：证照、人员证书、业绩材料、商务响应模板等脱敏样张。
-- 产品库：水利施工设备、检测仪器、安全文明施工设施、技术标图表模板等白底展示图。
-- 导入目标：`knowledge_assets` 表和 Supabase Storage。
+## Root Cause
+- Word 正文样式使用固定 28 磅行距。
+- `python-docx` 插入图片时，图片作为行内对象放在普通段落里。
+- 图片段落继承固定行距后，Word 会按固定行高裁剪图片显示区域，导致只露出一部分图片。
 
 ## Phases
-- [x] Phase 1: 梳理现有知识库上传和检索链路
-- [x] Phase 2: 编写批量导入脚本，支持 dry-run、去重、Storage 上传、元数据入库和 embedding
-- [x] Phase 3: 按文件名和 prompt 语义补齐资信库、产品库分类规则
-- [x] Phase 4: 实际导入 31 张图片资产，并生成导入报告
-- [x] Phase 5: 针对新增 8 张产品图校准类别、标签和适用章节
-- [x] Phase 6: 编译校验和 dry-run 校验
+- [x] Phase 1: 定位 DOCX 图片插入逻辑
+- [x] Phase 2: 为图片段落增加独立段落格式
+- [x] Phase 3: 同步处理 Markdown 图片和 Mermaid 图片段落
+- [x] Phase 4: 编译和临时 DOCX 样例验证
 
-## Commands
+## Files Changed
+- `backend/export/md_to_word.py`
+
+## Decisions Made
+- 正文段落继续保留正式标书所需的固定行距。
+- 图片段落单独使用单倍行距、无首行缩进、上下保留少量间距，避免图片被 Word 裁剪。
+- 图片宽度仍按页面宽度控制，不改变原始图片纵横比。
+
+## Verification
 ```bash
-python scripts/batch_import_mock_assets.py --dry-run
-python scripts/batch_import_mock_assets.py
-python scripts/batch_import_mock_assets.py --no-embedding
+python -m py_compile backend/export/md_to_word.py
 ```
 
-## Result
-- 已导入总数：31 张。
-- 企业资信库：23 张。
-- 产品库：8 张。
-- 导入报告：`outputs/mock_asset_import_report.json`。
-- 已校准产品库重点分类：
-  - `主要机械设备和劳动力配置计划模板（脱敏样张）` -> `技术标图表模板`
-  - `水利工程安全文明施工标准化设施产品展示图` -> `安全文明施工设施`
+临时 DOCX 样例验证结果：
+- 文档中存在 `<w:drawing>` 图片对象。
+- 图片所在段落使用 `w:lineRule="auto"`，不再继承固定 `exact` 行距。
 
-## Acceptance Criteria
-- [x] 不需要逐张手工上传图片。
-- [x] 每张图片有标题、分类、标签、适用章节、推荐分册、检索文本。
-- [x] 产品库白底设备/图表类图片可按设备、参数、施工章节和技术标场景检索。
-- [x] 资信库脱敏样张明确标注为测试占位，避免误作正式投标原件。
-- [x] 后续新增图片可重复运行脚本，默认跳过已存在资产。
-
-## Notes
-- 正式企业资料上线前，应将脱敏样张替换为真实证照、证书、业绩和产品资料，并由业务人员复核。
-- 若只想补充结构化资料、不生成向量，可使用 `--no-embedding`。
+## Status
+**Complete** - Word 图片段落裁剪问题已修复，需重新导出标书后生效。

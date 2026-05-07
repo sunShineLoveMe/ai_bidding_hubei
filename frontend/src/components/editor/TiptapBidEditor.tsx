@@ -58,6 +58,21 @@ function splitTableRow(line: string): string[] {
     .map(cell => cell.trim());
 }
 
+function normalizeImageSrc(value: string): string {
+  const raw = (value || '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('/api/')) return raw;
+  try {
+    const url = new URL(raw);
+    if (url.pathname.startsWith('/api/')) {
+      return `${url.pathname}${url.search}${url.hash}`;
+    }
+  } catch {
+    return raw;
+  }
+  return raw;
+}
+
 const BidImage = Node.create({
   name: 'bidImage',
   group: 'block',
@@ -136,7 +151,7 @@ function markdownToHtml(markdown: string): string {
     const image = /^!\[(.*?)\]\((.*?)\)\s*$/.exec(trimmed);
     if (image) {
       closeParagraph(paragraph);
-      html.push(`<img data-bid-image="true" src="${escapeHtml(image[2])}" alt="${escapeHtml(image[1] || '标书配图')}" />`);
+      html.push(`<img data-bid-image="true" src="${escapeHtml(normalizeImageSrc(image[2]))}" alt="${escapeHtml(image[1] || '标书配图')}" />`);
       i += 1;
       continue;
     }
@@ -215,7 +230,7 @@ function nodeToMarkdown(node: JSONContent): string {
     return nodeText(node);
   }
   if (node.type === 'bidImage') {
-    const src = String(node.attrs?.src || '').trim();
+    const src = normalizeImageSrc(String(node.attrs?.src || ''));
     const alt = String(node.attrs?.alt || '标书配图').trim();
     return src ? `![${alt}](${src})` : '';
   }
