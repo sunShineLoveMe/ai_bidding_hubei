@@ -1,5 +1,5 @@
-import { Alert, Button, Form, Input, InputNumber, Select, Switch, Table, Tabs, Tag, message } from 'antd';
-import { Bot, Building2, Coins, Database, FileText, HardDrive, KeyRound, RotateCcw, Save, ServerCog } from 'lucide-react';
+import { Button, Form, Input, InputNumber, Select, Switch, Tabs, Tag, message } from 'antd';
+import { Bot, Building2, Database, FileText, HardDrive, KeyRound, RotateCcw, Save, ServerCog } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { apiClient } from '../../api/client';
 import { MetricCards } from '../../components/common/MetricCards';
@@ -38,50 +38,11 @@ interface RuntimeSettings {
   enterprise_response_style: string;
 }
 
-interface UsageSummary {
-  call_count?: number;
-  input_tokens?: number;
-  output_tokens?: number;
-  total_tokens?: number;
-  total_cost?: number;
-}
-
-interface UsageLog {
-  id: string;
-  provider: string;
-  model: string;
-  operation_type: string;
-  stage: string;
-  input_tokens: number;
-  output_tokens: number;
-  total_tokens: number;
-  total_cost: number;
-  currency: string;
-  success: boolean;
-  usage_estimated: boolean;
-  created_at: string;
-}
-
-interface UsageOverview {
-  summary?: UsageSummary;
-  recentLogs?: UsageLog[];
-}
-
-function formatNumber(value?: number): string {
-  return Number(value || 0).toLocaleString('zh-CN');
-}
-
-function formatCost(value?: number, currency = 'USD'): string {
-  return `${currency} ${Number(value || 0).toFixed(6)}`;
-}
-
 export function SettingsPage(): JSX.Element {
   const [form] = Form.useForm<RuntimeSettings>();
   const [defaults, setDefaults] = useState<RuntimeSettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [usageLoading, setUsageLoading] = useState(false);
-  const [usageOverview, setUsageOverview] = useState<UsageOverview>({});
 
   const fetchSettings = async () => {
     try {
@@ -93,18 +54,6 @@ export function SettingsPage(): JSX.Element {
       message.error(error.message || '读取系统设置失败');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const fetchUsageOverview = async () => {
-    try {
-      setUsageLoading(true);
-      const { data } = await apiClient.get<UsageOverview>('/api/bidding/settings/ai-usage?days=30', { skipGlobalLoading: true });
-      setUsageOverview(data || {});
-    } catch (error: any) {
-      message.error(error.message || '读取 AI 用量统计失败');
-    } finally {
-      setUsageLoading(false);
     }
   };
 
@@ -131,7 +80,6 @@ export function SettingsPage(): JSX.Element {
 
   useEffect(() => {
     fetchSettings();
-    fetchUsageOverview();
   }, []);
 
   return (
@@ -159,88 +107,6 @@ export function SettingsPage(): JSX.Element {
           className="settings-tabs"
           defaultActiveKey="model"
           items={[
-            {
-              key: 'usage',
-              label: '用量与成本',
-              children: (
-                <div className="space-y-4">
-                  <MetricCards
-                    items={[
-                      { title: '近 30 天调用', value: formatNumber(usageOverview.summary?.call_count), desc: '模型 / 向量 / 重排', icon: Bot, colorClass: 'bg-blue-50 text-blue-600' },
-                      { title: '输入 Token', value: formatNumber(usageOverview.summary?.input_tokens), desc: 'Prompt / Embedding 输入', icon: FileText, colorClass: 'bg-emerald-50 text-emerald-600' },
-                      { title: '输出 Token', value: formatNumber(usageOverview.summary?.output_tokens), desc: '模型生成正文', icon: Database, colorClass: 'bg-violet-50 text-violet-600' },
-                      { title: '预估费用', value: formatCost(usageOverview.summary?.total_cost), desc: '以厂商账单为准', icon: Coins, colorClass: 'bg-amber-50 text-amber-600' },
-                    ]}
-                  />
-                  <Alert
-                    showIcon
-                    type="info"
-                    message="费用统计说明"
-                    description="本页按已落库的模型调用明细和当前价格配置估算成本。DashScope 原生接口优先使用 input_tokens/output_tokens；OpenAI 兼容接口使用 prompt_tokens/completion_tokens；流式接口若厂商未返回 usage，会按字符数估算并标记。最终费用以模型厂商账单为准。"
-                  />
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="text-base font-bold text-slate-900">最近调用明细</h3>
-                      <p className="text-sm text-slate-500">用于排查单次标书生成中各阶段的 token 与成本来源。</p>
-                    </div>
-                    <Button icon={<RotateCcw size={15} />} loading={usageLoading} onClick={fetchUsageOverview}>刷新用量</Button>
-                  </div>
-                  <Table<UsageLog>
-                    rowKey="id"
-                    size="small"
-                    loading={usageLoading}
-                    dataSource={usageOverview.recentLogs || []}
-                    pagination={{ pageSize: 10 }}
-                    columns={[
-                      {
-                        title: '时间',
-                        dataIndex: 'created_at',
-                        width: 170,
-                        render: value => value ? new Date(value).toLocaleString('zh-CN') : '-',
-                      },
-                      {
-                        title: '阶段',
-                        dataIndex: 'stage',
-                        width: 180,
-                      },
-                      {
-                        title: '模型',
-                        dataIndex: 'model',
-                        width: 170,
-                        render: (_, record) => (
-                          <div className="flex flex-col">
-                            <span className="font-semibold text-slate-800">{record.model || '-'}</span>
-                            <span className="text-xs text-slate-500">{record.operation_type}</span>
-                          </div>
-                        ),
-                      },
-                      {
-                        title: 'Token',
-                        width: 180,
-                        render: (_, record) => (
-                          <span>{formatNumber(record.total_tokens)} <span className="text-slate-400">({formatNumber(record.input_tokens)} / {formatNumber(record.output_tokens)})</span></span>
-                        ),
-                      },
-                      {
-                        title: '费用',
-                        width: 130,
-                        render: (_, record) => formatCost(record.total_cost, record.currency || 'USD'),
-                      },
-                      {
-                        title: '状态',
-                        width: 120,
-                        render: (_, record) => (
-                          <div className="flex gap-1">
-                            <Tag color={record.success ? 'green' : 'red'}>{record.success ? '成功' : '失败'}</Tag>
-                            {record.usage_estimated ? <Tag color="orange">估算</Tag> : null}
-                          </div>
-                        ),
-                      },
-                    ]}
-                  />
-                </div>
-              ),
-            },
             {
               key: 'model',
               label: '模型配置',

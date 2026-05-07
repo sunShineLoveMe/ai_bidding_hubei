@@ -1,5 +1,5 @@
 import type { PropsWithChildren } from 'react';
-import { BookOpen, Box, FileClock, FileSearch, Home, Settings, ShieldCheck, Sparkles } from 'lucide-react';
+import { BookOpen, Box, CircleDollarSign, FileClock, FileSearch, Home, Settings, ShieldCheck, Sparkles } from 'lucide-react';
 import { Button, Tag } from 'antd';
 import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -14,6 +14,7 @@ const navItems = [
   { path: '/knowledge', label: '企业知识库', icon: BookOpen },
   { path: '/qualification', label: '企业资信库', icon: ShieldCheck },
   { path: '/products', label: '企业产品库', icon: Box },
+  { path: '/usage-cost', label: '用量与成本', icon: CircleDollarSign },
   { path: '/history', label: '历史记录', icon: FileClock },
 ] as const;
 

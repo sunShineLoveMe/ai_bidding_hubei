@@ -10,6 +10,7 @@ import { ProductBasePage } from './pages/ProductBase';
 import { QualificationBasePage } from './pages/QualificationBase';
 import { SettingsPage } from './pages/Settings';
 import { HistoryPage } from './pages/History';
+import { UsageCostPage } from './pages/UsageCost';
 
 export function App(): JSX.Element {
   return (
@@ -27,6 +28,7 @@ export function App(): JSX.Element {
               <Route path="/knowledge" element={<KnowledgeBasePage />} />
               <Route path="/qualification" element={<QualificationBasePage />} />
               <Route path="/products" element={<ProductBasePage />} />
+              <Route path="/usage-cost" element={<UsageCostPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/history" element={<HistoryPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />

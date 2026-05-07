@@ -158,6 +158,42 @@ def _estimate_tokens_from_text(text: str) -> int:
     return max(1, int(cjk * 1.2 + other / 4)) if value else 0
 
 
+def _usage_usd_to_cny_rate() -> float:
+    try:
+        return float(os.getenv("AI_USAGE_USD_TO_CNY_RATE") or 7.2)
+    except (TypeError, ValueError):
+        return 7.2
+
+
+def _normalize_usage_costs_to_cny(row: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(row or {})
+    currency = str(normalized.get("currency") or "CNY").upper()
+    if currency == "USD":
+        rate = _usage_usd_to_cny_rate()
+        for field in ("input_cost", "output_cost", "other_cost", "total_cost"):
+            normalized[field] = float(normalized.get(field) or 0) * rate
+        normalized["currency"] = "CNY"
+        normalized["source_currency"] = "USD"
+        normalized["currency_rate"] = rate
+    else:
+        normalized["currency"] = "CNY" if currency in {"", "NONE"} else currency
+    return normalized
+
+
+def _operation_category(operation_type: str | None) -> str:
+    if operation_type in {"text_generation", "chat_completion"}:
+        return "text_model"
+    if operation_type == "embedding":
+        return "embedding_model"
+    if operation_type == "rerank":
+        return "rerank_model"
+    if operation_type == "ocr":
+        return "ocr"
+    if operation_type == "vision":
+        return "vision_model"
+    return "other"
+
+
 def _lookup_ai_price(provider: str, region: str | None, model: str | None, operation_type: str) -> dict[str, Any] | None:
     if not model:
         return None
@@ -233,7 +269,7 @@ def record_ai_usage_log(
             normalized["total_tokens"] = normalized["input_tokens"] + normalized["output_tokens"]
 
         price = _lookup_ai_price(provider, region, model, operation_type)
-        currency = (price or {}).get("currency") or "USD"
+        price_currency = str((price or {}).get("currency") or "CNY").upper()
         input_cost = 0.0
         output_cost = 0.0
         other_cost = 0.0
@@ -249,6 +285,19 @@ def record_ai_usage_log(
                 other_cost = page_count * float(price.get("price_per_page") or 0)
             if billing_unit == "request":
                 other_cost = request_count * float(price.get("price_per_request") or 0)
+        if price_currency == "USD":
+            rate = _usage_usd_to_cny_rate()
+            input_cost *= rate
+            output_cost *= rate
+            other_cost *= rate
+            currency = "CNY"
+            cost_metadata = {
+                "source_currency": "USD",
+                "currency_rate": rate,
+            }
+        else:
+            currency = price_currency or "CNY"
+            cost_metadata = {}
 
         payload = {
             "provider": provider,
@@ -283,7 +332,7 @@ def record_ai_usage_log(
             "cost_estimated": True,
             "error_code": error_code,
             "error_message": str(error_message or "")[:1000] or None,
-            "metadata": metadata or {},
+            "metadata": {**(metadata or {}), **cost_metadata},
         }
         clean_payload = {key: value for key, value in payload.items() if value is not None}
         get_supabase_client().table("ai_usage_logs").insert(clean_payload).execute()
@@ -291,29 +340,198 @@ def record_ai_usage_log(
         logging.exception("记录 AI 用量失败")
 
 
+def _aggregate_usage_by_operation(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    buckets: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for raw_row in rows:
+        row = _normalize_usage_costs_to_cny(raw_row)
+        key = (
+            str(row.get("provider") or "-"),
+            str(row.get("model") or "-"),
+            str(row.get("operation_type") or "other"),
+        )
+        bucket = buckets.setdefault(
+            key,
+            {
+                "provider": key[0],
+                "model": key[1],
+                "operation_type": key[2],
+                "operation_category": _operation_category(key[2]),
+                "call_count": 0,
+                "success_count": 0,
+                "failed_count": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "page_count": 0,
+                "total_cost": 0.0,
+                "currency": "CNY",
+            },
+        )
+        call_count = _as_int(row.get("call_count")) or 1
+        bucket["call_count"] += call_count
+        if "success_count" in row or "failed_count" in row:
+            bucket["success_count"] += _as_int(row.get("success_count"))
+            bucket["failed_count"] += _as_int(row.get("failed_count"))
+        else:
+            bucket["success_count"] += call_count if row.get("success", True) else 0
+            bucket["failed_count"] += 0 if row.get("success", True) else call_count
+        bucket["input_tokens"] += _as_int(row.get("input_tokens"))
+        bucket["output_tokens"] += _as_int(row.get("output_tokens"))
+        bucket["total_tokens"] += _as_int(row.get("total_tokens"))
+        bucket["page_count"] += _as_int(row.get("page_count"))
+        bucket["total_cost"] += float(row.get("total_cost") or 0)
+    return sorted(buckets.values(), key=lambda item: item["total_cost"], reverse=True)
+
+
+def _aggregate_usage_by_stage(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    buckets: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for raw_row in rows:
+        row = _normalize_usage_costs_to_cny(raw_row)
+        key = (
+            str(row.get("stage") or "-"),
+            str(row.get("provider") or "-"),
+            str(row.get("model") or "-"),
+            str(row.get("operation_type") or "other"),
+        )
+        bucket = buckets.setdefault(
+            key,
+            {
+                "stage": key[0],
+                "provider": key[1],
+                "model": key[2],
+                "operation_type": key[3],
+                "operation_category": _operation_category(key[3]),
+                "call_count": 0,
+                "success_count": 0,
+                "failed_count": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "page_count": 0,
+                "total_cost": 0.0,
+                "currency": "CNY",
+                "last_call_at": None,
+            },
+        )
+        bucket["call_count"] += 1
+        bucket["success_count"] += 1 if row.get("success", True) else 0
+        bucket["failed_count"] += 0 if row.get("success", True) else 1
+        bucket["input_tokens"] += _as_int(row.get("input_tokens"))
+        bucket["output_tokens"] += _as_int(row.get("output_tokens"))
+        bucket["total_tokens"] += _as_int(row.get("total_tokens"))
+        bucket["page_count"] += _as_int(row.get("page_count"))
+        bucket["total_cost"] += float(row.get("total_cost") or 0)
+        if row.get("created_at") and (not bucket["last_call_at"] or row["created_at"] > bucket["last_call_at"]):
+            bucket["last_call_at"] = row["created_at"]
+    return sorted(buckets.values(), key=lambda item: item["total_cost"], reverse=True)
+
+
+def _summarize_usage_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    normalized_rows = [_normalize_usage_costs_to_cny(row) for row in rows]
+    call_count = len(normalized_rows)
+    return {
+        "call_count": call_count,
+        "success_count": sum(1 for row in normalized_rows if row.get("success", True)),
+        "failed_count": sum(1 for row in normalized_rows if not row.get("success", True)),
+        "input_tokens": sum(_as_int(row.get("input_tokens")) for row in normalized_rows),
+        "output_tokens": sum(_as_int(row.get("output_tokens")) for row in normalized_rows),
+        "total_tokens": sum(_as_int(row.get("total_tokens")) for row in normalized_rows),
+        "input_cost": sum(float(row.get("input_cost") or 0) for row in normalized_rows),
+        "output_cost": sum(float(row.get("output_cost") or 0) for row in normalized_rows),
+        "other_cost": sum(float(row.get("other_cost") or 0) for row in normalized_rows),
+        "total_cost": sum(float(row.get("total_cost") or 0) for row in normalized_rows),
+        "currency": "CNY",
+        "first_call_at": min((row.get("created_at") for row in normalized_rows if row.get("created_at")), default=None),
+        "last_call_at": max((row.get("created_at") for row in normalized_rows if row.get("created_at")), default=None),
+    }
+
+
+def _list_ai_usage_projects(client: Any) -> list[dict[str, Any]]:
+    project_rows = (
+        client.table("bid_projects")
+        .select("id,project_name,status,created_at")
+        .order("created_at", desc=True)
+        .limit(200)
+        .execute()
+        .data
+        or []
+    )
+    usage_rows = (
+        client.table("ai_usage_logs")
+        .select("project_id,input_tokens,output_tokens,total_tokens,input_cost,output_cost,other_cost,total_cost,currency,success,created_at")
+        .order("created_at", desc=True)
+        .limit(5000)
+        .execute()
+        .data
+        or []
+    )
+    usage_by_project: dict[str, list[dict[str, Any]]] = {}
+    for row in usage_rows:
+        project_id = row.get("project_id")
+        if project_id:
+            usage_by_project.setdefault(str(project_id), []).append(row)
+    summary_by_project = {
+        project_id: _summarize_usage_rows(rows)
+        for project_id, rows in usage_by_project.items()
+    }
+    projects: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for project in project_rows:
+        project_id = str(project.get("id") or "")
+        if not project_id:
+            continue
+        seen.add(project_id)
+        summary = summary_by_project.get(project_id, {})
+        projects.append({
+            **project,
+            "call_count": _as_int(summary.get("call_count")),
+            "total_tokens": _as_int(summary.get("total_tokens")),
+            "total_cost": float(summary.get("total_cost") or 0),
+            "currency": "CNY",
+            "last_call_at": summary.get("last_call_at"),
+        })
+    for project_id, summary in summary_by_project.items():
+        if project_id in seen:
+            continue
+        projects.append({
+            "id": project_id,
+            "project_name": f"未知项目 {project_id[:8]}",
+            "status": None,
+            "created_at": summary.get("first_call_at"),
+            "call_count": _as_int(summary.get("call_count")),
+            "total_tokens": _as_int(summary.get("total_tokens")),
+            "total_cost": float(summary.get("total_cost") or 0),
+            "currency": "CNY",
+            "last_call_at": summary.get("last_call_at"),
+        })
+    return projects
+
+
 def get_ai_usage_overview(project_id: str | None = None, days: int = 30) -> dict[str, Any]:
     client = get_supabase_client()
+    log_fields = (
+        "id,project_id,file_id,section_id,provider,model,operation_type,stage,input_tokens,output_tokens,total_tokens,"
+        "request_count,page_count,document_count,character_count,input_cost,output_cost,other_cost,total_cost,currency,"
+        "success,usage_estimated,cost_estimated,is_stream,latency_ms,status_code,error_code,error_message,created_at"
+    )
     if project_id:
-        project_response = client.rpc("get_ai_usage_project_cost", {"p_project_id": project_id}).execute()
-        stages_response = (
-            client.table("ai_usage_project_stage_summary")
-            .select("*")
-            .eq("project_id", project_id)
-            .order("total_cost", desc=True)
-            .execute()
-        )
-        logs_response = (
+        all_logs_response = (
             client.table("ai_usage_logs")
-            .select("id,project_id,section_id,provider,model,operation_type,stage,input_tokens,output_tokens,total_tokens,total_cost,currency,success,usage_estimated,created_at")
+            .select(log_fields)
             .eq("project_id", project_id)
             .order("created_at", desc=True)
-            .limit(80)
+            .limit(5000)
             .execute()
         )
+        project_meta_response = client.table("bid_projects").select("id,project_name,status,created_at").eq("id", project_id).limit(1).execute()
+        all_logs = [_normalize_usage_costs_to_cny(row) for row in (all_logs_response.data or [])]
         return {
-            "summary": (project_response.data or [{}])[0] if project_response.data else {},
-            "stages": stages_response.data or [],
-            "recentLogs": logs_response.data or [],
+            "summary": _summarize_usage_rows(all_logs),
+            "project": (project_meta_response.data or [{}])[0] if project_meta_response.data else {},
+            "projects": _list_ai_usage_projects(client),
+            "stages": _aggregate_usage_by_stage(all_logs),
+            "operationSummary": _aggregate_usage_by_operation(all_logs),
+            "recentLogs": all_logs[:80],
         }
 
     since = (date.today() - timedelta(days=max(1, min(days, 365)))).isoformat()
@@ -324,25 +542,22 @@ def get_ai_usage_overview(project_id: str | None = None, days: int = 30) -> dict
         .order("usage_date", desc=True)
         .execute()
     )
-    logs_response = (
+    all_logs_response = (
         client.table("ai_usage_logs")
-        .select("id,project_id,section_id,provider,model,operation_type,stage,input_tokens,output_tokens,total_tokens,total_cost,currency,success,usage_estimated,created_at")
+        .select(log_fields)
+        .gte("created_at", since)
         .order("created_at", desc=True)
-        .limit(80)
+        .limit(5000)
         .execute()
     )
-    rows = logs_response.data or []
-    daily_rows = daily_response.data or []
+    rows = [_normalize_usage_costs_to_cny(row) for row in (all_logs_response.data or [])]
+    daily_rows = [_normalize_usage_costs_to_cny(row) for row in (daily_response.data or [])]
     return {
-        "summary": {
-            "call_count": sum(_as_int(row.get("call_count")) for row in daily_rows),
-            "input_tokens": sum(_as_int(row.get("input_tokens")) for row in daily_rows),
-            "output_tokens": sum(_as_int(row.get("output_tokens")) for row in daily_rows),
-            "total_tokens": sum(_as_int(row.get("total_tokens")) for row in daily_rows),
-            "total_cost": sum(float(row.get("total_cost") or 0) for row in daily_rows),
-        },
+        "summary": _summarize_usage_rows(rows),
         "daily": daily_rows,
-        "recentLogs": rows,
+        "projects": _list_ai_usage_projects(client),
+        "operationSummary": _aggregate_usage_by_operation(rows),
+        "recentLogs": rows[:80],
     }
 
 

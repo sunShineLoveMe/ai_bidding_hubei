@@ -96,6 +96,7 @@ def get_runtime_settings():
 
 
 @bp.route('/settings/ai-usage', methods=['GET'])
+@bp.route('/ai-usage', methods=['GET'])
 def get_ai_usage_settings_summary():
     try:
         project_id = request.args.get("projectId")

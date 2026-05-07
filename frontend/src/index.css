@@ -38,6 +38,39 @@ textarea {
   gap: 14px;
 }
 
+.usage-cost-shell {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 32px;
+}
+
+.usage-cost-panel {
+  flex: 0 0 auto;
+  min-height: auto;
+}
+
+.usage-cost-panel .ant-table-wrapper {
+  min-width: 0;
+}
+
+.usage-cost-panel .ant-table-container {
+  border-radius: 12px;
+}
+
+.usage-cost-panel .ant-table-thead > tr > th {
+  white-space: nowrap;
+}
+
+.usage-cost-panel .ant-table-tbody > tr > td {
+  vertical-align: middle;
+}
+
+.usage-cost-panel .ant-pagination {
+  margin-bottom: 0;
+}
+
 .panel-card {
   min-height: 0;
   overflow: visible;

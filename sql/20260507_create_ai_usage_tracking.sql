@@ -36,7 +36,7 @@ create table if not exists public.ai_model_prices (
   -- page: 按页计价，如 OCR 估算
   -- request: 按请求计价
   billing_unit text not null default 'token_pair',
-  currency text not null default 'USD',
+  currency text not null default 'CNY',
 
   -- token 价格统一按“每 100 万 token”存储，便于和百炼官方文档一致。
   input_price_per_million numeric(18, 8) not null default 0,
@@ -130,8 +130,8 @@ create table if not exists public.ai_usage_logs (
   document_count integer not null default 0,
   character_count integer not null default 0,
 
-  -- 费用估算。币种与 ai_model_prices.currency 保持一致。
-  currency text not null default 'USD',
+  -- 费用估算。系统展示统一使用人民币 CNY。
+  currency text not null default 'CNY',
   input_cost numeric(18, 8) not null default 0,
   output_cost numeric(18, 8) not null default 0,
   other_cost numeric(18, 8) not null default 0,
@@ -274,6 +274,8 @@ select
   model,
   operation_type,
   count(*) as call_count,
+  count(*) filter (where success) as success_count,
+  count(*) filter (where not success) as failed_count,
   coalesce(sum(input_tokens), 0)::bigint as input_tokens,
   coalesce(sum(output_tokens), 0)::bigint as output_tokens,
   coalesce(sum(total_tokens), 0)::bigint as total_tokens,
@@ -350,10 +352,10 @@ insert into public.ai_model_prices (
     'qwen-turbo-latest',
     'text_generation',
     'token_pair',
-    'USD',
-    0.044,
-    0.087,
-    '中国大陆北京地域 qwen-turbo 非思考模式公开价格；思考模式输出价格更高，需按调用参数另行配置。',
+    'CNY',
+    0.3168,
+    0.6264,
+    '中国大陆北京地域 qwen-turbo 非思考模式公开价格按 7.2 汇率折算为人民币；思考模式输出价格更高，需按调用参数另行配置。',
     'https://www.alibabacloud.com/help/en/model-studio/models',
     '{"source_checked_at":"2026-05-07","mode":"non-thinking"}'::jsonb
   ),
@@ -363,10 +365,10 @@ insert into public.ai_model_prices (
     'qwen-long-latest',
     'text_generation',
     'token_pair',
-    'USD',
-    0.072,
-    0.287,
-    '中国大陆北京地域 qwen-long-latest 公开价格。',
+    'CNY',
+    0.5184,
+    2.0664,
+    '中国大陆北京地域 qwen-long-latest 公开价格按 7.2 汇率折算为人民币。',
     'https://www.alibabacloud.com/help/en/model-studio/models',
     '{"source_checked_at":"2026-05-07"}'::jsonb
   ),
@@ -376,10 +378,10 @@ insert into public.ai_model_prices (
     'text-embedding-v4',
     'embedding',
     'input_token',
-    'USD',
-    0.072,
+    'CNY',
+    0.5184,
     0,
-    '中国大陆北京地域 text-embedding-v4 每 100 万输入 token 公开价格。',
+    '中国大陆北京地域 text-embedding-v4 每 100 万输入 token 公开价格按 7.2 汇率折算为人民币。',
     'https://www.alibabacloud.com/help/zh/model-studio/text-embedding-synchronous-api',
     '{"source_checked_at":"2026-05-07","dimensions_default":1024}'::jsonb
   ),
@@ -389,10 +391,10 @@ insert into public.ai_model_prices (
     'qwen3-rerank',
     'rerank',
     'input_token',
-    'USD',
-    0.1,
+    'CNY',
+    0.72,
     0,
-    'qwen3-rerank 按输入 token 计费；请求 token 计算公式为 Query Tokens × Document 数量 + Document Tokens 总和。',
+    'qwen3-rerank 按输入 token 计费，公开价格按 7.2 汇率折算为人民币；请求 token 计算公式为 Query Tokens × Document 数量 + Document Tokens 总和。',
     'https://www.alibabacloud.com/help/zh/doc-detail/2780056.html',
     '{"source_checked_at":"2026-05-07"}'::jsonb
   )

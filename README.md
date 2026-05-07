@@ -16,8 +16,8 @@
 - 标书编制工作台：分册切换、章节树、目录模式、章节正文生成、章节维护
 - 基于 Tiptap 的 AI 章节编辑器，支持标题、列表、表格和 AI 流式内容实时渲染
 - 企业知识库 RAG 检索问答
-- 系统设置：模型参数、企业画像、文档服务、存储路径、备份策略和 AI 用量成本统计
-- Token 用量与成本统计：记录文本生成、流式生成、Embedding、Rerank 等模型调用用量，支持在设置页查看近 30 天 Token、预估费用和调用明细
+- 系统设置：模型参数、企业画像、文档服务、存储路径和备份策略
+- 用量与成本中心：作为一级菜单独立展示，按标书项目统计文本模型、向量模型、Rerank、OCR 的 Token、成功率、调用明细和人民币预估成本
 - 水利行业种子知识库采集与入库脚本
 - Word 文档生成与下载，支持完整投标文件和单独分册导出，导出配图优先使用原图并对超大图片做清晰压缩
 - ONLYOFFICE 终稿编辑（可选）
@@ -131,18 +131,23 @@ GET /api/bidding/interpretations/{project_id}/compliance-check
 
 ### 功能入口
 
-在前端进入「系统设置 → 用量与成本」可以查看近 30 天统计：
+在前端一级菜单进入「用量与成本」可以查看近 30 天统计，并支持按单个标书项目筛选：
 
 - 调用次数
 - 输入 Token
 - 输出 Token
 - 总 Token
-- 预估费用
-- 最近调用明细，包括调用时间、阶段、模型、操作类型、Token、费用、成功状态和是否为估算值
+- 人民币预估费用
+- 模型类型拆分，包括文本模型、向量模型、重排模型和 OCR
+- 标书项目成本汇总，按项目展示创建时间、最近调用时间、调用次数、总 Token、人民币成本和项目状态
+- 单项目详情弹窗，点击项目行的「查看」后展示该标书项目的成本概览、阶段成本拆分和完整调用明细
+- 完整调用明细，包括调用时间、业务阶段、模型、调用类型、Token、输入/输出费用、耗时、成功状态、章节 ID 和是否为估算值
 
 后端接口：
 
 ```text
+GET /api/bidding/ai-usage?days=30
+GET /api/bidding/ai-usage?days=30&projectId=<project_id>
 GET /api/bidding/settings/ai-usage?days=30
 GET /api/bidding/settings/ai-usage?days=30&projectId=<project_id>
 ```
@@ -151,13 +156,13 @@ GET /api/bidding/settings/ai-usage?days=30&projectId=<project_id>
 
 | 调用类型 | 统计来源 | 成本口径 |
 | --- | --- | --- |
-| DashScope 文本生成 | 原生返回的 `usage.input_tokens`、`usage.output_tokens`、`usage.total_tokens` | 按 `ai_model_prices` 中的输入 / 输出单价估算 |
+| DashScope 文本生成 | 原生返回的 `usage.input_tokens`、`usage.output_tokens`、`usage.total_tokens` | 按 `ai_model_prices` 中的输入 / 输出人民币单价估算 |
 | DashScope 流式生成 | 优先读取流式 payload 中的 `usage`；缺失时按输入输出文本长度估算 | 估算记录会标记 `usage_estimated=true` |
-| OpenAI-compatible Embedding | `usage.prompt_tokens`、`usage.total_tokens` | 按 Embedding 模型单价估算 |
+| OpenAI-compatible Embedding | `usage.prompt_tokens`、`usage.total_tokens` | 按 Embedding 模型人民币单价估算 |
 | DashScope Rerank | 记录模型、文档数量、字符数和调用状态 | 当前按模型单价表估算，缺失 usage 时保留调用记录 |
 | MinerU OCR | SQL 中预留 `mineru-ocr` 价格配置 | 暂未接入真实页数计费，默认 0 元占位 |
 
-费用统计用于业务核算和客户演示，最终账单仍以模型厂商和 OCR 服务商后台实际计费为准。
+费用统计统一展示为人民币 CNY，用于业务核算和客户演示。若历史种子价格仍为 USD，后端会按 `AI_USAGE_USD_TO_CNY_RATE` 折算为 CNY 返回；最终账单仍以模型厂商和 OCR 服务商后台实际计费为准。
 
 ### 数据表与脚本
 
@@ -165,6 +170,8 @@ GET /api/bidding/settings/ai-usage?days=30&projectId=<project_id>
 
 ```sql
 -- sql/20260507_create_ai_usage_tracking.sql
+-- 若此前已执行过 USD 口径种子价，再执行：
+-- sql/20260507_update_ai_usage_pricing_cny.sql
 ```
 
 该脚本会创建：
@@ -178,7 +185,23 @@ GET /api/bidding/settings/ai-usage?days=30&projectId=<project_id>
 | `ai_usage_daily_summary` | 按日期汇总全局用量 |
 | `get_ai_usage_project_cost(project_id)` | 项目级成本查询 RPC |
 
-当前默认种子价格覆盖 `qwen-turbo-latest`、`qwen-long-latest`、`text-embedding-v4`、`qwen3-rerank` 和 `mineru-ocr`。如果模型厂商价格发生变化，应优先更新 `ai_model_prices`，历史日志中的 `estimated_cost_cny` 不会自动重算。
+当前默认种子价格覆盖 `qwen-turbo-latest`、`qwen-long-latest`、`text-embedding-v4`、`qwen3-rerank` 和 `mineru-ocr`。如果模型厂商价格发生变化，应优先更新 `ai_model_prices`，历史日志中的 `total_cost` 不会自动重算。
+
+### 多模型兼容
+
+用量统计模块按通用模型调用字段设计，不绑定单一厂商。后续如果切换到 DeepSeek、智谱、Moonshot、百度千帆、火山方舟或其他国产模型，通常只需要完成两类适配：
+
+- 在模型调用适配层继续调用 `record_ai_usage_log()`，写入 `provider`、`model`、`operation_type`、`stage`、`raw_usage`、输入输出文本和业务归属。
+- 在 `ai_model_prices` 中维护对应模型的人民币单价，例如 `provider='deepseek'`、`model='deepseek-chat'`、`operation_type='text_generation'`。
+
+当前 usage 归一化已兼容两类常见格式：
+
+| 厂商返回字段 | 系统字段 |
+| --- | --- |
+| `input_tokens` / `output_tokens` / `total_tokens` | DashScope 原生接口 |
+| `prompt_tokens` / `completion_tokens` / `total_tokens` | OpenAI-compatible 接口，包括多数国产模型兼容接口 |
+
+如果厂商不返回 usage，系统会按输入 / 输出文本长度估算 Token，并在日志中标记 `usage_estimated=true`。如果厂商存在缓存命中、推理 Token、阶梯价、请求次数计费或特殊折扣，表结构已预留 `cached_tokens`、`reasoning_tokens`、`request_count`、`metadata` 等字段，但实际成本公式可能需要按厂商账单规则继续扩展。
 
 ## 技术标 / 商务标分册设计
 
@@ -553,6 +576,7 @@ ONLYOFFICE_JWT_SECRET=replace_with_a_strong_secret
 ```sql
 -- sql/20260429_app_users_and_onlyoffice_documents.sql
 -- sql/20260507_create_ai_usage_tracking.sql
+-- sql/20260507_update_ai_usage_pricing_cny.sql
 ```
 
 上述脚本会创建：
@@ -561,11 +585,11 @@ ONLYOFFICE_JWT_SECRET=replace_with_a_strong_secret
 | --- | --- |
 | `app_users` | 保存浏览器匿名指纹与单机版操作人员 ID，用于替代早期 SQLite `users` 表 |
 | `onlyoffice_documents` | 保存 OnlyOffice 文档 key、项目 ID、文件路径和回调下载地址，用于保存回调定位目标文件 |
-| `ai_model_prices` | 维护模型和 OCR 单价，供 Token 用量成本估算使用 |
-| `ai_usage_logs` | 保存 AI 调用明细，包括项目、阶段、模型、Token、费用和原始 usage |
-| `ai_usage_project_summary` / `ai_usage_daily_summary` | 汇总项目级和日期级调用成本，供设置页面展示 |
+| `ai_model_prices` | 维护模型和 OCR 人民币单价，供 Token 用量成本估算使用 |
+| `ai_usage_logs` | 保存 AI 调用明细，包括项目、阶段、模型、Token、人民币费用和原始 usage |
+| `ai_usage_project_summary` / `ai_usage_daily_summary` | 汇总项目级和日期级调用成本，供用量与成本中心展示 |
 
-如果 `20260429` 脚本尚未执行，系统会尽量回退 SQLite；但推荐新部署直接执行 SQL，确保主链路统一到 Supabase。`20260507` 脚本是 Token 用量与成本统计的必需表结构，未执行时设置页「用量与成本」无法展示真实统计。
+如果 `20260429` 脚本尚未执行，系统会尽量回退 SQLite；但推荐新部署直接执行 SQL，确保主链路统一到 Supabase。`20260507_create` 脚本是 Token 用量与成本统计的必需表结构，未执行时一级菜单「用量与成本」无法展示真实统计。若历史环境已写入 USD 口径价格或日志，请补充执行 `20260507_update_ai_usage_pricing_cny.sql`，将价格和历史成本折算为人民币。
 
 ### 4. 启动后端
 
@@ -845,7 +869,7 @@ docker run -d \
 - [x] 增加章节生成状态重置能力
 - [x] 增加图文并茂 DOCX 导出基础能力
 - [x] 企业资信库和产品库图片上传支持原图 + WebP 缩略图双文件策略，详情预览优先加载缩略图，点击放大再读取原图
-- [x] 增加 AI Token 用量与成本统计：Supabase 记录调用明细，系统设置页展示近 30 天 Token、预估费用和最近调用日志
+- [x] 增加 AI Token 用量与成本统计：Supabase 记录调用明细，一级菜单展示近 30 天 Token、人民币预估费用、项目成本汇总、项目详情弹窗和多模型兼容统计口径
 
 ## License
 
