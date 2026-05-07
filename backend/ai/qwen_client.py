@@ -59,9 +59,8 @@ def call_dashscope_api(messages, model=None, json_mode=True, usage_context=None)
             timeout=int(get_setting("request_timeout_seconds", 120)),
         )
         if response.status_code != 200:
-            error_message = f"Dashscope API Error: Status Code: {response.status_code}, Response Body: {response.text}"
+            error_message = f"DashScope API 调用失败，状态码: {response.status_code}"
             logging.error(error_message)
-            print(error_message)
         response.raise_for_status()
         payload = response.json()
         record_ai_usage_log(
@@ -151,7 +150,7 @@ def stream_dashscope_api(messages, model=None, usage_context=None):
     try:
         with requests.post(url, headers=headers, json=data, stream=True, timeout=timeout) as response:
             if response.status_code != 200:
-                error_message = f"Dashscope Stream API Error: Status Code: {response.status_code}, Response Body: {response.text}"
+                error_message = f"DashScope 流式 API 调用失败，状态码: {response.status_code}"
                 logging.error(error_message)
             response.raise_for_status()
             for raw_line in response.iter_lines(decode_unicode=True):

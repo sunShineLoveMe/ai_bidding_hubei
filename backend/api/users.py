@@ -46,6 +46,6 @@ def identify_user():
         conn.close()
         return jsonify({'userId': user_id, 'isNew': True, 'storage': 'sqlite_fallback'})
             
-    except Exception as e:
-        print(f'[ERROR] 操作人员身份识别失败: {str(e)}')
+    except Exception:
+        logging.exception("操作人员身份识别失败")
         return jsonify({'error': '操作人员身份识别失败，请联系系统管理员。'}), 500

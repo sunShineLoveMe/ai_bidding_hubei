@@ -512,10 +512,25 @@ npm run dev
 cp .env.example .env
 ```
 
-如果项目暂未提供 `.env.example`，可参考以下配置创建 `.env`：
+当前 `.env.example` 已覆盖模型、Supabase、MinerU、OnlyOffice、上传限制、安全开关、存储路径、企业画像和 Token 成本汇率。生产或客户环境至少需要重点确认以下配置：
 
 ```ini
-# LLM / Embedding
+# App / Security
+APP_ENV=development
+APP_CORS_ORIGINS=http://127.0.0.1:3012,http://localhost:3012,http://127.0.0.1:5173,http://localhost:5173
+APP_LOCAL_ONLY=false
+APP_AUTH_ENABLED=false
+APP_AUTH_TOKEN=replace_with_a_random_token_at_least_24_chars
+APP_EXPOSE_DEBUG_ERRORS=false
+REQUIRE_STRICT_CONFIG=false
+LOG_LEVEL=INFO
+MAX_UPLOAD_MB=200
+ALLOWED_TENDER_EXTENSIONS=pdf,doc,docx,txt,md
+ALLOWED_KNOWLEDGE_EXTENSIONS=pdf,doc,docx,txt,md,xls,xlsx,csv,png,jpg,jpeg,webp
+ALLOWED_ASSET_EXTENSIONS=png,jpg,jpeg,webp,pdf,doc,docx
+
+# LLM / Embedding / Rerank
+AI_PROVIDER=dashscope
 DASHSCOPE_API_KEY=your_dashscope_api_key
 DASHSCOPE_MODEL=qwen-turbo-latest
 DASHSCOPE_KNOWLEDGE_MODEL=qwen-long
@@ -527,6 +542,7 @@ DASHSCOPE_RERANK_TOP_N=6
 DASHSCOPE_REQUEST_TIMEOUT_SECONDS=120
 DASHSCOPE_STREAM_CONNECT_TIMEOUT_SECONDS=15
 DASHSCOPE_STREAM_READ_TIMEOUT_SECONDS=180
+AI_USAGE_USD_TO_CNY_RATE=7.2
 
 # Supabase
 SUPABASE_URL=https://your-project.supabase.co
@@ -543,11 +559,19 @@ SUPABASE_STORAGE_PRODUCT_BUCKET=product-files
 MINERU_API_TOKEN=your_mineru_api_token
 MINERU_API_BASE_URL=https://mineru.net
 MINERU_PARSE_PDF_FIRST=true
+MINERU_DOWNLOAD_AUTO_RETRIES=6
+MINERU_DOWNLOAD_USE_CURL_FALLBACK=true
+MINERU_DOWNLOAD_DOH_RESOLVE=true
 
 # App
 APP_HOST=127.0.0.1:3012
 APP_PUBLIC_BASE_URL=http://127.0.0.1:3012
-MAX_UPLOAD_MB=200
+UPLOAD_DIR=uploads/
+OUTPUT_DIR=outputs/
+CHROMA_DIR=chroma_db/
+SQLITE_DB_PATH=bidding.db
+BACKUP_DIR=backups/
+WORD_TEMPLATE_PATH=templates/default_bid_template.docx
 
 # 企业画像，可选；也可在系统设置页面维护
 ENTERPRISE_NAME=某水利工程建设企业
@@ -561,9 +585,91 @@ ENTERPRISE_RESPONSE_STYLE=专业、严谨、合规、可落地；不得编造证
 # ONLYOFFICE，可选
 ONLYOFFICE_DOCS_API_URL=http://127.0.0.1:8080/web-apps/apps/api/documents/api.js
 ONLYOFFICE_JWT_SECRET=replace_with_a_strong_secret
+BACKEND_URL_FOR_DOCKER=host.docker.internal:3012
 ```
 
 模型、Embedding、超时时间、OnlyOffice 地址、存储目录和企业画像等非敏感配置也可以在「系统设置」页面调整。页面保存后会写入本地 `config/runtime_settings.json`，后端在下一次模型请求时读取该配置；该文件已加入 `.gitignore`，开源时只保留 `config/runtime_settings.example.json`。API Key、Supabase service role 等敏感项仍必须通过 `.env` 配置，不会保存在前端。
+
+安全相关说明：
+
+- CORS 不再默认开放所有来源，后端读取 `APP_CORS_ORIGINS` 作为白名单；生产环境禁止配置为 `*`。
+- `APP_LOCAL_ONLY=true` 时只允许本机或内网地址访问，适合单机试用和内网部署。
+- `APP_AUTH_ENABLED=true` 时接口要求 `X-App-Auth-Token` 或 `Authorization: Bearer <token>`，生产环境应配置足够长度的 `APP_AUTH_TOKEN`。
+- `APP_ENV=production` 或 `REQUIRE_STRICT_CONFIG=true` 时会启动严格配置校验，缺少 DashScope、Supabase service role、OnlyOffice JWT 或使用弱占位值会直接拒绝启动。
+- 500 错误默认返回通用提示，详细异常只写入后端日志；开发调试需要临时查看详细错误时，可在非生产环境设置 `APP_EXPOSE_DEBUG_ERRORS=true`。
+- 上传入口已增加扩展名和 MIME 校验，允许类型可通过 `ALLOWED_TENDER_EXTENSIONS`、`ALLOWED_KNOWLEDGE_EXTENSIONS`、`ALLOWED_ASSET_EXTENSIONS` 调整。
+
+#### 实施人员安全配置指南
+
+实施部署时优先根据实际场景选择配置模板。不要直接照抄生产配置，尤其不要使用示例密钥、弱口令或 `*` 跨域。
+
+| 场景 | 推荐配置 | 说明 |
+| --- | --- | --- |
+| 本机开发 / 演示 | `APP_ENV=development`、`APP_AUTH_ENABLED=false`、`APP_LOCAL_ONLY=false`、`REQUIRE_STRICT_CONFIG=false` | 不需要访问令牌，不影响前端开发和本机调试。 |
+| 单机部署，只在本机浏览器使用 | `APP_ENV=development`、`APP_LOCAL_ONLY=true`、`APP_AUTH_ENABLED=false` | 只允许本机或内网地址访问，适合客户电脑单机试用。 |
+| 企业内网多人使用 | `APP_ENV=production`、`APP_LOCAL_ONLY=true`、`APP_AUTH_ENABLED=true`、配置 `APP_AUTH_TOKEN` | 建议开启访问令牌，避免内网任意人员直接访问上传、生成、设置和下载接口。 |
+| 公网或云服务器部署 | `APP_ENV=production`、`REQUIRE_STRICT_CONFIG=true`、`APP_AUTH_ENABLED=true`、配置明确 `APP_CORS_ORIGINS` | 必须配置前端域名白名单、强访问令牌和真实密钥；不要使用 `*`。 |
+
+常用安全参数说明：
+
+| 参数 | 是否必填 | 推荐值 | 作用 | 填错后的表现 |
+| --- | --- | --- | --- | --- |
+| `APP_ENV` | 建议填写 | 本地填 `development`，生产填 `production` | 决定是否按生产环境执行严格安全校验 | 生产环境误填 `development` 会降低启动校验强度 |
+| `REQUIRE_STRICT_CONFIG` | 生产建议 `true` | `false` / `true` | 即使 `APP_ENV` 不是 production，也强制检查关键密钥 | 设为 `true` 后，示例密钥或弱密钥会导致后端拒绝启动 |
+| `APP_CORS_ORIGINS` | 必填 | `http://客户前端域名,https://客户前端域名` | 允许哪些前端地址访问后端 API | 前端域名未加入时，浏览器会出现跨域请求失败 |
+| `APP_LOCAL_ONLY` | 可选 | 单机/内网填 `true`，公网填 `false` | 限制只允许本机或内网访问 | 公网部署误填 `true` 可能导致外部用户访问失败 |
+| `APP_AUTH_ENABLED` | 可选 | 内网多人/公网建议 `true` | 开启简单访问令牌保护 | 开启后前端或调用方未带令牌会返回 401 |
+| `APP_AUTH_TOKEN` | 开启认证时必填 | 至少 24 位随机字符串 | API 访问令牌 | 为空、太短或使用示例值时，生产严格模式会拒绝启动 |
+| `APP_EXPOSE_DEBUG_ERRORS` | 本地临时可开 | 默认 `false` | 是否把详细后端异常返回给前端 | 生产不要开启，否则可能暴露路径、SQL 或外部服务响应 |
+| `MAX_UPLOAD_MB` | 必填 | `200` 或按客户要求调整 | 控制单个上传文件最大体积 | 上传超过限制会返回 413 |
+| `ALLOWED_TENDER_EXTENSIONS` | 必填 | `pdf,doc,docx,txt,md` | 控制招标文件允许上传的后缀 | 不在列表内会被拒绝上传 |
+| `ALLOWED_KNOWLEDGE_EXTENSIONS` | 必填 | `pdf,doc,docx,txt,md,xls,xlsx,csv,png,jpg,jpeg,webp` | 控制知识库文件允许上传的后缀 | 不在列表内会被拒绝上传 |
+| `ALLOWED_ASSET_EXTENSIONS` | 必填 | `png,jpg,jpeg,webp,pdf,doc,docx` | 控制资信库/产品库资产允许上传的后缀 | 不在列表内会被拒绝上传 |
+| `ONLYOFFICE_JWT_SECRET` | 使用 OnlyOffice 时必填 | 至少 24 位随机字符串 | OnlyOffice 文档编辑鉴权密钥 | 未配置时无法生成 OnlyOffice 编辑配置 |
+
+访问令牌开启后的调用方式：
+
+```http
+X-App-Auth-Token: 这里填写 APP_AUTH_TOKEN
+```
+
+也支持标准 Bearer 形式：
+
+```http
+Authorization: Bearer 这里填写 APP_AUTH_TOKEN
+```
+
+实施配置示例：
+
+```ini
+# 企业内网多人使用示例
+APP_ENV=production
+REQUIRE_STRICT_CONFIG=true
+APP_CORS_ORIGINS=http://192.168.1.20:3012,http://192.168.1.20:5173
+APP_LOCAL_ONLY=true
+APP_AUTH_ENABLED=true
+APP_AUTH_TOKEN=replace_with_random_32_chars_or_longer
+APP_EXPOSE_DEBUG_ERRORS=false
+MAX_UPLOAD_MB=200
+ALLOWED_TENDER_EXTENSIONS=pdf,doc,docx,txt,md
+ALLOWED_KNOWLEDGE_EXTENSIONS=pdf,doc,docx,txt,md,xls,xlsx,csv,png,jpg,jpeg,webp
+ALLOWED_ASSET_EXTENSIONS=png,jpg,jpeg,webp,pdf,doc,docx
+ONLYOFFICE_JWT_SECRET=replace_with_random_32_chars_or_longer
+```
+
+配置完成后的检查方法：
+
+```bash
+python main.py
+```
+
+启动失败时优先检查后端日志。常见原因包括：
+
+- `APP_CORS_ORIGINS` 在生产环境配置了 `*`。
+- `APP_AUTH_ENABLED=true` 但没有配置 `APP_AUTH_TOKEN`。
+- `APP_ENV=production` 或 `REQUIRE_STRICT_CONFIG=true` 时仍使用 `.env.example` 中的占位密钥。
+- `ONLYOFFICE_JWT_SECRET` 太短或仍是示例值。
+- 前端访问地址没有加入 `APP_CORS_ORIGINS`。
 
 企业画像会参与招标解读、章节大纲、章节正文和旧版标书流程的 Prompt 组装。开源或更换企业使用时，建议先在系统设置中维护企业名称、行业定位、业务范围、核心能力、目标客户和 AI 写作约束，避免生成内容带有固定企业信息。
 
@@ -797,13 +903,13 @@ docker run -d \
 
 ### P0：开源与安全最小闭环
 
-- [ ] 提供完整 `.env.example`，覆盖 Supabase、DashScope、MinerU、OnlyOffice、存储路径和超时时间。
-- [ ] 移除所有默认弱密钥，尤其是 `ONLYOFFICE_JWT_SECRET`，启动时检查生产环境必填配置。
-- [ ] 增加基础认证或本地访问保护开关，至少保护系统设置、上传、解析、生成、知识库和文件下载接口。
-- [ ] 将 `CORS(app)` 改为环境变量配置的白名单。
-- [ ] 后端错误信息脱敏，避免直接向前端返回 `str(e)` 中的密钥、路径、SQL 或外部服务响应。
-- [ ] 清理调试 `print` 和敏感日志，统一使用结构化 logging。
-- [ ] 增加上传文件白名单、大小限制、MIME 校验和异常文件处理策略。
+- [x] 提供完整 `.env.example`，覆盖 Supabase、DashScope、MinerU、OnlyOffice、存储路径和超时时间。
+- [x] 移除所有默认弱密钥，尤其是 `ONLYOFFICE_JWT_SECRET`，启动时检查生产环境必填配置。
+- [x] 增加基础认证或本地访问保护开关，至少保护系统设置、上传、解析、生成、知识库和文件下载接口。
+- [x] 将 `CORS(app)` 改为环境变量配置的白名单。
+- [x] 后端错误信息脱敏，避免直接向前端返回 `str(e)` 中的密钥、路径、SQL 或外部服务响应。
+- [x] 清理调试 `print` 和敏感日志，统一使用结构化 logging。
+- [x] 增加上传文件白名单、大小限制、MIME 校验和异常文件处理策略。
 - [ ] 开源前移除真实业务文件、生成文件、解析产物、缓存、日志和本地运行配置。
 
 ### P1：稳定性与任务可靠性
@@ -870,6 +976,7 @@ docker run -d \
 - [x] 增加图文并茂 DOCX 导出基础能力
 - [x] 企业资信库和产品库图片上传支持原图 + WebP 缩略图双文件策略，详情预览优先加载缩略图，点击放大再读取原图
 - [x] 增加 AI Token 用量与成本统计：Supabase 记录调用明细，一级菜单展示近 30 天 Token、人民币预估费用、项目成本汇总、项目详情弹窗和多模型兼容统计口径
+- [x] 完成 P0 安全与部署最小闭环：`.env.example`、CORS 白名单、可选访问令牌、生产配置校验、上传校验、500 错误脱敏和 logging 收敛
 
 ## License
 

@@ -56,3 +56,60 @@ curl -s -o /tmp/ai_usage_summary.json -w "%{http_code}\n" "http://127.0.0.1:3012
 
 ## Status
 **Complete** - Token 用量与成本统计已升级为独立一级菜单和人民币成本中心。
+
+---
+
+# Task Plan: P0 开源与安全最小闭环
+
+## Goal
+补齐单机版/私有化部署前的最低安全基线，降低配置泄露、跨域误开放、上传异常文件、错误详情暴露和弱密钥风险。
+
+## Scope
+- `.env.example` 完整化。
+- CORS 白名单环境变量化。
+- 生产环境启动配置校验。
+- 本地访问保护和可选访问令牌。
+- 500 错误响应脱敏。
+- 上传文件扩展名、MIME 和大小限制。
+- 调试 `print` 收敛为 logging。
+
+## Phases
+- [x] Phase 1: 新增集中安全工具模块 `backend/core/security.py`
+- [x] Phase 2: Flask 启动接入 CORS 白名单、访问保护、生产配置校验和错误脱敏
+- [x] Phase 3: 招标文件、MinerU zip、知识库文件、资信/产品资产上传接入文件校验
+- [x] Phase 4: 移除默认 ONLYOFFICE 弱密钥，改为环境变量必填校验
+- [x] Phase 5: 补全 `.env.example` 安全、模型、Supabase、MinerU、OnlyOffice、上传和路径配置
+- [x] Phase 6: 清理核心运行链路调试 print，改为 logging
+- [x] Phase 7: README 路线图同步完成状态
+
+## Files Changed
+- `backend/core/security.py`
+- `main.py`
+- `backend/api/routes.py`
+- `backend/api/users.py`
+- `backend/ai/qwen_client.py`
+- `backend/export/md_to_word.py`
+- `.env.example`
+- `README.md`
+- `task_plan.md`
+
+## Verification
+
+```bash
+python -m py_compile main.py backend/core/security.py backend/api/routes.py backend/api/users.py backend/ai/qwen_client.py backend/export/md_to_word.py
+python -c "import main; print(main.app.test_client().get('/api/health').json)"
+python -c "from io import BytesIO; import main; c=main.app.test_client(); r=c.post('/api/bidding/upload', data={'userId':'1','file':(BytesIO(b'x'),'bad.exe')}, content_type='multipart/form-data'); print(r.status_code, r.json)"
+```
+
+验证结果：
+- 后端编译通过。
+- Flask test client 健康检查返回 `{'status': 'ok'}`。
+- 非法上传 `.exe` 被拦截并返回 `400`。
+
+## Notes
+- `APP_AUTH_ENABLED=false` 时不影响现有本机开发流程；生产或客户环境可开启 `APP_AUTH_ENABLED=true` 并配置 `APP_AUTH_TOKEN`。
+- `APP_ENV=production` 或 `REQUIRE_STRICT_CONFIG=true` 会启用严格配置校验，弱密钥和占位密钥会导致启动失败。
+- 目前未执行“开源前移除真实业务文件、生成文件、解析产物、缓存、日志和本地运行配置”，该项需要在正式开源/交付前单独清理工作区。
+
+## Status
+**Complete** - P0 安全与部署最小闭环已完成，正式开源/交付前仍需单独清理本地真实业务文件和生成产物。

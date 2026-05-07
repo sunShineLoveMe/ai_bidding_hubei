@@ -1,4 +1,5 @@
 from pathlib import Path
+import logging
 import markdown
 from docx import Document
 from docx.shared import Pt, RGBColor, Inches, Cm
@@ -140,8 +141,8 @@ def convert_mermaid_to_image(mermaid_code):
             '-c', 'config.json'  # 使用配置文件
         ], check=True)
         return png_file
-    except subprocess.CalledProcessError as e:
-        print(f"转换流程图失败: {e}")
+    except subprocess.CalledProcessError:
+        logging.exception("转换流程图失败")
         return None
     finally:
         # 清理临时文件
@@ -330,8 +331,8 @@ def _prepare_docx_image(image_path):
             temp.close()
             image.save(temp.name, "JPEG", quality=DOCX_IMAGE_JPEG_QUALITY, optimize=True, progressive=True)
             return temp.name, True
-    except Exception as e:
-        print(f"图片清晰压缩失败，继续使用原图: {image_path}, {e}")
+    except Exception:
+        logging.exception("图片清晰压缩失败，继续使用原图: %s", image_path)
         return image_path, False
 
 
@@ -352,8 +353,8 @@ def process_markdown_image(doc, alt_text, image_ref, image_cache=None):
         apply_image_paragraph_format(image_para)
 
         return True
-    except Exception as e:
-        print(f"插入图片失败: {image_ref}, {e}")
+    except Exception:
+        logging.exception("插入图片失败: %s", image_ref)
         return False
     finally:
         if prepared_cleanup and prepared_path and os.path.exists(prepared_path):
@@ -664,9 +665,9 @@ def convert_md_to_word(md_file):
             alt_name = parent / f"{output_file.stem}_{uuid.uuid4().hex}.docx"
             shutil.move(str(temp_path), str(alt_name))
             saved_path = alt_name
-            print(f"目标文件被占用，已生成备用文件：{saved_path}")
+            logging.warning("目标文件被占用，已生成备用文件: %s", saved_path)
 
-        print(f"已生成 Word 文档：{saved_path}")
+        logging.info("已生成 Word 文档: %s", saved_path)
         return Path(saved_path)
     finally:
         for image_path, cleanup in set(image_cache.values()):

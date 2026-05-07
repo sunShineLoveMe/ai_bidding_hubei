@@ -29,6 +29,7 @@ import threading
 import shutil
 from datetime import timedelta
 from backend.core.config import DEFAULT_SETTINGS, build_enterprise_context, get_setting, load_runtime_settings, save_runtime_settings
+from backend.core.security import UploadValidationError, safe_upload_filename, validate_uploaded_file
 
 # 操作向量数据库的函数
 from backend.parsing.document_parser import ingest_artifacts as ingest_mineru_artifacts_to_supabase, import_mineru_result_zip, parse_and_index_tender_file, read_parse_status, retry_mineru_result_download, write_parse_status
@@ -43,9 +44,16 @@ temp_analysis_store = {}
 _temp_store_lock = threading.Lock()
 
 # 环境变量
-ONLYOFFICE_JWT_SECRET = os.getenv('ONLYOFFICE_JWT_SECRET', 'fsdftertrt34768586sfhjsdhfjhhjfsuhaiubue')
+ONLYOFFICE_JWT_SECRET = os.getenv('ONLYOFFICE_JWT_SECRET', '')
 BACKEND_URL_FOR_DOCKER = os.getenv('BACKEND_URL_FOR_DOCKER', 'host.docker.internal:3012')
 APP_HOST = os.getenv('APP_HOST', 'localhost:3012')
+
+
+def _onlyoffice_jwt_secret() -> str:
+    secret = os.getenv('ONLYOFFICE_JWT_SECRET', '').strip() or ONLYOFFICE_JWT_SECRET
+    if not secret:
+        raise RuntimeError("ONLYOFFICE_JWT_SECRET 未配置，无法生成 ONLYOFFICE 编辑配置。")
+    return secret
 
 def _with_http_scheme(base_url):
     base_url = (base_url or '').strip().rstrip('/')
@@ -630,6 +638,10 @@ def upload_bidding():
     file = request.files['file']
     if file.filename == '':
         return jsonify({'error': '未选择招标文件，请选择后重新上传。'}), 400
+    try:
+        validate_uploaded_file(file, kind="tender")
+    except UploadValidationError as exc:
+        return jsonify({'error': str(exc)}), 400
 
     user_id = request.form.get('userId')
     if not user_id:
@@ -637,7 +649,7 @@ def upload_bidding():
 
     try:
         original_filename = file.filename
-        safe_filename = secure_filename(original_filename)
+        safe_filename = safe_upload_filename(original_filename, "tender")
         unique_filename = f"{uuid.uuid4()}-{safe_filename}"
         file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], unique_filename)
 
@@ -751,6 +763,10 @@ def upload_mineru_result_zip(file_id):
     file = request.files['file']
     if file.filename == '':
         return jsonify({'error': '未选择 MinerU 结果 zip 文件。'}), 400
+    try:
+        validate_uploaded_file(file, kind="mineru_zip")
+    except UploadValidationError as exc:
+        return jsonify({'error': str(exc)}), 400
 
     try:
         output_dir = Path("parsed_outputs") / file_id
@@ -1021,7 +1037,7 @@ def stream_interpretation_bid_outline(project_id):
         except Exception as e:
             logging.exception("流式生成标书章节大纲失败: %s", project_id)
             yield "event: error\n"
-            yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'error': '流式生成标书章节大纲失败，请查看后端日志。'}, ensure_ascii=False)}\n\n"
 
     return Response(
         stream_with_context(event_stream()),
@@ -1086,7 +1102,7 @@ def stream_interpretation_bid_section(project_id):
                 except Exception:
                     logging.exception("写入章节失败状态失败: %s", chapter.get("id"))
             yield "event: error\n"
-            yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'error': '流式生成章节正文失败，请查看后端日志。'}, ensure_ascii=False)}\n\n"
 
     return Response(
         stream_with_context(event_stream()),
@@ -1331,7 +1347,7 @@ def generate_onlyoffice_config(project_id):
                 },
             }
         }
-        token = jwt.encode(payload, ONLYOFFICE_JWT_SECRET, algorithm='HS256')
+        token = jwt.encode(payload, _onlyoffice_jwt_secret(), algorithm='HS256')
         editor_config_with_token = {**payload, 'token': token}
 
         save_onlyoffice_document_mapping(
@@ -1539,12 +1555,12 @@ def pre_analysis_bid():
             except Exception:
                 logging.exception('写入 temp_analysis_store.analysisData 失败')
         except Exception as e:
-            print(f'[ERROR] JSON解析失败: {str(e)}')
+            logging.exception("招标文件预分析 JSON 解析失败")
             return jsonify({'error': 'API返回内容解析失败'}), 500
         return jsonify(analysis_result)
 
     except Exception as e:
-        print(f'[ERROR] 招标文件预分析失败，业务编号 {bidding_id}: {str(e)}')
+        logging.exception("招标文件预分析失败，业务编号 %s", bidding_id)
         return jsonify({'error': '预分析失败，请稍后重试。'}), 500        
 
 @bp.route('/chapter-analysis_bid', methods=['POST'])
@@ -1594,7 +1610,7 @@ def chapter_analysis_bid():
         return jsonify(analysis_result)
 
     except Exception as e:
-        print(f'[ERROR] 招标文件章节提取失败，业务编号 {bidding_id}: {str(e)}')
+        logging.exception("招标文件章节提取失败，业务编号 %s", bidding_id)
         return jsonify({'error': '章节提取分析失败，请稍后重试。'}), 500
     
 @bp.route('/chapter-design', methods=['POST'])
@@ -1602,8 +1618,7 @@ def chapter_design():
     """投标文件章节设计"""
     data = request.get_json()
     bidding_id = data.get('biddingId') 
-    logging.info(f"temp_analysis_store: {temp_analysis_store}")
-    print(f"temp_analysis_store: {temp_analysis_store}")
+    logging.debug("temp_analysis_store keys: %s", list(temp_analysis_store.keys()))
     # 获取分析结果和目录结构
     analysis_data = temp_analysis_store.get(bidding_id, {}).get('analysisData')
     directory_structure = temp_analysis_store.get(bidding_id, {}).get('directoryStructure')
@@ -1665,7 +1680,7 @@ def chapter_design():
         response = call_dashscope_api([
             {'role': 'user', 'content': chapter_design_prompt}
         ])
-        print(f'[INFO] response: {response}')
+        logging.debug("章节设计模型响应已返回")
 
         # 获取返回内容
         try:
@@ -1676,16 +1691,13 @@ def chapter_design():
         try:
             analysis_result = strip_llm_json(http_data)
         except json.JSONDecodeError as e:
-            print("------ JSON Parse Error ------")
-            print(f"Error: {e}")
-            print("Raw text snippet:")
-            print(http_data[:2000])
-            return jsonify({'error': f'JSON解析失败: {str(e)}'}), 500
+            logging.exception("章节设计 JSON 解析失败，响应片段: %s", http_data[:500])
+            return jsonify({'error': 'JSON解析失败，请稍后重试。'}), 500
 
         return jsonify(analysis_result)
 
     except Exception as e:
-        print(f'[ERROR] 投标章节设计失败，业务编号 {bidding_id}: {str(e)}')
+        logging.exception("投标章节设计失败，业务编号 %s", bidding_id)
         return jsonify({'error': '章节生成失败，请稍后重试。'}), 500
 
     
@@ -1835,7 +1847,7 @@ def generate_bid_document():
         }
 
         # 生成JWT令牌
-        token = jwt.encode(payload, ONLYOFFICE_JWT_SECRET, algorithm='HS256')
+        token = jwt.encode(payload, _onlyoffice_jwt_secret(), algorithm='HS256')
         editor_config_with_token = {**payload, 'token': token}
         
 
@@ -1921,10 +1933,14 @@ def upload_knowledge():
     file = request.files['file']
     if file.filename == '':
         return jsonify({'error': '未选择知识库文件'}), 400
+    try:
+        validate_uploaded_file(file, kind="knowledge")
+    except UploadValidationError as exc:
+        return jsonify({'error': str(exc)}), 400
 
     try:
         original_filename = file.filename
-        safe_filename = secure_filename(original_filename)
+        safe_filename = safe_upload_filename(original_filename, "knowledge")
         unique_filename = f"{uuid.uuid4()}-{safe_filename}"
         file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], unique_filename)
         file.save(file_path)
@@ -2025,7 +2041,7 @@ def stream_search_knowledge():
                 yield emit(event)
         except Exception as e:
             logging.exception("知识库流式检索问答失败")
-            yield emit({"type": "error", "error": f"检索问答失败: {str(e)}"})
+            yield emit({"type": "error", "error": "检索问答失败，请查看后端日志。"})
 
     return Response(generate(), mimetype='text/event-stream')
 
@@ -2269,6 +2285,10 @@ def upload_knowledge_asset():
         file = request.files.get('file')
         if not file or not file.filename:
             return jsonify({'error': '请上传图片或附件文件'}), 400
+        try:
+            validate_uploaded_file(file, kind="asset")
+        except UploadValidationError as exc:
+            return jsonify({'error': str(exc)}), 400
 
         library_type = request.form.get('library_type') or 'qualification'
         if library_type not in {'qualification', 'product'}:
@@ -2287,7 +2307,7 @@ def upload_knowledge_asset():
         upload_dir = Path(current_app.config['UPLOAD_FOLDER'])
         upload_dir.mkdir(parents=True, exist_ok=True)
         original_filename = file.filename
-        unique_filename = f"asset-{uuid.uuid4()}-{secure_filename(original_filename) or 'upload'}"
+        unique_filename = f"asset-{uuid.uuid4()}-{safe_upload_filename(original_filename, 'asset')}"
         local_path = upload_dir / unique_filename
         file.save(local_path)
 

@@ -1,17 +1,23 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
 import os
 from dotenv import load_dotenv
 import sqlite3
-from datetime import datetime
-import uuid
-import json
+import logging
+
+from backend.core.security import get_cors_origins, register_security_handlers, validate_startup_security
 
 # 加载环境变量
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+validate_startup_security()
+CORS(app, origins=get_cors_origins(), supports_credentials=True)
+register_security_handlers(app)
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 
 # 配置
 app.config['UPLOAD_FOLDER'] = 'uploads'
@@ -80,8 +86,6 @@ app.register_blueprint(users.bp, url_prefix='/api/users')
 
 @app.route('/api/outputs/<path:filename>')
 def output_file(filename):
-    file_path = os.path.join(app.config['GENERATED_FOLDER'], filename)
-    print(f"输出文件访问: {file_path}, Exists: {os.path.exists(file_path)}")
     return send_from_directory(app.config['GENERATED_FOLDER'], filename)
 
 @app.route('/assets/<path:filename>')
@@ -104,6 +108,7 @@ def asset_file(filename):
 @app.route('/knowledge')
 @app.route('/qualification')
 @app.route('/products')
+@app.route('/usage-cost')
 @app.route('/settings')
 @app.route('/history')
 def bidding_workbench():
