@@ -32,6 +32,7 @@ import {
   createSectionGenerationTask,
   deleteBidSection,
   generateBidDocxDownload,
+  getBidExportTask,
   generateComplianceSupplement,
   getComplianceCheck,
   getInterpretation,
@@ -43,6 +44,7 @@ import {
   updateSectionGenerationTaskItem,
 } from '../../api/bidProject';
 import type { SectionGenerationTask } from '../../api/bidProject';
+import type { BidExportTask } from '../../api/bidProject';
 import { BrandMark } from '../../components/common/BrandMark';
 import { TiptapBidEditor } from '../../components/editor/TiptapBidEditor';
 import type { BidOutline, BidOutlineChapter, BidSection, ChapterWritingPlan, ComplianceReport, ComplianceRow, InterpretationResponse } from '../../types/interpretation';
@@ -277,6 +279,7 @@ export function BidEditorPage(): JSX.Element {
   const [streamingChildPlaceholders, setStreamingChildPlaceholders] = useState<StreamingChildPlaceholder[]>([]);
   const [downloadUrl, setDownloadUrl] = useState('');
   const [downloadGenerating, setDownloadGenerating] = useState<'full' | 'section' | null>(null);
+  const [exportTask, setExportTask] = useState<BidExportTask | null>(null);
   const [complianceReport, setComplianceReport] = useState<ComplianceReport | null>(null);
   const [complianceRefreshing, setComplianceRefreshing] = useState(false);
   const [complianceLastCheckedAt, setComplianceLastCheckedAt] = useState<Date | null>(null);
@@ -1186,20 +1189,43 @@ export function BidEditorPage(): JSX.Element {
       }
     }
     setDownloadGenerating(sectionId ? 'section' : 'full');
+    setExportTask(null);
     try {
       const result = await generateBidDocxDownload(data.project.id, {
         sectionId,
         withImages: !sectionId && withImages,
         volumeType: !sectionId && activeVolume !== 'all' ? activeVolume : undefined,
       });
-      setDownloadUrl(result.downloadUrl);
-      window.open(result.downloadUrl, '_blank');
-      message.success(sectionId ? '本章 DOCX 已生成' : `${activeVolume === 'all' ? '全文' : volumeLabel(activeVolume)} DOCX 已生成`);
+      setExportTask(result.task);
+      message.info(sectionId ? '本章 DOCX 导出任务已创建' : `${activeVolume === 'all' ? '全文' : volumeLabel(activeVolume)} DOCX 导出任务已创建`);
+      await pollBidExportTask(data.project.id, result.taskId, sectionId ? 'section' : 'full');
     } catch (error) {
       message.error(error instanceof Error ? error.message : String(error));
     } finally {
       setDownloadGenerating(null);
     }
+  }
+
+  async function pollBidExportTask(projectId: string, taskId: string, scope: 'full' | 'section'): Promise<void> {
+    const maxAttempts = 180;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const task = await getBidExportTask(projectId, taskId);
+      setExportTask(task);
+      if (task.status === 'completed') {
+        if (!task.download_url) {
+          throw new Error('DOCX 导出完成但未返回下载地址');
+        }
+        setDownloadUrl(task.download_url);
+        window.open(task.download_url, '_blank');
+        message.success(scope === 'section' ? '本章 DOCX 已生成' : `${activeVolume === 'all' ? '全文' : volumeLabel(activeVolume)} DOCX 已生成`);
+        return;
+      }
+      if (task.status === 'failed') {
+        throw new Error(task.error_message || task.message || 'DOCX 导出失败');
+      }
+      await new Promise(resolve => window.setTimeout(resolve, 1500));
+    }
+    throw new Error('DOCX 导出仍在处理中，请稍后刷新任务状态或重试。');
   }
 
   async function resetGenerationStatus(): Promise<void> {
@@ -1457,6 +1483,7 @@ export function BidEditorPage(): JSX.Element {
     const decoder = new TextDecoder();
     let buffer = '';
     let accumulatedContent = `## ${targetChapter.title || '未命名章节'}\n\n`;
+    setChapters(items => items.map(item => item.id === targetChapter.id ? { ...item, content: accumulatedContent } : item));
 
     function handleFrame(frame: string): void {
       const eventLine = frame.split('\n').find(line => line.startsWith('event:'));
@@ -1524,7 +1551,8 @@ export function BidEditorPage(): JSX.Element {
     });
     setSectionStreaming(true);
     setStreamText(`正在生成章节正文：${targetChapter.title || '未命名章节'}`);
-    setChapters(items => items.map(item => item.id === targetChapter.id ? { ...item, status: 'generating', content: `## ${targetChapter.title || '未命名章节'}\n\n` } : item));
+    const originalContent = targetChapter.content || '';
+    setChapters(items => items.map(item => item.id === targetChapter.id ? { ...item, status: 'generating' } : item));
 
     try {
       await streamSectionContent(targetChapter, {
@@ -1546,8 +1574,8 @@ export function BidEditorPage(): JSX.Element {
       void refreshComplianceReport(data.project.id, { silent: true });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      setChapters(items => items.map(item => item.id === targetChapter.id ? { ...item, status: 'failed', content: '' } : item));
-      message.error(reason);
+      setChapters(items => items.map(item => item.id === targetChapter.id ? { ...item, status: 'failed', content: originalContent } : item));
+      message.error(`${reason}，已保留原正文`);
     } finally {
       setSectionStreaming(false);
     }
@@ -1563,7 +1591,7 @@ export function BidEditorPage(): JSX.Element {
       return;
     }
     const targetWords = targetChapterWords(chapter);
-    const chapterHeader = `## ${chapterDisplayTitle(chapter)}\n\n`;
+    const originalContent = chapter.content || '';
     const controller = new AbortController();
     batchAbortControllersRef.current.set(chapter.id, controller);
     updateBatchTask(chapter.id, {
@@ -1580,7 +1608,7 @@ export function BidEditorPage(): JSX.Element {
       targetWords,
       message: '正在编写',
     });
-    setChapters(items => items.map(item => item.id === chapter.id ? { ...item, status: 'generating', content: chapterHeader } : item));
+    setChapters(items => items.map(item => item.id === chapter.id ? { ...item, status: 'generating' } : item));
 
     try {
       await streamSectionContent(chapter, {
@@ -1643,19 +1671,20 @@ export function BidEditorPage(): JSX.Element {
         return;
       }
       const errorMessage = error instanceof Error ? error.message : String(error);
+      const preserveMessage = `${errorMessage}，已保留原正文`;
       updateBatchTask(chapter.id, {
         status: 'failed',
         percent: 100,
-        message: errorMessage,
+        message: preserveMessage,
       });
       syncBatchTaskItem(chapter.id, {
         status: 'failed',
         percent: 100,
         targetWords,
-        message: errorMessage,
+        message: preserveMessage,
         error: errorMessage,
       });
-      setChapters(items => items.map(item => item.id === chapter.id ? { ...item, status: 'failed', content: '' } : item));
+      setChapters(items => items.map(item => item.id === chapter.id ? { ...item, status: 'failed', content: originalContent } : item));
     } finally {
       batchAbortControllersRef.current.delete(chapter.id);
     }
@@ -1823,6 +1852,11 @@ export function BidEditorPage(): JSX.Element {
           >
             {activeVolume === 'all' ? '标书下载' : `下载${volumeLabel(activeVolume)}`}
           </Button>
+            {exportTask && downloadGenerating === 'full' ? (
+              <Tooltip title={exportTask.message || '正在导出 DOCX'}>
+                <Progress type="circle" size={34} percent={exportTask.progress || 0} />
+              </Tooltip>
+            ) : null}
           </Space>
         </header>
 
@@ -2046,11 +2080,16 @@ export function BidEditorPage(): JSX.Element {
             type="primary"
             icon={<Download size={17} />}
             loading={downloadGenerating === 'full'}
-              disabled={!scopedChapters.length || !!downloadGenerating}
-              onClick={() => void downloadDocx()}
-            >
-              {activeVolume === 'all' ? '标书下载' : `下载${volumeLabel(activeVolume)}`}
-            </Button>
+            disabled={!scopedChapters.length || !!downloadGenerating}
+            onClick={() => void downloadDocx()}
+          >
+            {activeVolume === 'all' ? '标书下载' : `下载${volumeLabel(activeVolume)}`}
+          </Button>
+          {exportTask && downloadGenerating === 'full' ? (
+            <Tooltip title={exportTask.message || '正在导出 DOCX'}>
+              <Progress type="circle" size={34} percent={exportTask.progress || 0} />
+            </Tooltip>
+          ) : null}
         </Space>
       </header>
 
@@ -2188,6 +2227,11 @@ export function BidEditorPage(): JSX.Element {
             >
               下载本章
             </Button>
+            {exportTask && downloadGenerating === 'section' ? (
+              <Tooltip title={exportTask.message || '正在导出 DOCX'}>
+                <Progress type="circle" size={30} percent={exportTask.progress || 0} />
+              </Tooltip>
+            ) : null}
           </Space>
         </section>
 

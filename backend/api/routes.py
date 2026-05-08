@@ -21,7 +21,7 @@ from backend.ai.chapter_planner import generate_bid_outline, stream_bid_outline
 from backend.ai.section_writer import stream_bid_section
 from backend.ai.interpreter import generate_ai_interpretation_report
 from backend.ai.compliance_checker import build_compliance_report
-from backend.db.supabase_repo import cancel_bid_generation_task, create_bid_generation_task, create_knowledge_asset, delete_bid_project, delete_bid_section, download_bid_file_to_local, download_knowledge_asset_file_variant, get_ai_usage_overview, get_bid_file, get_latest_bid_file_for_project, get_latest_bid_generation_task, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_file_parse_status, update_bid_generation_task_item, update_bid_section_content, upload_knowledge_asset_file, upsert_bid_section
+from backend.db.supabase_repo import cancel_bid_generation_task, create_bid_export_task, create_bid_generation_task, create_knowledge_asset, delete_bid_project, delete_bid_section, download_bid_file_to_local, download_knowledge_asset_file_variant, get_ai_usage_overview, get_bid_export_task, get_bid_file, get_latest_bid_file_for_project, get_latest_bid_generation_task, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_export_task, update_bid_file_parse_status, update_bid_generation_task_item, update_bid_section_content, upload_knowledge_asset_file, upsert_bid_section
 from backend.core.llm_json_utils import strip_llm_json
 from backend.core.bid_volumes import delivery_volume_type, section_volume_type, volume_name
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1098,11 +1098,23 @@ def stream_interpretation_bid_section(project_id):
             logging.exception("流式生成章节正文失败: %s", project_id)
             if chapter.get("id"):
                 try:
-                    update_bid_section_content(project_id, chapter["id"], "", "failed", chapter)
+                    update_bid_section_content(
+                        project_id,
+                        chapter["id"],
+                        "",
+                        "failed",
+                        chapter,
+                        preserve_existing_content=True,
+                        metadata_patch={
+                            "generation_status": "failed",
+                            "writing_status": "failed",
+                            "writing_error": "流式生成章节正文失败，已保留原正文。",
+                        },
+                    )
                 except Exception:
                     logging.exception("写入章节失败状态失败: %s", chapter.get("id"))
             yield "event: error\n"
-            yield f"data: {json.dumps({'error': '流式生成章节正文失败，请查看后端日志。'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'error': '流式生成章节正文失败，已保留原正文，请查看后端日志。'}, ensure_ascii=False)}\n\n"
 
     return Response(
         stream_with_context(event_stream()),
@@ -1443,7 +1455,7 @@ def generate_onlyoffice_config(project_id):
 
 @bp.route('/interpretations/<project_id>/download-docx', methods=['POST'])
 def download_bid_docx(project_id):
-    """基于 bid_sections 生成符合国内标书排版习惯的 DOCX 下载文件。"""
+    """创建 DOCX 导出任务，并在后台生成下载文件。"""
     try:
         uuid.UUID(project_id)
     except ValueError:
@@ -1461,31 +1473,101 @@ def download_bid_docx(project_id):
                 uuid.UUID(section_id)
             except ValueError:
                 section_id = None
-
-        markdown_path, project_name = build_project_bid_markdown(
+        task = create_bid_export_task(
             project_id,
-            section_id,
-            with_images=with_images,
+            scope="section" if section_id else ("volume" if volume_type else "full"),
+            section_id=section_id,
             volume_type=None if section_id else volume_type,
+            with_images=with_images,
+            metadata={"requested_from": "bid_editor"},
         )
-        generated_docx_path = convert_md_to_word(markdown_path)
-        if not generated_docx_path or not Path(generated_docx_path).exists():
-            raise RuntimeError("DOCX 生成失败，未找到输出文件。")
 
-        generated_docx_path = Path(generated_docx_path)
+        app = current_app._get_current_object()
+        thread = threading.Thread(
+            target=_run_bid_docx_export_task,
+            args=(app, project_id, task["id"], section_id, with_images, volume_type),
+            daemon=True,
+        )
+        thread.start()
+
         return jsonify({
-            'message': 'DOCX 已生成。',
+            'message': 'DOCX 导出任务已创建。',
             'projectId': project_id,
+            'task': task,
+            'taskId': task["id"],
             'sectionId': section_id,
             'withImages': with_images,
             'volumeType': volume_type,
-            'projectName': project_name,
-            'fileName': generated_docx_path.name,
-            'downloadUrl': _output_url_for_path(generated_docx_path),
         }), 201
     except Exception as e:
-        logging.exception("生成 DOCX 下载文件失败: %s", project_id)
-        return jsonify({'error': f'生成 DOCX 下载文件失败: {str(e)}'}), 500
+        logging.exception("创建 DOCX 导出任务失败: %s", project_id)
+        return jsonify({'error': f'创建 DOCX 导出任务失败: {str(e)}'}), 500
+
+
+def _run_bid_docx_export_task(app, project_id: str, task_id: str, section_id: str | None, with_images: bool, volume_type: str | None) -> None:
+    with app.app_context():
+        try:
+            update_bid_export_task(project_id, task_id, {
+                "status": "running",
+                "progress": 10,
+                "message": "正在整理标书 Markdown 内容。",
+                "started_at": datetime.utcnow().isoformat(),
+            })
+            markdown_path, project_name = build_project_bid_markdown(
+                project_id,
+                section_id,
+                with_images=with_images,
+                volume_type=None if section_id else volume_type,
+            )
+            update_bid_export_task(project_id, task_id, {
+                "progress": 55,
+                "message": "正在转换 Word 文档。",
+                "project_name": project_name,
+            })
+            generated_docx_path = convert_md_to_word(markdown_path)
+            if not generated_docx_path or not Path(generated_docx_path).exists():
+                raise RuntimeError("DOCX 生成失败，未找到输出文件。")
+            generated_docx_path = Path(generated_docx_path)
+            update_bid_export_task(project_id, task_id, {
+                "status": "completed",
+                "progress": 100,
+                "message": "DOCX 已生成。",
+                "project_name": project_name,
+                "file_name": generated_docx_path.name,
+                "file_path": str(generated_docx_path),
+                "download_url": _output_url_for_path(generated_docx_path),
+                "finished_at": datetime.utcnow().isoformat(),
+            })
+        except Exception as exc:
+            logging.exception("后台 DOCX 导出任务失败: project_id=%s task_id=%s", project_id, task_id)
+            try:
+                update_bid_export_task(project_id, task_id, {
+                    "status": "failed",
+                    "progress": 100,
+                    "message": "DOCX 导出失败，请查看错误信息。",
+                    "error_message": str(exc)[:1000],
+                    "finished_at": datetime.utcnow().isoformat(),
+                })
+            except Exception:
+                logging.exception("写入 DOCX 导出任务失败状态失败: %s", task_id)
+
+
+@bp.route('/interpretations/<project_id>/export-tasks/<task_id>', methods=['GET'])
+def get_bid_export_task_api(project_id, task_id):
+    """查询 DOCX 导出任务状态。"""
+    try:
+        uuid.UUID(project_id)
+        uuid.UUID(task_id)
+    except ValueError:
+        return jsonify({'error': 'project_id 或 task_id 不是合法 UUID。'}), 400
+    try:
+        task = get_bid_export_task(project_id, task_id)
+        if not task:
+            return jsonify({'error': 'DOCX 导出任务不存在。'}), 404
+        return jsonify({"task": task})
+    except Exception as e:
+        logging.exception("查询 DOCX 导出任务失败: %s", project_id)
+        return jsonify({'error': f'查询 DOCX 导出任务失败: {str(e)}'}), 500
      
 @bp.route('/save-callback', methods=['POST'])
 def save_callback():

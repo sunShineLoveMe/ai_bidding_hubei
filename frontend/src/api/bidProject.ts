@@ -184,6 +184,27 @@ export async function cancelSectionGenerationTask(projectId: string, taskId: str
   return response.data.task;
 }
 
+export type BidExportTask = {
+  id: string;
+  project_id: string;
+  export_type: string;
+  scope: 'full' | 'volume' | 'section';
+  section_id?: string | null;
+  volume_type?: string | null;
+  with_images: boolean;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  progress: number;
+  message?: string;
+  project_name?: string;
+  file_name?: string;
+  file_path?: string;
+  download_url?: string;
+  error_message?: string;
+  created_at?: string;
+  updated_at?: string;
+  finished_at?: string;
+};
+
 export async function generateOnlyOfficeConfig(projectId: string, sectionId?: string): Promise<OnlyOfficeConfigResponse> {
   const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/onlyoffice-config`, sectionId ? { sectionId } : undefined, {
     skipGlobalLoading: true,
@@ -195,12 +216,18 @@ export async function generateOnlyOfficeConfig(projectId: string, sectionId?: st
 export async function generateBidDocxDownload(
   projectId: string,
   options?: { sectionId?: string; withImages?: boolean; volumeType?: string },
-): Promise<{ downloadUrl: string; fileName: string }> {
+): Promise<{ task: BidExportTask; taskId: string }> {
   const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/download-docx`, options || undefined, {
     skipGlobalLoading: true,
-    timeout: 600000,
   });
   return response.data;
+}
+
+export async function getBidExportTask(projectId: string, taskId: string): Promise<BidExportTask> {
+  const response = await apiClient.get(`/api/bidding/interpretations/${projectId}/export-tasks/${taskId}`, {
+    skipGlobalLoading: true,
+  });
+  return response.data.task;
 }
 
 export async function preAnalyzeBid(biddingId: number): Promise<unknown> {

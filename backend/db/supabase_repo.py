@@ -4,7 +4,7 @@ import mimetypes
 import os
 import time
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -952,9 +952,26 @@ def update_bid_section_content(
     content: str,
     status: str = "edited",
     section: dict[str, Any] | None = None,
+    preserve_existing_content: bool = False,
+    metadata_patch: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     client = get_supabase_client()
-    payload = {"content": content, "status": status}
+    payload = {"status": status}
+    if not preserve_existing_content:
+        payload["content"] = content
+    if metadata_patch:
+        current_rows = (
+            client.table("bid_sections")
+            .select("metadata")
+            .eq("id", section_id)
+            .eq("project_id", project_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        current_metadata = dict((current_rows[0] if current_rows else {}).get("metadata") or {})
+        payload["metadata"] = {**current_metadata, **metadata_patch}
     response = (
         client
         .table("bid_sections")
@@ -969,9 +986,12 @@ def update_bid_section_content(
     if section:
         existing = _find_existing_section_for_generated_content(project_id, section)
         if existing:
+            retry_payload = dict(payload)
+            if metadata_patch:
+                retry_payload["metadata"] = {**(existing.get("metadata") or {}), **metadata_patch}
             retry = (
                 client.table("bid_sections")
-                .update(payload)
+                .update(retry_payload)
                 .eq("id", existing["id"])
                 .eq("project_id", project_id)
                 .execute()
@@ -979,7 +999,13 @@ def update_bid_section_content(
             if retry.data:
                 return retry.data[0]
 
-        fallback = _section_payload(project_id, {**section, "id": None, "content": content, "status": status, "parent_id": None}, int(section.get("order_index") or section.get("order") or 1) - 1)
+        fallback_content = section.get("content") if preserve_existing_content else content
+        fallback_metadata = {**(section.get("metadata") or {}), **(metadata_patch or {})}
+        fallback = _section_payload(
+            project_id,
+            {**section, "id": None, "content": fallback_content or "", "status": status, "parent_id": None, "metadata": fallback_metadata},
+            _as_order_index(section.get("order_index") or section.get("order"), 1) - 1,
+        )
         created = client.table("bid_sections").insert(fallback).execute()
         if created.data:
             logging.warning(
@@ -1252,6 +1278,78 @@ def cancel_bid_generation_task(project_id: str, task_id: str) -> dict[str, Any]:
     )
     if not response.data:
         raise RuntimeError("Supabase bid_generation_tasks cancel returned no data")
+    return response.data[0]
+
+
+def create_bid_export_task(
+    project_id: str,
+    *,
+    scope: str = "full",
+    section_id: str | None = None,
+    volume_type: str | None = None,
+    with_images: bool = False,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = {
+        "project_id": project_id,
+        "export_type": "docx",
+        "scope": scope,
+        "section_id": section_id if _is_valid_uuid(section_id) else None,
+        "volume_type": volume_type,
+        "with_images": bool(with_images),
+        "status": "queued",
+        "progress": 0,
+        "message": "导出任务已创建，等待处理。",
+        "metadata": metadata or {},
+    }
+    response = _with_supabase_write_retry(
+        lambda client: client.table("bid_export_tasks").insert(payload).execute(),
+        label="创建 DOCX 导出任务",
+    )
+    if not response.data:
+        raise RuntimeError("Supabase bid_export_tasks insert returned no data")
+    return response.data[0]
+
+
+def get_bid_export_task(project_id: str, task_id: str) -> dict[str, Any] | None:
+    response = (
+        get_supabase_client()
+        .table("bid_export_tasks")
+        .select("*")
+        .eq("id", task_id)
+        .eq("project_id", project_id)
+        .limit(1)
+        .execute()
+    )
+    return response.data[0] if response.data else None
+
+
+def update_bid_export_task(project_id: str, task_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+    allowed_keys = {
+        "status",
+        "progress",
+        "message",
+        "project_name",
+        "file_name",
+        "file_path",
+        "download_url",
+        "error_message",
+        "metadata",
+        "started_at",
+        "finished_at",
+    }
+    payload = {key: value for key, value in patch.items() if key in allowed_keys}
+    if not payload:
+        task = get_bid_export_task(project_id, task_id)
+        if not task:
+            raise RuntimeError("DOCX 导出任务不存在")
+        return task
+    response = _with_supabase_write_retry(
+        lambda client: client.table("bid_export_tasks").update(payload).eq("id", task_id).eq("project_id", project_id).execute(),
+        label="更新 DOCX 导出任务",
+    )
+    if not response.data:
+        raise RuntimeError("Supabase bid_export_tasks update returned no data")
     return response.data[0]
 
 

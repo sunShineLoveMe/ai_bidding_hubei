@@ -701,6 +701,7 @@ python main.py
 -- sql/20260507_create_ai_usage_tracking.sql
 -- sql/20260507_update_ai_usage_pricing_cny.sql
 -- sql/20260508_create_bid_generation_tasks.sql
+-- sql/20260508_create_bid_export_tasks.sql
 -- sql/20260508_supabase_idempotency_indexes.sql
 ```
 
@@ -714,7 +715,7 @@ python main.py
 | `ai_usage_logs` | 保存 AI 调用明细，包括项目、阶段、模型、Token、人民币费用和原始 usage |
 | `ai_usage_project_summary` / `ai_usage_daily_summary` | 汇总项目级和日期级调用成本，供用量与成本中心展示 |
 
-如果 `20260429` 脚本尚未执行，系统会尽量回退 SQLite；但推荐新部署直接执行 SQL，确保主链路统一到 Supabase。`20260507_create` 脚本是 Token 用量与成本统计的必需表结构，未执行时一级菜单「用量与成本」无法展示真实统计。若历史环境已写入 USD 口径价格或日志，请补充执行 `20260507_update_ai_usage_pricing_cny.sql`，将价格和历史成本折算为人民币。`20260508_create_bid_generation_tasks.sql` 用于记录“一键编写全文”的后端任务态，支持刷新后恢复批量章节生成进度。`20260508_supabase_idempotency_indexes.sql` 用于给知识库文档、知识库分片和资信/产品资产补充防重复索引，其中资信/产品资产按 `storage_bucket/storage_path` 防重；如果历史库已有重复记录，需先备份并清理重复数据后再执行。
+如果 `20260429` 脚本尚未执行，系统会尽量回退 SQLite；但推荐新部署直接执行 SQL，确保主链路统一到 Supabase。`20260507_create` 脚本是 Token 用量与成本统计的必需表结构，未执行时一级菜单「用量与成本」无法展示真实统计。若历史环境已写入 USD 口径价格或日志，请补充执行 `20260507_update_ai_usage_pricing_cny.sql`，将价格和历史成本折算为人民币。`20260508_create_bid_generation_tasks.sql` 用于记录“一键编写全文”的后端任务态，支持刷新后恢复批量章节生成进度。`20260508_create_bid_export_tasks.sql` 用于记录 DOCX 导出任务，支持长文档后台导出和前端轮询。`20260508_supabase_idempotency_indexes.sql` 用于给知识库文档、知识库分片和资信/产品资产补充防重复索引，其中资信/产品资产按 `storage_bucket/storage_path` 防重；如果历史库已有重复记录，需先备份并清理重复数据后再执行。
 
 ### 4. 启动后端
 
@@ -850,7 +851,8 @@ docker run -d \
 | `POST /api/bidding/interpretations/<project_id>/bid-outline` | 生成分册化章节大纲，返回 `volumes + chapters` |
 | `GET /api/bidding/interpretations/<project_id>/bid-outline/stream` | SSE 流式生成分册化章节大纲 |
 | `POST /api/bidding/interpretations/<project_id>/sections/stream` | 流式生成章节正文 |
-| `POST /api/bidding/interpretations/<project_id>/download-docx` | 生成 DOCX；可传 `volumeType` 单独导出技术标或商务标 |
+| `POST /api/bidding/interpretations/<project_id>/download-docx` | 创建 DOCX 导出任务；可传 `volumeType` 单独导出技术标或商务标 |
+| `GET /api/bidding/interpretations/<project_id>/export-tasks/<task_id>` | 查询 DOCX 导出任务状态和下载地址 |
 | `POST /api/knowledge/upload` | 上传知识库资料 |
 | `POST /api/knowledge/search` | RAG 检索问答 |
 | `POST /api/knowledge/search/stream` | SSE 流式 RAG 检索问答 |
@@ -939,8 +941,8 @@ docker run -d \
 - [x] 历史记录已合并 Supabase 文件状态与本地 MinerU 状态文件，支持展示解析中、解析失败、失败原因和解析任务 ID。
 - [x] 历史记录支持失败任务重试解析：优先复用本地上传文件，不存在时从 Supabase Storage 拉取原文件，生成新的 `parse_id` 后重新进入 MinerU/OCR 解析链路。
 - [x] 历史记录页对解析中任务进行自动刷新，用户离开首页后再返回也能追踪解析进度。
-- [ ] 单章生成失败时保留上一次成功正文或用户编辑稿，避免误清空有效内容。
-- [ ] DOCX 导出增加任务化处理，长文档和图文并茂导出可轮询状态，避免 HTTP 请求超时。
+- [x] 单章生成失败时保留上一次成功正文或用户编辑稿，避免误清空有效内容。
+- [x] DOCX 导出增加任务化处理，长文档和图文并茂导出可轮询状态，避免 HTTP 请求超时。
 - [ ] 图文并茂导出增加图片命中解释、插图数量上限、图片下载失败降级和引用来源记录。
 - [ ] MinerU 下载、解析、导入继续保留断点重试和失败原因展示。
 
@@ -997,6 +999,8 @@ docker run -d \
 - [x] 增加 AI Token 用量与成本统计：Supabase 记录调用明细，一级菜单展示近 30 天 Token、人民币预估费用、项目成本汇总、项目详情弹窗和多模型兼容统计口径
 - [x] 完成 P0 安全与部署最小闭环：`.env.example`、CORS 白名单、可选访问令牌、生产配置校验、上传校验、500 错误脱敏和 logging 收敛
 - [x] 增加批量章节生成后端任务态：`bid_generation_tasks` 记录整批任务和每章状态，前端刷新后恢复最近一次批量生成进度
+- [x] 增加章节生成失败保稿保护：单章/批量章节生成失败时只更新失败状态和错误信息，不覆盖数据库正文，前端恢复生成前正文
+- [x] 增加 DOCX 导出任务化：`bid_export_tasks` 记录全书、分册、单章导出状态，后端后台生成 Word，前端轮询进度并自动打开下载链接
 
 ## License
 

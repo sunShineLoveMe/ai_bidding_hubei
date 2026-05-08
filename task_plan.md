@@ -263,3 +263,105 @@ npm run build
 
 ## Status
 **Complete** - 批量章节生成后端任务态第一版已完成，支持任务创建、单章状态同步、取消任务和刷新后恢复最近任务进度。
+
+---
+
+# Task Plan: P1.4 章节生成失败保稿保护
+
+## Goal
+确保单章重写、批量章节生成或模型流式异常时，不会误清空用户已经编辑过的正文，也不会覆盖上一版成功生成的正文。
+
+## Scope
+- 后端章节正文保存函数支持 `preserve_existing_content`，失败状态只更新状态和错误 metadata。
+- 流式章节生成异常时不再调用空正文覆盖数据库，只记录 `writing_error`。
+- 前端单章生成开始时保留原正文快照，失败后恢复快照。
+- 前端批量生成每章开始时保留原正文快照，失败后恢复快照。
+- 批量任务状态继续记录失败原因，但提示“已保留原正文”。
+- README 路线图同步完成状态。
+
+## Phases
+- [x] Phase 1: 排查所有生成失败清空正文路径
+- [x] Phase 2: 后端 `update_bid_section_content` 增加失败保稿参数和 metadata patch
+- [x] Phase 3: 后端流式生成异常只更新失败状态，不覆盖正文
+- [x] Phase 4: 前端单章生成失败恢复原正文
+- [x] Phase 5: 前端批量章节生成失败恢复原正文并同步任务错误
+- [x] Phase 6: README 和任务清单同步
+
+## Files Changed
+- `backend/db/supabase_repo.py`
+- `backend/api/routes.py`
+- `frontend/src/pages/BidEditor/index.tsx`
+- `README.md`
+- `task_plan.md`
+
+## Verification
+
+```bash
+python -m py_compile backend/db/supabase_repo.py backend/api/routes.py
+npm run build
+```
+
+验证结果：
+- 后端编译通过。
+- 前端构建通过，仍有既有 chunk size warning。
+
+## Notes
+- 生成开始时前端仍会展示新流式正文，但失败后会恢复生成前正文快照。
+- 后端失败状态使用 `preserve_existing_content=True`，数据库正文不会被空字符串覆盖。
+- 若章节 ID 已失效并需要降级重建，失败状态下会优先使用请求中的原正文内容。
+
+## Status
+**Complete** - 章节生成失败保稿保护已完成，单章和批量生成失败均不会清空已有正文。
+
+---
+
+# Task Plan: P1.5 DOCX 导出任务化
+
+## Goal
+将全书、分册和单章 DOCX 导出从长时间同步 HTTP 请求改为后端任务，避免长文档、图文并茂导出时请求超时、重复点击和用户无进度反馈。
+
+## Scope
+- 新增 `bid_export_tasks` 表，记录导出范围、状态、进度、文件名、下载地址和错误信息。
+- `/download-docx` 改为创建导出任务并启动后台线程。
+- 后端后台执行 Markdown 组装和 DOCX 转换，持续更新任务状态。
+- 新增导出任务查询接口，前端轮询任务进度。
+- 前端下载按钮改为创建任务、显示进度、成功后自动打开下载链接。
+- 支持全书导出、分册导出和单章导出。
+- README 和任务清单同步。
+
+## Phases
+- [x] Phase 1: 增加 `sql/20260508_create_bid_export_tasks.sql`
+- [x] Phase 2: Supabase repo 增加导出任务创建、查询和更新函数
+- [x] Phase 3: 后端 `/download-docx` 改为任务化并增加后台执行函数
+- [x] Phase 4: 后端新增导出任务查询接口
+- [x] Phase 5: 前端 API 增加导出任务类型和查询函数
+- [x] Phase 6: BidEditor 下载流程改为创建任务并轮询状态
+- [x] Phase 7: README 和任务清单同步
+
+## Files Changed
+- `sql/20260508_create_bid_export_tasks.sql`
+- `backend/db/supabase_repo.py`
+- `backend/api/routes.py`
+- `frontend/src/api/bidProject.ts`
+- `frontend/src/pages/BidEditor/index.tsx`
+- `README.md`
+- `task_plan.md`
+
+## Verification
+
+```bash
+python -m py_compile backend/db/supabase_repo.py backend/api/routes.py
+npm run build
+```
+
+验证结果：
+- 后端编译通过。
+- 前端构建通过，仍有既有 chunk size warning。
+
+## Notes
+- 正式使用前需要在 Supabase 执行 `sql/20260508_create_bid_export_tasks.sql`。
+- 任务化后 `/download-docx` 返回的是任务 ID，不再同步等待 DOCX 生成完成。
+- 后端使用后台线程执行导出；单进程本地/私有化 MVP 足够使用。后续如部署多实例，应升级为持久化队列或任务 worker。
+
+## Status
+**Complete** - DOCX 导出任务化第一版已完成，支持全书、分册和单章后台导出，前端轮询进度并在成功后打开下载链接。
