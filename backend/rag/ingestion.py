@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any, List, Dict
 
-from backend.db.supabase_client import get_supabase_client, upload_file_to_storage, get_bucket_name
+from backend.db.supabase_client import get_supabase_client, reset_supabase_client, upload_file_to_storage, get_bucket_name
 from backend.rag.vector_store import init_ali_client, get_embeddings, split_text
 
 
@@ -68,6 +68,21 @@ def create_knowledge_document(title: str, category: str, bucket: str, object_pat
         "source_type": source_type,
         "status": "processing"
     }
+    existing = (
+        client.table("knowledge_documents")
+        .select("id")
+        .eq("bucket", bucket)
+        .eq("object_path", object_path)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if existing:
+        document_id = existing[0]["id"]
+        client.table("knowledge_documents").update(payload).eq("id", document_id).execute()
+        return document_id
+
     response = client.table("knowledge_documents").insert(payload).execute()
     if not response.data:
         raise RuntimeError("Failed to create knowledge document")
@@ -76,6 +91,26 @@ def create_knowledge_document(title: str, category: str, bucket: str, object_pat
 def update_knowledge_document_status(document_id: str, status: str) -> None:
     client = get_supabase_client()
     client.table("knowledge_documents").update({"status": status}).eq("id", document_id).execute()
+
+
+def _write_chunks_with_retry(client, rows: list[dict[str, Any]], batch_size: int = 50) -> int:
+    inserted_count = 0
+    for i in range(0, len(rows), batch_size):
+        batch = rows[i:i + batch_size]
+        last_error: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                response = client.table("document_chunks").insert(batch).execute()
+                inserted_count += len(response.data) if response.data else 0
+                break
+            except Exception as exc:
+                last_error = exc
+                logging.warning("知识库 chunk 第 %s 批第 %s 次写入失败: %s", i // batch_size + 1, attempt, exc)
+                reset_supabase_client()
+                client = get_supabase_client()
+                if attempt >= 3:
+                    raise RuntimeError(f"知识库 chunk 写入失败，已重试 3 次: {last_error}") from last_error
+    return inserted_count
 
 def ingest_knowledge_document(
     document_id: str,
@@ -150,16 +185,9 @@ def ingest_knowledge_document(
             "metadata": doc["metadata"]
         })
         
-    # 分批写入数据库，避免 payload 过大
-    batch_size = 50
-    inserted_count = 0
-    for i in range(0, len(rows_to_insert), batch_size):
-        batch = rows_to_insert[i:i+batch_size]
-        try:
-            response = client.table("document_chunks").insert(batch).execute()
-            inserted_count += len(response.data) if response.data else 0
-        except Exception as e:
-            logging.error(f"知识库 chunk 写入失败: {e}")
+    # 重入同一文档时先清理旧分片，避免刷新/重试导致检索结果重复。
+    client.table("document_chunks").delete().eq("document_id", document_id).execute()
+    inserted_count = _write_chunks_with_retry(client, rows_to_insert)
             
     update_knowledge_document_status(document_id, "indexed")
             

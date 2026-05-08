@@ -681,6 +681,54 @@ def _is_valid_uuid(value: Any) -> bool:
         return False
 
 
+def _as_order_index(value: Any, fallback: int = 1) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _without_system_columns(row: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in row.items() if key not in {"created_at", "updated_at"}}
+
+
+def _with_supabase_write_retry(operation, *, label: str, attempts: int = 3, base_delay: float = 0.35):
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return operation(get_supabase_client())
+        except Exception as exc:
+            last_error = exc
+            logging.warning("%s 第 %s 次失败，准备重试: %s", label, attempt, exc)
+            reset_supabase_client()
+            if attempt < attempts:
+                time.sleep(base_delay * attempt)
+    raise RuntimeError(f"{label}失败，已重试 {attempts} 次: {last_error}") from last_error
+
+
+def _section_parent_exists(client, project_id: str, parent_id: str | None) -> bool:
+    if not parent_id:
+        return False
+    response = (
+        client.table("bid_sections")
+        .select("id")
+        .eq("id", parent_id)
+        .eq("project_id", project_id)
+        .limit(1)
+        .execute()
+    )
+    return bool(response.data)
+
+
+def _normalize_section_parent_id(client, project_id: str, parent_id: Any) -> str | None:
+    if not _is_valid_uuid(parent_id):
+        return None
+    if _section_parent_exists(client, project_id, parent_id):
+        return parent_id
+    logging.warning("章节 parent_id 不存在，已降级为空: project_id=%s parent_id=%s", project_id, parent_id)
+    return None
+
+
 def _section_payload(project_id: str, section: dict[str, Any], index: int) -> dict[str, Any]:
     section = ensure_section_volume(section)
     return {
@@ -701,6 +749,31 @@ def _section_payload(project_id: str, section: dict[str, Any], index: int) -> di
         "content": section.get("content") or "",
         "metadata": section.get("metadata") or {},
     }
+
+
+def _find_existing_section_for_save(project_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    title = payload.get("title")
+    if not title:
+        return None
+    rows = (
+        get_supabase_client()
+        .table("bid_sections")
+        .select("*")
+        .eq("project_id", project_id)
+        .eq("title", title)
+        .eq("order_index", payload.get("order_index"))
+        .eq("level", payload.get("level"))
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        return None
+    parent_id = payload.get("parent_id")
+    for row in rows:
+        if (row.get("parent_id") or None) == (parent_id or None):
+            return row
+    return rows[0]
 
 
 def _outline_flat_sections(outline: dict[str, Any]) -> list[dict[str, Any]]:
@@ -782,31 +855,36 @@ def list_bid_sections(project_id: str) -> list[dict[str, Any]]:
 
 
 def upsert_bid_section(project_id: str, section: dict[str, Any]) -> dict[str, Any]:
-    payload = _section_payload(project_id, section, int(section.get("order_index") or section.get("order") or 1) - 1)
+    payload = _section_payload(project_id, section, _as_order_index(section.get("order_index") or section.get("order"), 1) - 1)
     section_id = section.get("id")
     client = get_supabase_client()
-    parent_id = payload.get("parent_id")
-    if parent_id:
-        parent_response = (
-            client.table("bid_sections")
-            .select("id")
-            .eq("id", parent_id)
-            .eq("project_id", project_id)
-            .limit(1)
-            .execute()
-        )
-        if not parent_response.data:
-            payload["parent_id"] = None
+    payload["parent_id"] = _normalize_section_parent_id(client, project_id, payload.get("parent_id"))
+
     if _is_valid_uuid(section_id):
         response = client.table("bid_sections").update(payload).eq("id", section_id).eq("project_id", project_id).execute()
+        if response.data:
+            return response.data[0]
+        insert_payload = {**payload, "id": section_id}
+        response = client.table("bid_sections").insert(insert_payload).execute()
     else:
-        response = client.table("bid_sections").insert(payload).execute()
+        existing = _find_existing_section_for_save(project_id, payload)
+        if existing:
+            response = (
+                client.table("bid_sections")
+                .update(payload)
+                .eq("id", existing["id"])
+                .eq("project_id", project_id)
+                .execute()
+            )
+        else:
+            response = client.table("bid_sections").insert(payload).execute()
     if not response.data:
         raise RuntimeError("Supabase bid_sections upsert returned no data")
     return response.data[0]
 
 
 def reorder_bid_sections(project_id: str, sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    client = get_supabase_client()
     existing_rows = {row["id"]: row for row in list_bid_sections(project_id)}
     payloads: list[dict[str, Any]] = []
     for index, section in enumerate(sections, start=1):
@@ -816,36 +894,26 @@ def reorder_bid_sections(project_id: str, sections: list[dict[str, Any]]) -> lis
         existing = existing_rows.get(section_id)
         if not existing:
             raise RuntimeError(f"章节不存在，无法排序: {section_id}")
-        payload = {
-            key: value
-            for key, value in existing.items()
-            if key not in {"created_at", "updated_at"}
-        }
+        payload = _without_system_columns(existing)
+        normalized_parent_id = _normalize_section_parent_id(client, project_id, section.get("parent_id"))
+        if normalized_parent_id == section_id:
+            normalized_parent_id = None
         payload.update({
             "project_id": project_id,
-            "parent_id": section.get("parent_id"),
-            "order_index": int(section.get("order_index") or index),
-            "level": int(section.get("level") or existing.get("level") or 1),
+            "parent_id": normalized_parent_id,
+            "order_index": _as_order_index(section.get("order_index"), index),
+            "level": _as_order_index(section.get("level") or existing.get("level"), 1),
         })
         payloads.append(payload)
 
     if not payloads:
         return []
 
-    last_error: Exception | None = None
-    for attempt in range(1, 4):
-        try:
-            client = get_supabase_client()
-            response = client.table("bid_sections").upsert(payloads).execute()
-            return response.data or []
-        except Exception as exc:
-            last_error = exc
-            logging.warning("批量排序 bid_sections 第 %s 次失败，准备重试: %s", attempt, exc)
-            reset_supabase_client()
-            if attempt < 3:
-                time.sleep(0.4 * attempt)
-
-    raise RuntimeError(f"批量排序章节失败，已重试 3 次: {last_error}") from last_error
+    response = _with_supabase_write_retry(
+        lambda retry_client: retry_client.table("bid_sections").upsert(payloads).execute(),
+        label="批量排序 bid_sections",
+    )
+    return response.data or []
 
 
 def _section_match_score(row: dict[str, Any], section: dict[str, Any]) -> int:
@@ -946,11 +1014,7 @@ def reset_bid_sections_generation(project_id: str, clear_content: bool = False) 
         metadata = dict(row.get("metadata") or {})
         for key in generation_meta_keys:
             metadata.pop(key, None)
-        payload = {
-            key: value
-            for key, value in row.items()
-            if key not in {"created_at", "updated_at"}
-        }
+        payload = _without_system_columns(row)
         payload.update({
             "project_id": project_id,
             "status": "draft",
@@ -959,7 +1023,10 @@ def reset_bid_sections_generation(project_id: str, clear_content: bool = False) 
         })
         payloads.append(payload)
 
-    response = get_supabase_client().table("bid_sections").upsert(payloads).execute()
+    response = _with_supabase_write_retry(
+        lambda client: client.table("bid_sections").upsert(payloads).execute(),
+        label="重置 bid_sections 生成状态",
+    )
     return response.data or []
 
 
@@ -1289,6 +1356,29 @@ def upload_knowledge_asset_file(
 
 def create_knowledge_asset(payload: dict[str, Any]) -> dict[str, Any]:
     client = get_supabase_client()
+    storage_bucket = payload.get("storage_bucket")
+    storage_path = payload.get("storage_path")
+    if storage_bucket and storage_path:
+        existing = (
+            client.table("knowledge_assets")
+            .select("*")
+            .eq("storage_bucket", storage_bucket)
+            .eq("storage_path", storage_path)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if existing:
+            response = (
+                client.table("knowledge_assets")
+                .update(payload)
+                .eq("id", existing[0]["id"])
+                .execute()
+            )
+            if response.data:
+                return response.data[0]
+
     response = client.table("knowledge_assets").insert(payload).execute()
     if not response.data:
         raise RuntimeError("Supabase knowledge_assets insert returned no data")

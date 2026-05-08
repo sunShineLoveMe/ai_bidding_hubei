@@ -700,9 +700,10 @@ python main.py
 -- sql/20260429_app_users_and_onlyoffice_documents.sql
 -- sql/20260507_create_ai_usage_tracking.sql
 -- sql/20260507_update_ai_usage_pricing_cny.sql
+-- sql/20260508_supabase_idempotency_indexes.sql
 ```
 
-上述脚本会创建：
+上述脚本会创建或补充：
 
 | 表 | 用途 |
 | --- | --- |
@@ -712,7 +713,7 @@ python main.py
 | `ai_usage_logs` | 保存 AI 调用明细，包括项目、阶段、模型、Token、人民币费用和原始 usage |
 | `ai_usage_project_summary` / `ai_usage_daily_summary` | 汇总项目级和日期级调用成本，供用量与成本中心展示 |
 
-如果 `20260429` 脚本尚未执行，系统会尽量回退 SQLite；但推荐新部署直接执行 SQL，确保主链路统一到 Supabase。`20260507_create` 脚本是 Token 用量与成本统计的必需表结构，未执行时一级菜单「用量与成本」无法展示真实统计。若历史环境已写入 USD 口径价格或日志，请补充执行 `20260507_update_ai_usage_pricing_cny.sql`，将价格和历史成本折算为人民币。
+如果 `20260429` 脚本尚未执行，系统会尽量回退 SQLite；但推荐新部署直接执行 SQL，确保主链路统一到 Supabase。`20260507_create` 脚本是 Token 用量与成本统计的必需表结构，未执行时一级菜单「用量与成本」无法展示真实统计。若历史环境已写入 USD 口径价格或日志，请补充执行 `20260507_update_ai_usage_pricing_cny.sql`，将价格和历史成本折算为人民币。`20260508_supabase_idempotency_indexes.sql` 用于给知识库文档、知识库分片和资信/产品资产补充防重复索引，其中资信/产品资产按 `storage_bucket/storage_path` 防重；如果历史库已有重复记录，需先备份并清理重复数据后再执行。
 
 ### 4. 启动后端
 
@@ -932,7 +933,7 @@ docker run -d \
 ### P1：稳定性与任务可靠性
 
 - [x] 为 DashScope/Qwen 调用增加重试、指数退避、限流提示和可配置超时。
-- [ ] 为 Supabase 写入增加幂等设计，重点覆盖章节保存、批量排序、批量生成状态更新和知识库入库。
+- [x] 为 Supabase 写入增加幂等设计，重点覆盖章节保存、批量排序、批量生成状态更新和知识库入库。
 - [ ] 将批量章节生成状态从前端内存态逐步迁移为后端任务态，支持刷新页面后恢复进度。
 - [x] 历史记录已合并 Supabase 文件状态与本地 MinerU 状态文件，支持展示解析中、解析失败、失败原因和解析任务 ID。
 - [x] 历史记录支持失败任务重试解析：优先复用本地上传文件，不存在时从 Supabase Storage 拉取原文件，生成新的 `parse_id` 后重新进入 MinerU/OCR 解析链路。

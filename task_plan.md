@@ -160,3 +160,54 @@ python -m py_compile backend/ai/qwen_client.py backend/core/config.py
 
 ## Status
 **Complete** - DashScope/Qwen 主调用已完成重试、指数退避、限流提示和可配置超时接入。
+
+---
+
+# Task Plan: P1.2 Supabase 写入幂等设计
+
+## Goal
+降低章节编辑、批量排序、批量生成状态更新和知识库入库在重复点击、网络重试、刷新页面或前端临时 ID 失效时造成的数据重复、外键错误和状态错乱。
+
+## Scope
+- 章节保存：支持有效 UUID 复用；更新找不到行时按同 ID 新建；无 ID 时按项目、标题、排序、层级和父级匹配已有章节后更新。
+- 章节父子关系：保存和排序前校验 `parent_id` 是否属于当前项目，不存在时降级为空，避免外键报错。
+- 批量排序：保留原有正文和元数据，仅更新父级、顺序和层级，并增加 Supabase 写入重试。
+- 批量生成状态重置：增加 Supabase upsert 重试，避免瞬时失败。
+- 章节正文保存：继续保留按标题找回和重建的降级策略。
+- 知识库文档：相同 bucket/object_path 重复入库时复用原 document，并清理旧 chunk 后重新写入。
+- 知识库 chunk：批量写入增加重试；失败时抛出明确异常。
+- 资信/产品资产：相同 storage_bucket/storage_path 重复保存时更新已有资产。
+- 数据库辅助：新增可选 SQL，为知识库文档、chunk 和资产补充防重复 unique index。
+
+## Phases
+- [x] Phase 1: 增加 Supabase 写入重试和章节父级校验工具函数
+- [x] Phase 2: 改造 `upsert_bid_section`，支持重复保存复用和失效 ID 降级创建
+- [x] Phase 3: 改造 `reorder_bid_sections` 和 `reset_bid_sections_generation`，避免无效 parent_id 和瞬时写入失败
+- [x] Phase 4: 改造知识库文档和 chunk 入库，重复解析时先清理旧分片
+- [x] Phase 5: 改造知识资产保存，按 bucket/object_path 更新已有资产
+- [x] Phase 6: 增加 `sql/20260508_supabase_idempotency_indexes.sql`
+- [x] Phase 7: README 路线图和 SQL 说明同步
+
+## Files Changed
+- `backend/db/supabase_repo.py`
+- `backend/rag/ingestion.py`
+- `sql/20260508_supabase_idempotency_indexes.sql`
+- `README.md`
+- `task_plan.md`
+
+## Verification
+
+```bash
+python -m py_compile backend/db/supabase_repo.py backend/rag/ingestion.py
+```
+
+验证结果：
+- 后端编译通过。
+
+## Notes
+- `20260508_supabase_idempotency_indexes.sql` 是数据库防重增强脚本；历史库如果已有重复记录，需先备份并清理后再执行；资信/产品资产使用 `storage_bucket/storage_path` 字段。
+- 章节排序遇到已删除父章节时会自动把该章节提升为根节点，不再直接触发 `bid_sections_parent_id_fkey`。
+- 知识库重复解析同一对象路径会复用原文档 ID，清理旧分片后重新写入，避免智能检索重复召回。
+
+## Status
+**Complete** - Supabase 写入幂等设计第一版已完成，覆盖章节保存/排序/生成状态重置、知识库文档/chunk 入库和知识资产保存。
