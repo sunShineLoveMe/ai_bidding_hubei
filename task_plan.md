@@ -211,3 +211,55 @@ python -m py_compile backend/db/supabase_repo.py backend/rag/ingestion.py
 
 ## Status
 **Complete** - Supabase 写入幂等设计第一版已完成，覆盖章节保存/排序/生成状态重置、知识库文档/chunk 入库和知识资产保存。
+
+---
+
+# Task Plan: P1.3 批量章节生成后端任务态
+
+## Goal
+把“一键编写全文”的批量章节生成进度从纯前端内存态逐步迁移到后端任务态，降低刷新页面、离开编辑页、网络抖动后任务状态丢失的问题。
+
+## Scope
+- 新增 `bid_generation_tasks` 表，记录整批任务、分册范围、是否图文并茂、总数和各状态计数。
+- 每个任务的 `items` JSONB 保存章节 ID、标题、状态、进度、字数、错误和开始/结束时间。
+- 后端新增创建任务、查询最近任务、更新单章任务状态、取消任务接口。
+- 前端“一键编写全文”开始前创建后端任务。
+- 前端每章运行、完成、失败、停止时同步任务状态；运行中进度按 5 秒节流写入。
+- 页面加载或项目重载后读取最近一次任务，并恢复目录行内进度标识。
+- README 同步 SQL 和路线图完成状态。
+
+## Phases
+- [x] Phase 1: 增加 `sql/20260508_create_bid_generation_tasks.sql`
+- [x] Phase 2: 后端 Supabase repo 增加批量任务创建、查询、更新、取消函数
+- [x] Phase 3: 后端 API 增加批量章节生成任务接口
+- [x] Phase 4: 前端 API 增加任务态调用封装
+- [x] Phase 5: BidEditor 批量生成接入任务创建、状态同步和刷新恢复
+- [x] Phase 6: README 和任务清单同步
+
+## Files Changed
+- `sql/20260508_create_bid_generation_tasks.sql`
+- `backend/db/supabase_repo.py`
+- `backend/api/routes.py`
+- `frontend/src/api/bidProject.ts`
+- `frontend/src/pages/BidEditor/index.tsx`
+- `README.md`
+- `task_plan.md`
+
+## Verification
+
+```bash
+python -m py_compile backend/db/supabase_repo.py backend/api/routes.py
+npm run build
+```
+
+验证结果：
+- 后端编译通过。
+- 前端构建通过，仍有既有 chunk size warning。
+
+## Notes
+- 这是“逐步迁移”的第一版：后端已经持久化整批任务和每章状态，实际正文流式生成仍由前端发起，避免一次性改成后端队列导致风险过大。
+- 用户刷新页面后，可以恢复最近一次批量生成任务的章节状态；继续未完成章节仍使用现有“一键编写全文”入口筛选未生成章节。
+- 正式使用前需要在 Supabase 执行 `sql/20260508_create_bid_generation_tasks.sql`。
+
+## Status
+**Complete** - 批量章节生成后端任务态第一版已完成，支持任务创建、单章状态同步、取消任务和刷新后恢复最近任务进度。

@@ -106,6 +106,84 @@ export async function resetBidSectionsGeneration(projectId: string, clearContent
   return response.data.sections || [];
 }
 
+export type SectionGenerationTaskItem = {
+  section_id: string;
+  title?: string;
+  status: 'queued' | 'running' | 'done' | 'failed' | 'stopped';
+  percent?: number;
+  chars?: number;
+  target_words?: number;
+  message?: string;
+  error?: string;
+  saved_section_id?: string;
+};
+
+export type SectionGenerationTask = {
+  id: string;
+  project_id: string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'partial_failed' | 'cancelled';
+  volume_type: string;
+  with_images: boolean;
+  total_count: number;
+  queued_count: number;
+  running_count: number;
+  done_count: number;
+  failed_count: number;
+  stopped_count: number;
+  items: SectionGenerationTaskItem[];
+  created_at?: string;
+  updated_at?: string;
+  finished_at?: string;
+};
+
+export async function getLatestSectionGenerationTask(projectId: string): Promise<SectionGenerationTask | null> {
+  const response = await apiClient.get(`/api/bidding/interpretations/${projectId}/section-generation-tasks/latest`, {
+    skipGlobalLoading: true,
+  });
+  return response.data.task || null;
+}
+
+export async function createSectionGenerationTask(
+  projectId: string,
+  payload: {
+    volumeType: string;
+    withImages: boolean;
+    items: Array<{
+      section_id: string;
+      title?: string;
+      order_index?: number;
+      volume_type?: string;
+      target_words?: number;
+    }>;
+  },
+): Promise<SectionGenerationTask> {
+  const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/section-generation-tasks`, payload, {
+    skipGlobalLoading: true,
+  });
+  return response.data.task;
+}
+
+export async function updateSectionGenerationTaskItem(
+  projectId: string,
+  taskId: string,
+  sectionId: string,
+  patch: Partial<SectionGenerationTaskItem> & { task_status?: string },
+): Promise<SectionGenerationTask> {
+  const response = await apiClient.patch(
+    `/api/bidding/interpretations/${projectId}/section-generation-tasks/${taskId}/items/${sectionId}`,
+    patch,
+    { skipGlobalLoading: true },
+  );
+  return response.data.task;
+}
+
+export async function cancelSectionGenerationTask(projectId: string, taskId: string): Promise<SectionGenerationTask> {
+  const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/section-generation-tasks/${taskId}/cancel`, undefined, {
+    skipGlobalLoading: true,
+  });
+  return response.data.task;
+}
+
 export async function generateOnlyOfficeConfig(projectId: string, sectionId?: string): Promise<OnlyOfficeConfigResponse> {
   const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/onlyoffice-config`, sectionId ? { sectionId } : undefined, {
     skipGlobalLoading: true,

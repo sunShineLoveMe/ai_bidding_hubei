@@ -21,7 +21,7 @@ from backend.ai.chapter_planner import generate_bid_outline, stream_bid_outline
 from backend.ai.section_writer import stream_bid_section
 from backend.ai.interpreter import generate_ai_interpretation_report
 from backend.ai.compliance_checker import build_compliance_report
-from backend.db.supabase_repo import create_knowledge_asset, delete_bid_project, delete_bid_section, download_bid_file_to_local, download_knowledge_asset_file_variant, get_ai_usage_overview, get_bid_file, get_latest_bid_file_for_project, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_file_parse_status, update_bid_section_content, upload_knowledge_asset_file, upsert_bid_section
+from backend.db.supabase_repo import cancel_bid_generation_task, create_bid_generation_task, create_knowledge_asset, delete_bid_project, delete_bid_section, download_bid_file_to_local, download_knowledge_asset_file_variant, get_ai_usage_overview, get_bid_file, get_latest_bid_file_for_project, get_latest_bid_generation_task, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_file_parse_status, update_bid_generation_task_item, update_bid_section_content, upload_knowledge_asset_file, upsert_bid_section
 from backend.core.llm_json_utils import strip_llm_json
 from backend.core.bid_volumes import delivery_volume_type, section_volume_type, volume_name
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1247,6 +1247,77 @@ def reset_bid_sections_generation_api(project_id):
     except Exception as e:
         logging.exception("重置标书章节生成状态失败: %s", project_id)
         return jsonify({'error': f'重置标书章节生成状态失败: {str(e)}'}), 500
+
+
+@bp.route('/interpretations/<project_id>/section-generation-tasks/latest', methods=['GET'])
+def get_latest_section_generation_task_api(project_id):
+    """查询最近一次批量章节生成任务。"""
+    try:
+        uuid.UUID(project_id)
+        task = get_latest_bid_generation_task(project_id)
+        return jsonify({"task": task})
+    except ValueError:
+        return jsonify({'error': 'project_id 不是合法 UUID。'}), 400
+    except Exception as e:
+        logging.exception("查询批量章节生成任务失败: %s", project_id)
+        return jsonify({'error': f'查询批量章节生成任务失败: {str(e)}'}), 500
+
+
+@bp.route('/interpretations/<project_id>/section-generation-tasks', methods=['POST'])
+def create_section_generation_task_api(project_id):
+    """创建批量章节生成任务记录。"""
+    try:
+        uuid.UUID(project_id)
+        payload = request.get_json(force=True) or {}
+        items = payload.get("items") or []
+        if not isinstance(items, list) or not items:
+            return jsonify({'error': '缺少待生成章节列表。'}), 400
+        task = create_bid_generation_task(
+            project_id,
+            items,
+            volume_type=payload.get("volumeType") or "all",
+            with_images=bool(payload.get("withImages")),
+            metadata=payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
+        )
+        return jsonify({"task": task}), 201
+    except ValueError:
+        return jsonify({'error': 'project_id 不是合法 UUID。'}), 400
+    except Exception as e:
+        logging.exception("创建批量章节生成任务失败: %s", project_id)
+        return jsonify({'error': f'创建批量章节生成任务失败: {str(e)}'}), 500
+
+
+@bp.route('/interpretations/<project_id>/section-generation-tasks/<task_id>/items/<section_id>', methods=['PATCH'])
+def update_section_generation_task_item_api(project_id, task_id, section_id):
+    """更新批量章节生成任务中的单章状态。"""
+    try:
+        uuid.UUID(project_id)
+        uuid.UUID(task_id)
+    except ValueError:
+        return jsonify({'error': 'project_id 或 task_id 不是合法 UUID。'}), 400
+
+    try:
+        payload = request.get_json(force=True) or {}
+        task = update_bid_generation_task_item(project_id, task_id, section_id, payload)
+        return jsonify({"task": task})
+    except Exception as e:
+        logging.exception("更新批量章节生成任务失败: %s", project_id)
+        return jsonify({'error': f'更新批量章节生成任务失败: {str(e)}'}), 500
+
+
+@bp.route('/interpretations/<project_id>/section-generation-tasks/<task_id>/cancel', methods=['POST'])
+def cancel_section_generation_task_api(project_id, task_id):
+    """取消批量章节生成任务。"""
+    try:
+        uuid.UUID(project_id)
+        uuid.UUID(task_id)
+        task = cancel_bid_generation_task(project_id, task_id)
+        return jsonify({"task": task})
+    except ValueError:
+        return jsonify({'error': 'project_id 或 task_id 不是合法 UUID。'}), 400
+    except Exception as e:
+        logging.exception("取消批量章节生成任务失败: %s", project_id)
+        return jsonify({'error': f'取消批量章节生成任务失败: {str(e)}'}), 500
 
 
 @bp.route('/interpretations/<project_id>/sections/<section_id>', methods=['DELETE'])

@@ -1034,6 +1034,227 @@ def delete_bid_section(project_id: str, section_id: str) -> None:
     get_supabase_client().table("bid_sections").delete().eq("id", section_id).eq("project_id", project_id).execute()
 
 
+def _task_item_counts(items: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {"queued": 0, "running": 0, "done": 0, "failed": 0, "stopped": 0}
+    for item in items:
+        status = str(item.get("status") or "queued")
+        if status in counts:
+            counts[status] += 1
+    return counts
+
+
+def _normalize_generation_task_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        section_id = item.get("section_id") or item.get("sectionId") or item.get("id")
+        if not section_id:
+            continue
+        normalized.append({
+            "section_id": section_id,
+            "title": item.get("title") or "未命名章节",
+            "order_index": _as_order_index(item.get("order_index") or item.get("order"), index + 1),
+            "volume_type": item.get("volume_type") or item.get("volumeType"),
+            "target_words": _as_order_index(item.get("target_words") or item.get("targetWords"), 0),
+            "status": item.get("status") or "queued",
+            "percent": _as_order_index(item.get("percent"), 0),
+            "chars": _as_order_index(item.get("chars"), 0),
+            "message": item.get("message") or "排队中",
+            "error": item.get("error"),
+            "started_at": item.get("started_at"),
+            "finished_at": item.get("finished_at"),
+        })
+    return normalized
+
+
+def _generation_task_payload(
+    *,
+    project_id: str,
+    items: list[dict[str, Any]],
+    volume_type: str = "all",
+    with_images: bool = False,
+    status: str = "queued",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_items = _normalize_generation_task_items(items)
+    counts = _task_item_counts(normalized_items)
+    return {
+        "project_id": project_id,
+        "task_type": "batch_sections",
+        "volume_type": volume_type or "all",
+        "with_images": bool(with_images),
+        "status": status,
+        "total_count": len(normalized_items),
+        "queued_count": counts["queued"],
+        "running_count": counts["running"],
+        "done_count": counts["done"],
+        "failed_count": counts["failed"],
+        "stopped_count": counts["stopped"],
+        "items": normalized_items,
+        "metadata": metadata or {},
+    }
+
+
+def create_bid_generation_task(
+    project_id: str,
+    items: list[dict[str, Any]],
+    *,
+    volume_type: str = "all",
+    with_images: bool = False,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = _generation_task_payload(
+        project_id=project_id,
+        items=items,
+        volume_type=volume_type,
+        with_images=with_images,
+        status="queued",
+        metadata=metadata,
+    )
+    response = _with_supabase_write_retry(
+        lambda client: client.table("bid_generation_tasks").insert(payload).execute(),
+        label="创建批量章节生成任务",
+    )
+    if not response.data:
+        raise RuntimeError("Supabase bid_generation_tasks insert returned no data")
+    return response.data[0]
+
+
+def get_latest_bid_generation_task(project_id: str) -> dict[str, Any] | None:
+    response = (
+        get_supabase_client()
+        .table("bid_generation_tasks")
+        .select("*")
+        .eq("project_id", project_id)
+        .eq("task_type", "batch_sections")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return response.data[0] if response.data else None
+
+
+def get_bid_generation_task(project_id: str, task_id: str) -> dict[str, Any] | None:
+    response = (
+        get_supabase_client()
+        .table("bid_generation_tasks")
+        .select("*")
+        .eq("id", task_id)
+        .eq("project_id", project_id)
+        .limit(1)
+        .execute()
+    )
+    return response.data[0] if response.data else None
+
+
+def _derive_generation_task_status(items: list[dict[str, Any]], requested_status: str | None = None) -> str:
+    if requested_status in {"cancelled", "failed", "completed"}:
+        return requested_status
+    counts = _task_item_counts(items)
+    if counts["running"] or counts["queued"]:
+        return "running"
+    if counts["failed"]:
+        return "failed" if counts["done"] == 0 else "partial_failed"
+    if counts["stopped"]:
+        return "cancelled"
+    if items and counts["done"] == len(items):
+        return "completed"
+    return "queued"
+
+
+def update_bid_generation_task_item(
+    project_id: str,
+    task_id: str,
+    section_id: str,
+    patch: dict[str, Any],
+) -> dict[str, Any]:
+    task = get_bid_generation_task(project_id, task_id)
+    if not task:
+        raise RuntimeError("批量章节生成任务不存在")
+    items = list(task.get("items") or [])
+    now_iso = datetime.utcnow().isoformat()
+    matched = False
+    for item in items:
+        if str(item.get("section_id")) != str(section_id):
+            continue
+        matched = True
+        next_status = patch.get("status") or item.get("status") or "queued"
+        item.update({
+            key: value
+            for key, value in patch.items()
+            if key in {"status", "percent", "chars", "message", "error", "target_words", "saved_section_id"}
+        })
+        item["status"] = next_status
+        if next_status == "running" and not item.get("started_at"):
+            item["started_at"] = now_iso
+        if next_status in {"done", "failed", "stopped"}:
+            item["finished_at"] = now_iso
+        break
+    if not matched:
+        items.append({
+            "section_id": section_id,
+            "title": patch.get("title") or "未命名章节",
+            "status": patch.get("status") or "queued",
+            "percent": _as_order_index(patch.get("percent"), 0),
+            "chars": _as_order_index(patch.get("chars"), 0),
+            "message": patch.get("message"),
+            "error": patch.get("error"),
+        })
+
+    counts = _task_item_counts(items)
+    status = _derive_generation_task_status(items, patch.get("task_status"))
+    payload = {
+        "status": status,
+        "queued_count": counts["queued"],
+        "running_count": counts["running"],
+        "done_count": counts["done"],
+        "failed_count": counts["failed"],
+        "stopped_count": counts["stopped"],
+        "items": items,
+    }
+    if status == "running" and not task.get("started_at"):
+        payload["started_at"] = now_iso
+    if status in {"completed", "failed", "partial_failed", "cancelled"}:
+        payload["finished_at"] = now_iso
+
+    response = _with_supabase_write_retry(
+        lambda client: client.table("bid_generation_tasks").update(payload).eq("id", task_id).eq("project_id", project_id).execute(),
+        label="更新批量章节生成任务状态",
+    )
+    if not response.data:
+        raise RuntimeError("Supabase bid_generation_tasks update returned no data")
+    return response.data[0]
+
+
+def cancel_bid_generation_task(project_id: str, task_id: str) -> dict[str, Any]:
+    task = get_bid_generation_task(project_id, task_id)
+    if not task:
+        raise RuntimeError("批量章节生成任务不存在")
+    now_iso = datetime.utcnow().isoformat()
+    items = []
+    for item in task.get("items") or []:
+        if item.get("status") in {"queued", "running"}:
+            item = {**item, "status": "stopped", "message": "已停止", "finished_at": now_iso}
+        items.append(item)
+    counts = _task_item_counts(items)
+    payload = {
+        "status": "cancelled",
+        "queued_count": counts["queued"],
+        "running_count": counts["running"],
+        "done_count": counts["done"],
+        "failed_count": counts["failed"],
+        "stopped_count": counts["stopped"],
+        "items": items,
+        "finished_at": now_iso,
+    }
+    response = _with_supabase_write_retry(
+        lambda client: client.table("bid_generation_tasks").update(payload).eq("id", task_id).eq("project_id", project_id).execute(),
+        label="取消批量章节生成任务",
+    )
+    if not response.data:
+        raise RuntimeError("Supabase bid_generation_tasks cancel returned no data")
+    return response.data[0]
+
+
 def list_recent_bid_projects(limit: int = 20) -> list[dict[str, Any]]:
     response = (
         get_supabase_client()

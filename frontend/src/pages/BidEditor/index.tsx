@@ -27,7 +27,22 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { deleteBidSection, generateBidDocxDownload, generateComplianceSupplement, getComplianceCheck, getInterpretation, getLatestInterpretation, reorderBidSections, resetBidSectionsGeneration, saveBidSection } from '../../api/bidProject';
+import {
+  cancelSectionGenerationTask,
+  createSectionGenerationTask,
+  deleteBidSection,
+  generateBidDocxDownload,
+  generateComplianceSupplement,
+  getComplianceCheck,
+  getInterpretation,
+  getLatestInterpretation,
+  getLatestSectionGenerationTask,
+  reorderBidSections,
+  resetBidSectionsGeneration,
+  saveBidSection,
+  updateSectionGenerationTaskItem,
+} from '../../api/bidProject';
+import type { SectionGenerationTask } from '../../api/bidProject';
 import { BrandMark } from '../../components/common/BrandMark';
 import { TiptapBidEditor } from '../../components/editor/TiptapBidEditor';
 import type { BidOutline, BidOutlineChapter, BidSection, ChapterWritingPlan, ComplianceReport, ComplianceRow, InterpretationResponse } from '../../types/interpretation';
@@ -60,6 +75,11 @@ type BatchTask = {
   chars: number;
   targetWords: number;
   message?: string;
+};
+
+type PersistedBatchTask = {
+  id: string;
+  status: SectionGenerationTask['status'];
 };
 
 const BATCH_SECTION_CONCURRENCY = 3;
@@ -271,9 +291,39 @@ export function BidEditorPage(): JSX.Element {
   const [resetModalOpen, setResetModalOpen] = useState(false);
   const [resetClearContent, setResetClearContent] = useState(false);
   const [resettingGeneration, setResettingGeneration] = useState(false);
+  const [persistedBatchTask, setPersistedBatchTask] = useState<PersistedBatchTask | null>(null);
   const streamStartedRef = useRef(false);
   const batchCancelRequestedRef = useRef(false);
   const batchAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const persistedBatchTaskIdRef = useRef('');
+  const batchTaskSyncAtRef = useRef<Map<string, number>>(new Map());
+
+  function applyPersistedBatchTask(task: SectionGenerationTask | null): void {
+    if (!task?.id || !Array.isArray(task.items) || !task.items.length) {
+      setPersistedBatchTask(null);
+      persistedBatchTaskIdRef.current = '';
+      return;
+    }
+    const nextTasks = Object.fromEntries(task.items.map(item => [item.section_id, {
+      status: item.status,
+      percent: item.percent || 0,
+      chars: item.chars || 0,
+      targetWords: item.target_words || 800,
+      message: item.message || item.error || batchStatusLabel(item.status),
+    } satisfies BatchTask]));
+    setPersistedBatchTask({ id: task.id, status: task.status });
+    persistedBatchTaskIdRef.current = task.id;
+    setBatchTasks(nextTasks);
+  }
+
+  async function refreshLatestBatchTask(projectId: string): Promise<void> {
+    try {
+      const task = await getLatestSectionGenerationTask(projectId);
+      applyPersistedBatchTask(task);
+    } catch (error) {
+      console.warn('恢复批量章节生成任务失败', error);
+    }
+  }
 
   function complianceVolumeParam(volume: VolumeType = activeVolume): string | undefined {
     return volume === 'all' ? undefined : volume;
@@ -323,6 +373,7 @@ export function BidEditorPage(): JSX.Element {
       }
       if (result.project?.id) {
         void refreshComplianceReport(result.project.id, { silent: true });
+        void refreshLatestBatchTask(result.project.id);
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -343,6 +394,7 @@ export function BidEditorPage(): JSX.Element {
     setSelectedId(current => current || drafts[0]?.id || '');
     setContentDirty(false);
     void refreshComplianceReport(projectId, { silent: true });
+    void refreshLatestBatchTask(projectId);
   }
 
   useEffect(() => {
@@ -1198,6 +1250,34 @@ export function BidEditorPage(): JSX.Element {
     }));
   }
 
+  function syncBatchTaskItem(chapterId: string, patch: Partial<BatchTask> & { error?: string; saved_section_id?: string }): void {
+    const taskId = persistedBatchTaskIdRef.current || persistedBatchTask?.id;
+    if (!data?.project?.id || !taskId) {
+      return;
+    }
+    const now = Date.now();
+    const lastSyncAt = batchTaskSyncAtRef.current.get(chapterId) || 0;
+    if (patch.status === 'running' && now - lastSyncAt < 5000) {
+      return;
+    }
+    batchTaskSyncAtRef.current.set(chapterId, now);
+    const payload = {
+      status: patch.status,
+      percent: patch.percent,
+      chars: patch.chars,
+      target_words: patch.targetWords,
+      message: patch.message,
+      error: patch.error,
+      saved_section_id: patch.saved_section_id,
+    };
+    void updateSectionGenerationTaskItem(data.project.id, taskId, chapterId, payload).then(task => {
+      setPersistedBatchTask({ id: task.id, status: task.status });
+      persistedBatchTaskIdRef.current = task.id;
+    }).catch(error => {
+      console.warn('同步批量章节生成任务状态失败', error);
+    });
+  }
+
   function renameChapter(chapter: ChapterDraft): void {
     let nextTitle = chapter.title || '';
     Modal.confirm({
@@ -1493,6 +1573,13 @@ export function BidEditorPage(): JSX.Element {
       targetWords,
       message: '正在编写',
     });
+    syncBatchTaskItem(chapter.id, {
+      status: 'running',
+      percent: 2,
+      chars: 0,
+      targetWords,
+      message: '正在编写',
+    });
     setChapters(items => items.map(item => item.id === chapter.id ? { ...item, status: 'generating', content: chapterHeader } : item));
 
     try {
@@ -1509,10 +1596,21 @@ export function BidEditorPage(): JSX.Element {
             percent: Math.min(98, Math.max(3, Math.round((chars / Math.max(targetWords, 1)) * 100))),
             message: '正在编写',
           });
+          syncBatchTaskItem(chapter.id, {
+            status: 'running',
+            chars,
+            percent: Math.min(98, Math.max(3, Math.round((chars / Math.max(targetWords, 1)) * 100))),
+            targetWords,
+            message: '正在编写',
+          });
         },
         onDone: () => {
           if (batchCancelRequestedRef.current) {
             updateBatchTask(chapter.id, {
+              status: 'stopped',
+              message: '已停止',
+            });
+            syncBatchTaskItem(chapter.id, {
               status: 'stopped',
               message: '已停止',
             });
@@ -1521,6 +1619,12 @@ export function BidEditorPage(): JSX.Element {
           updateBatchTask(chapter.id, {
             status: 'done',
             percent: 100,
+            message: '已完成',
+          });
+          syncBatchTaskItem(chapter.id, {
+            status: 'done',
+            percent: 100,
+            targetWords,
             message: '已完成',
           });
           setChapters(items => items.map(item => item.id === chapter.id ? { ...item, status: 'generated' } : item));
@@ -1532,12 +1636,24 @@ export function BidEditorPage(): JSX.Element {
           status: 'stopped',
           message: '已停止',
         });
+        syncBatchTaskItem(chapter.id, {
+          status: 'stopped',
+          message: '已停止',
+        });
         return;
       }
+      const errorMessage = error instanceof Error ? error.message : String(error);
       updateBatchTask(chapter.id, {
         status: 'failed',
         percent: 100,
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessage,
+      });
+      syncBatchTaskItem(chapter.id, {
+        status: 'failed',
+        percent: 100,
+        targetWords,
+        message: errorMessage,
+        error: errorMessage,
       });
       setChapters(items => items.map(item => item.id === chapter.id ? { ...item, status: 'failed', content: '' } : item));
     } finally {
@@ -1566,6 +1682,7 @@ export function BidEditorPage(): JSX.Element {
     setBatchGenerating(true);
     batchCancelRequestedRef.current = false;
     batchAbortControllersRef.current.clear();
+    batchTaskSyncAtRef.current.clear();
     setDownloadUrl('');
     setBatchTasks(Object.fromEntries(targets.map(chapter => [chapter.id, {
       status: 'queued' as BatchTaskStatus,
@@ -1576,6 +1693,27 @@ export function BidEditorPage(): JSX.Element {
     }])));
 
     let cursor = 0;
+    try {
+      const task = await createSectionGenerationTask(data.project.id, {
+        volumeType: activeVolume,
+        withImages,
+        items: targets.map((chapter, index) => ({
+          section_id: chapter.id,
+          title: chapter.title,
+          order_index: chapter.order_index || index + 1,
+          volume_type: deliveryVolumeType(chapter),
+          target_words: targetChapterWords(chapter),
+        })),
+      });
+      setPersistedBatchTask({ id: task.id, status: task.status });
+      persistedBatchTaskIdRef.current = task.id;
+    } catch (error) {
+      setBatchGenerating(false);
+      const reason = error instanceof Error ? error.message : String(error);
+      message.error(`创建批量生成任务失败：${reason}`);
+      return;
+    }
+
     async function worker(): Promise<void> {
       while (cursor < targets.length && !batchCancelRequestedRef.current) {
         const current = targets[cursor];
@@ -1593,8 +1731,19 @@ export function BidEditorPage(): JSX.Element {
             ? { ...task, status: 'stopped' as BatchTaskStatus, message: '已停止' }
             : task,
         ])));
+        if (data.project?.id && persistedBatchTaskIdRef.current) {
+          void cancelSectionGenerationTask(data.project.id, persistedBatchTaskIdRef.current).then(task => {
+            setPersistedBatchTask({ id: task.id, status: task.status });
+            applyPersistedBatchTask(task);
+          }).catch(error => {
+            console.warn('取消批量章节生成任务同步失败', error);
+          });
+        }
         message.info('全文批量编写已停止');
       } else {
+        if (data.project?.id) {
+          void refreshLatestBatchTask(data.project.id);
+        }
         message.success('全文批量编写任务已完成');
         setContentDirty(false);
         void refreshComplianceReport(data.project.id, { silent: true });
@@ -1616,6 +1765,14 @@ export function BidEditorPage(): JSX.Element {
         ? { ...task, status: 'stopped' as BatchTaskStatus, message: '已停止' }
         : task,
     ])));
+    if (data?.project?.id && persistedBatchTaskIdRef.current) {
+      void cancelSectionGenerationTask(data.project.id, persistedBatchTaskIdRef.current).then(task => {
+        setPersistedBatchTask({ id: task.id, status: task.status });
+        applyPersistedBatchTask(task);
+      }).catch(error => {
+        console.warn('取消批量章节生成任务同步失败', error);
+      });
+    }
   }
 
   function handleActiveVolumeChange(value: VolumeType): void {
@@ -1814,6 +1971,11 @@ export function BidEditorPage(): JSX.Element {
             <Space>
               <Button type="text" onClick={() => setAllExpanded(false)}>全部收起</Button>
               <Button type="text" onClick={() => setAllExpanded(true)}>全部展开</Button>
+              {persistedBatchTask ? (
+                <Tag color={persistedBatchTask.status === 'completed' ? 'success' : persistedBatchTask.status === 'failed' || persistedBatchTask.status === 'partial_failed' ? 'error' : 'processing'}>
+                  任务已记录：{persistedBatchTask.status === 'completed' ? '已完成' : persistedBatchTask.status === 'cancelled' ? '已停止' : persistedBatchTask.status === 'partial_failed' ? '部分失败' : persistedBatchTask.status === 'failed' ? '失败' : '可恢复'}
+                </Tag>
+              ) : null}
             </Space>
             <Button
               type="primary"
