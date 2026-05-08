@@ -113,3 +113,50 @@ python -c "from io import BytesIO; import main; c=main.app.test_client(); r=c.po
 
 ## Status
 **Complete** - P0 安全与部署最小闭环已完成，正式开源/交付前仍需单独清理本地真实业务文件和生成产物。
+
+---
+
+# Task Plan: P1.1 DashScope/Qwen 调用稳定性增强
+
+## Goal
+降低标书解读、章节正文生成、RAG 问答等模型调用在限流、网络抖动和临时服务异常下的失败率，并让失败原因和重试情况可追踪。
+
+## Scope
+- DashScope 普通文本生成增加自动重试。
+- DashScope 流式生成增加连接前/首包前重试，已输出正文后不自动重试，避免重复内容。
+- 支持指数退避、最大重试次数、重试状态码和超时时间配置。
+- 限流和临时服务不可用返回更明确的用户级错误。
+- AI 用量日志 metadata 记录 attempts、retry_attempts、max_retries、retryable、final_success。
+- README 和 `.env.example` 同步实施配置说明。
+
+## Phases
+- [x] Phase 1: 抽取 DashScope 重试、退避、状态码判断和公开错误提示工具函数
+- [x] Phase 2: 非流式文本生成接入重试与最终一次用量落库
+- [x] Phase 3: 流式生成接入安全重试策略，避免已输出正文后重复重试
+- [x] Phase 4: 增加 `.env.example` 和 runtime settings 默认配置
+- [x] Phase 5: README 路线图和实施配置说明同步
+
+## Files Changed
+- `backend/ai/qwen_client.py`
+- `backend/core/config.py`
+- `.env.example`
+- `README.md`
+- `task_plan.md`
+
+## Verification
+
+```bash
+python -m py_compile backend/ai/qwen_client.py backend/core/config.py
+```
+
+验证结果：
+- 后端编译通过。
+- 本地 monkeypatch 验证：第一次返回 429 后自动等待并重试，第二次成功返回，usage metadata 记录 `attempts=2`、`retry_attempts=1`。
+
+## Notes
+- 默认 `DASHSCOPE_MAX_RETRIES=2`，即首次请求失败后最多再试 2 次。
+- 默认重试状态码为 `429,500,502,503,504`；认证、参数错误等非临时错误不重试。
+- 流式生成如果已经向前端输出正文片段，后续异常不自动重试，避免重复拼接正文。
+
+## Status
+**Complete** - DashScope/Qwen 主调用已完成重试、指数退避、限流提示和可配置超时接入。

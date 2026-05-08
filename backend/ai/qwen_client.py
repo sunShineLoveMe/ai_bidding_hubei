@@ -16,6 +16,116 @@ DASHSCOPE_API_KEY = os.getenv('DASHSCOPE_API_KEY')
 AI_PROVIDER = os.getenv('AI_PROVIDER', 'dashscope')
 
 
+class DashScopeRetryableError(RuntimeError):
+    def __init__(self, message, status_code=None, retry_after=None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.retry_after = retry_after
+
+
+def _dashscope_timeout():
+    return int(get_setting("request_timeout_seconds", 120))
+
+
+def _stream_timeout():
+    return (
+        int(get_setting("stream_connect_timeout_seconds", 15)),
+        int(get_setting("stream_read_timeout_seconds", 180)),
+    )
+
+
+def _max_attempts() -> int:
+    retries = int(get_setting("max_retries", 2) or 0)
+    return max(1, retries + 1)
+
+
+def _retry_status_codes() -> set[int]:
+    raw_value = str(get_setting("retry_status_codes", "429,500,502,503,504") or "")
+    status_codes = set()
+    for item in raw_value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            status_codes.add(int(item))
+        except ValueError:
+            logging.warning("忽略无效的 DashScope 重试状态码配置: %s", item)
+    return status_codes or {429, 500, 502, 503, 504}
+
+
+def _retry_delay_seconds(attempt: int, retry_after=None) -> float:
+    if retry_after:
+        try:
+            return min(float(retry_after), float(get_setting("retry_max_delay_seconds", 12)))
+        except (TypeError, ValueError):
+            pass
+    base_delay = float(get_setting("retry_base_delay_seconds", 1.5))
+    max_delay = float(get_setting("retry_max_delay_seconds", 12))
+    return min(max_delay, base_delay * (2 ** max(0, attempt - 1)))
+
+
+def _is_retryable_error(exc: Exception) -> bool:
+    if isinstance(exc, DashScopeRetryableError):
+        return True
+    if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
+        return True
+    response = getattr(exc, "response", None)
+    return bool(response is not None and response.status_code in _retry_status_codes())
+
+
+def _raise_for_dashscope_status(response):
+    if response.status_code == 200:
+        return
+
+    message = f"DashScope API 调用失败，状态码: {response.status_code}"
+    logging.warning(message)
+    if response.status_code in _retry_status_codes():
+        raise DashScopeRetryableError(
+            message,
+            status_code=response.status_code,
+            retry_after=response.headers.get("Retry-After"),
+        )
+    response.raise_for_status()
+
+
+def _public_error(exc: Exception) -> Exception:
+    status_code = getattr(exc, "status_code", None)
+    response = getattr(exc, "response", None)
+    if response is not None:
+        status_code = response.status_code
+    if status_code == 429:
+        return RuntimeError("模型服务限流，请稍后重试；如频繁出现，请降低并发或调整模型服务配额。")
+    if _is_retryable_error(exc):
+        return RuntimeError("模型服务临时不可用，已自动重试但仍失败，请稍后重新执行。")
+    return exc
+
+
+def _retry_metadata(context: dict, json_mode=None, attempt=1, success=False, retryable=False):
+    metadata = dict(context.get("metadata") or {})
+    if json_mode is not None:
+        metadata["json_mode"] = json_mode
+    metadata.update({
+        "attempts": attempt,
+        "retry_attempts": max(0, attempt - 1),
+        "max_retries": _max_attempts() - 1,
+        "retryable": retryable,
+        "final_success": success,
+    })
+    return metadata
+
+
+def _log_retry(exc: Exception, attempt: int, max_attempts: int):
+    delay = _retry_delay_seconds(attempt, getattr(exc, "retry_after", None))
+    logging.warning(
+        "DashScope 调用临时失败，将在 %.1fs 后重试 (%s/%s): %s",
+        delay,
+        attempt,
+        max_attempts - 1,
+        exc,
+    )
+    time.sleep(delay)
+
+
 def _messages_text(messages) -> str:
     return "\n".join(str(message.get("content") or "") for message in (messages or []) if isinstance(message, dict))
 
@@ -33,7 +143,6 @@ def call_dashscope_api(messages, model=None, json_mode=True, usage_context=None)
     url = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation'
     resolved_model = model or get_setting("text_model", "qwen-turbo-latest")
     context = usage_context or {}
-    started_at = time.time()
     headers = {
         'Authorization': f'Bearer {DASHSCOPE_API_KEY}',
         'Content-Type': 'application/json'
@@ -51,61 +160,62 @@ def call_dashscope_api(messages, model=None, json_mode=True, usage_context=None)
         data['parameters'] = {'result_format': 'message'}
     
     response = None
-    try:
-        response = requests.post(
-            url,
-            headers=headers,
-            json=data,
-            timeout=int(get_setting("request_timeout_seconds", 120)),
-        )
-        if response.status_code != 200:
-            error_message = f"DashScope API 调用失败，状态码: {response.status_code}"
-            logging.error(error_message)
-        response.raise_for_status()
-        payload = response.json()
-        record_ai_usage_log(
-            provider="dashscope",
-            region="cn-beijing",
-            api_protocol="dashscope",
-            endpoint=url,
-            model=payload.get("model") or resolved_model,
-            operation_type=context.get("operation_type") or "text_generation",
-            stage=context.get("stage") or ("json_generation" if json_mode else "text_generation"),
-            project_id=context.get("project_id"),
-            file_id=context.get("file_id"),
-            section_id=context.get("section_id"),
-            batch_id=context.get("batch_id"),
-            request_id=payload.get("request_id"),
-            status_code=response.status_code,
-            latency_ms=int((time.time() - started_at) * 1000),
-            raw_usage=payload.get("usage") or {},
-            input_text=_messages_text(messages),
-            output_text=_response_content(payload),
-            metadata={"json_mode": json_mode, **(context.get("metadata") or {})},
-        )
-        return payload
-    except Exception as exc:
-        record_ai_usage_log(
-            provider="dashscope",
-            region="cn-beijing",
-            api_protocol="dashscope",
-            endpoint=url,
-            model=resolved_model,
-            operation_type=context.get("operation_type") or "text_generation",
-            stage=context.get("stage") or ("json_generation" if json_mode else "text_generation"),
-            project_id=context.get("project_id"),
-            file_id=context.get("file_id"),
-            section_id=context.get("section_id"),
-            batch_id=context.get("batch_id"),
-            status_code=response.status_code if response is not None else None,
-            latency_ms=int((time.time() - started_at) * 1000),
-            raw_usage={},
-            input_text=_messages_text(messages),
-            success=False,
-            error_message=str(exc),
-            metadata={"json_mode": json_mode, **(context.get("metadata") or {})},
-        )
-        raise
+    started_at = time.time()
+    attempts = _max_attempts()
+
+    for attempt in range(1, attempts + 1):
+        try:
+            response = requests.post(url, headers=headers, json=data, timeout=_dashscope_timeout())
+            _raise_for_dashscope_status(response)
+            payload = response.json()
+            record_ai_usage_log(
+                provider="dashscope",
+                region="cn-beijing",
+                api_protocol="dashscope",
+                endpoint=url,
+                model=payload.get("model") or resolved_model,
+                operation_type=context.get("operation_type") or "text_generation",
+                stage=context.get("stage") or ("json_generation" if json_mode else "text_generation"),
+                project_id=context.get("project_id"),
+                file_id=context.get("file_id"),
+                section_id=context.get("section_id"),
+                batch_id=context.get("batch_id"),
+                request_id=payload.get("request_id"),
+                status_code=response.status_code,
+                latency_ms=int((time.time() - started_at) * 1000),
+                raw_usage=payload.get("usage") or {},
+                input_text=_messages_text(messages),
+                output_text=_response_content(payload),
+                metadata=_retry_metadata(context, json_mode=json_mode, attempt=attempt, success=True),
+            )
+            return payload
+        except Exception as exc:
+            retryable = _is_retryable_error(exc)
+            if retryable and attempt < attempts:
+                _log_retry(exc, attempt, attempts)
+                continue
+
+            record_ai_usage_log(
+                provider="dashscope",
+                region="cn-beijing",
+                api_protocol="dashscope",
+                endpoint=url,
+                model=resolved_model,
+                operation_type=context.get("operation_type") or "text_generation",
+                stage=context.get("stage") or ("json_generation" if json_mode else "text_generation"),
+                project_id=context.get("project_id"),
+                file_id=context.get("file_id"),
+                section_id=context.get("section_id"),
+                batch_id=context.get("batch_id"),
+                status_code=response.status_code if response is not None else getattr(exc, "status_code", None),
+                latency_ms=int((time.time() - started_at) * 1000),
+                raw_usage={},
+                input_text=_messages_text(messages),
+                success=False,
+                error_message=str(exc),
+                metadata=_retry_metadata(context, json_mode=json_mode, attempt=attempt, retryable=retryable),
+            )
+            raise _public_error(exc)
 
 
 def stream_dashscope_api(messages, model=None, usage_context=None):
@@ -121,7 +231,6 @@ def stream_dashscope_api(messages, model=None, usage_context=None):
     url = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation'
     resolved_model = model or get_setting("text_model", "qwen-turbo-latest")
     context = usage_context or {}
-    started_at = time.time()
     headers = {
         'Authorization': f'Bearer {DASHSCOPE_API_KEY}',
         'Content-Type': 'application/json',
@@ -138,92 +247,97 @@ def stream_dashscope_api(messages, model=None, usage_context=None):
         },
     }
 
-    timeout = (
-        int(get_setting("stream_connect_timeout_seconds", 15)),
-        int(get_setting("stream_read_timeout_seconds", 180)),
-    )
-
     response = None
     output_parts = []
     last_usage = {}
     last_request_id = None
-    try:
-        with requests.post(url, headers=headers, json=data, stream=True, timeout=timeout) as response:
-            if response.status_code != 200:
-                error_message = f"DashScope 流式 API 调用失败，状态码: {response.status_code}"
-                logging.error(error_message)
-            response.raise_for_status()
-            for raw_line in response.iter_lines(decode_unicode=True):
-                if not raw_line:
-                    continue
-                line = raw_line.strip()
-                if line.startswith("data:"):
-                    line = line[5:].strip()
-                if not line or line == "[DONE]":
-                    continue
-                try:
-                    payload = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if payload.get("usage"):
-                    last_usage = payload.get("usage") or {}
-                last_request_id = payload.get("request_id") or last_request_id
-                message = (
-                    payload.get("output", {})
-                    .get("choices", [{}])[0]
-                    .get("message", {})
-                )
-                content = message.get("content")
-                if content:
-                    output_parts.append(content)
-                    yield content
-        record_ai_usage_log(
-            provider="dashscope",
-            region="cn-beijing",
-            api_protocol="dashscope",
-            endpoint=url,
-            model=resolved_model,
-            operation_type=context.get("operation_type") or "text_generation",
-            stage=context.get("stage") or "stream_text_generation",
-            project_id=context.get("project_id"),
-            file_id=context.get("file_id"),
-            section_id=context.get("section_id"),
-            batch_id=context.get("batch_id"),
-            request_id=last_request_id,
-            is_stream=True,
-            include_usage=bool(last_usage),
-            status_code=response.status_code if response is not None else None,
-            latency_ms=int((time.time() - started_at) * 1000),
-            raw_usage=last_usage,
-            input_text=_messages_text(messages),
-            output_text="".join(output_parts),
-            metadata=context.get("metadata") or {},
-        )
-    except Exception as exc:
-        record_ai_usage_log(
-            provider="dashscope",
-            region="cn-beijing",
-            api_protocol="dashscope",
-            endpoint=url,
-            model=resolved_model,
-            operation_type=context.get("operation_type") or "text_generation",
-            stage=context.get("stage") or "stream_text_generation",
-            project_id=context.get("project_id"),
-            file_id=context.get("file_id"),
-            section_id=context.get("section_id"),
-            batch_id=context.get("batch_id"),
-            is_stream=True,
-            include_usage=bool(last_usage),
-            status_code=response.status_code if response is not None else None,
-            latency_ms=int((time.time() - started_at) * 1000),
-            raw_usage=last_usage,
-            input_text=_messages_text(messages),
-            output_text="".join(output_parts),
-            success=False,
-            error_message=str(exc),
-            metadata=context.get("metadata") or {},
-        )
-        raise
+    started_at = time.time()
+    attempts = _max_attempts()
+
+    for attempt in range(1, attempts + 1):
+        has_yielded = bool(output_parts)
+        try:
+            with requests.post(url, headers=headers, json=data, stream=True, timeout=_stream_timeout()) as response:
+                _raise_for_dashscope_status(response)
+                for raw_line in response.iter_lines(decode_unicode=True):
+                    if not raw_line:
+                        continue
+                    line = raw_line.strip()
+                    if line.startswith("data:"):
+                        line = line[5:].strip()
+                    if not line or line == "[DONE]":
+                        continue
+                    try:
+                        payload = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if payload.get("usage"):
+                        last_usage = payload.get("usage") or {}
+                    last_request_id = payload.get("request_id") or last_request_id
+                    message = (
+                        payload.get("output", {})
+                        .get("choices", [{}])[0]
+                        .get("message", {})
+                    )
+                    content = message.get("content")
+                    if content:
+                        output_parts.append(content)
+                        has_yielded = True
+                        yield content
+            record_ai_usage_log(
+                provider="dashscope",
+                region="cn-beijing",
+                api_protocol="dashscope",
+                endpoint=url,
+                model=resolved_model,
+                operation_type=context.get("operation_type") or "text_generation",
+                stage=context.get("stage") or "stream_text_generation",
+                project_id=context.get("project_id"),
+                file_id=context.get("file_id"),
+                section_id=context.get("section_id"),
+                batch_id=context.get("batch_id"),
+                request_id=last_request_id,
+                is_stream=True,
+                include_usage=bool(last_usage),
+                status_code=response.status_code if response is not None else None,
+                latency_ms=int((time.time() - started_at) * 1000),
+                raw_usage=last_usage,
+                input_text=_messages_text(messages),
+                output_text="".join(output_parts),
+                metadata=_retry_metadata(context, attempt=attempt, success=True),
+            )
+            return
+        except Exception as exc:
+            retryable = _is_retryable_error(exc)
+            can_retry = retryable and not has_yielded and attempt < attempts
+            if can_retry:
+                _log_retry(exc, attempt, attempts)
+                continue
+
+            record_ai_usage_log(
+                provider="dashscope",
+                region="cn-beijing",
+                api_protocol="dashscope",
+                endpoint=url,
+                model=resolved_model,
+                operation_type=context.get("operation_type") or "text_generation",
+                stage=context.get("stage") or "stream_text_generation",
+                project_id=context.get("project_id"),
+                file_id=context.get("file_id"),
+                section_id=context.get("section_id"),
+                batch_id=context.get("batch_id"),
+                is_stream=True,
+                include_usage=bool(last_usage),
+                status_code=response.status_code if response is not None else getattr(exc, "status_code", None),
+                latency_ms=int((time.time() - started_at) * 1000),
+                raw_usage=last_usage,
+                input_text=_messages_text(messages),
+                output_text="".join(output_parts),
+                success=False,
+                error_message=str(exc),
+                metadata=_retry_metadata(context, attempt=attempt, retryable=retryable),
+            )
+            raise _public_error(exc)
 
 def generate_bid_section(section_title, section_content, tender_content):
     """按小节生成投标文件内容"""

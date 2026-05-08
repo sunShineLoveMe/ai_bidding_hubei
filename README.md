@@ -542,6 +542,10 @@ DASHSCOPE_RERANK_TOP_N=6
 DASHSCOPE_REQUEST_TIMEOUT_SECONDS=120
 DASHSCOPE_STREAM_CONNECT_TIMEOUT_SECONDS=15
 DASHSCOPE_STREAM_READ_TIMEOUT_SECONDS=180
+DASHSCOPE_MAX_RETRIES=2
+DASHSCOPE_RETRY_BASE_DELAY_SECONDS=1.5
+DASHSCOPE_RETRY_MAX_DELAY_SECONDS=12
+DASHSCOPE_RETRY_STATUS_CODES=429,500,502,503,504
 AI_USAGE_USD_TO_CNY_RATE=7.2
 
 # Supabase
@@ -590,6 +594,8 @@ BACKEND_URL_FOR_DOCKER=host.docker.internal:3012
 
 模型、Embedding、超时时间、OnlyOffice 地址、存储目录和企业画像等非敏感配置也可以在「系统设置」页面调整。页面保存后会写入本地 `config/runtime_settings.json`，后端在下一次模型请求时读取该配置；该文件已加入 `.gitignore`，开源时只保留 `config/runtime_settings.example.json`。API Key、Supabase service role 等敏感项仍必须通过 `.env` 配置，不会保存在前端。
 
+DashScope/Qwen 调用已增加基础重试与退避策略：普通文本生成和流式生成默认最多重试 2 次，遇到 `429,500,502,503,504`、连接异常或超时会按指数退避等待后重试；流式接口如果已经向前端输出了部分正文，则不会自动重试，避免重复拼接正文。相关参数可通过 `DASHSCOPE_MAX_RETRIES`、`DASHSCOPE_RETRY_BASE_DELAY_SECONDS`、`DASHSCOPE_RETRY_MAX_DELAY_SECONDS`、`DASHSCOPE_RETRY_STATUS_CODES` 和各类 timeout 配置调整。重试次数、是否最终成功、是否属于可重试错误会写入 AI 用量日志的 `metadata`，便于后续在「用量与成本」中审计单次标书生成的稳定性。
+
 安全相关说明：
 
 - CORS 不再默认开放所有来源，后端读取 `APP_CORS_ORIGINS` 作为白名单；生产环境禁止配置为 `*`。
@@ -626,6 +632,13 @@ BACKEND_URL_FOR_DOCKER=host.docker.internal:3012
 | `ALLOWED_KNOWLEDGE_EXTENSIONS` | 必填 | `pdf,doc,docx,txt,md,xls,xlsx,csv,png,jpg,jpeg,webp` | 控制知识库文件允许上传的后缀 | 不在列表内会被拒绝上传 |
 | `ALLOWED_ASSET_EXTENSIONS` | 必填 | `png,jpg,jpeg,webp,pdf,doc,docx` | 控制资信库/产品库资产允许上传的后缀 | 不在列表内会被拒绝上传 |
 | `ONLYOFFICE_JWT_SECRET` | 使用 OnlyOffice 时必填 | 至少 24 位随机字符串 | OnlyOffice 文档编辑鉴权密钥 | 未配置时无法生成 OnlyOffice 编辑配置 |
+| `DASHSCOPE_REQUEST_TIMEOUT_SECONDS` | 必填 | `120` | 普通文本模型请求超时时间 | 过短会导致长章节生成中断，过长会拉长失败等待 |
+| `DASHSCOPE_STREAM_CONNECT_TIMEOUT_SECONDS` | 必填 | `15` | 流式生成连接建立超时 | 网络慢时可适当调大 |
+| `DASHSCOPE_STREAM_READ_TIMEOUT_SECONDS` | 必填 | `180` | 流式生成读取超时 | 长章节生成或客户网络不稳定时可调大 |
+| `DASHSCOPE_MAX_RETRIES` | 必填 | `2` | 模型调用失败后的最大重试次数，不含首次请求 | 设置过高会增加等待时间和重复调用风险 |
+| `DASHSCOPE_RETRY_BASE_DELAY_SECONDS` | 必填 | `1.5` | 第一次重试前等待秒数 | 数值越小恢复越快，但限流场景容易继续失败 |
+| `DASHSCOPE_RETRY_MAX_DELAY_SECONDS` | 必填 | `12` | 指数退避最大等待秒数 | 控制重试最长等待时间 |
+| `DASHSCOPE_RETRY_STATUS_CODES` | 必填 | `429,500,502,503,504` | 哪些模型服务状态码允许自动重试 | 不建议把 400、401、403 加入，配置或权限错误不应重试 |
 
 访问令牌开启后的调用方式：
 
@@ -655,6 +668,10 @@ ALLOWED_TENDER_EXTENSIONS=pdf,doc,docx,txt,md
 ALLOWED_KNOWLEDGE_EXTENSIONS=pdf,doc,docx,txt,md,xls,xlsx,csv,png,jpg,jpeg,webp
 ALLOWED_ASSET_EXTENSIONS=png,jpg,jpeg,webp,pdf,doc,docx
 ONLYOFFICE_JWT_SECRET=replace_with_random_32_chars_or_longer
+DASHSCOPE_MAX_RETRIES=2
+DASHSCOPE_RETRY_BASE_DELAY_SECONDS=1.5
+DASHSCOPE_RETRY_MAX_DELAY_SECONDS=12
+DASHSCOPE_RETRY_STATUS_CODES=429,500,502,503,504
 ```
 
 配置完成后的检查方法：
@@ -897,7 +914,7 @@ docker run -d \
 
 - “已达到生产级”这一判断偏乐观。当前更准确的定位是：适合单机版、私有化试点和 MVP 验证，尚未达到公网生产部署标准。
 - “模型服务支持 Qwen、Claude”这一表述不严谨。当前主链路是 DashScope/Qwen，其他模型提供商需要后续适配。
-- “网络请求普遍具备重试机制”不完全准确。图片下载和部分文档处理已有超时保护，但大模型调用、Supabase 写入和批量任务仍需要系统化重试、退避和幂等设计。
+- “网络请求普遍具备重试机制”不完全准确。图片下载、部分文档处理和 DashScope/Qwen 主调用已具备超时与重试保护，但 Supabase 写入和批量任务仍需要系统化重试、退避和幂等设计。
 - “代码结构可维护性良好”偏乐观。当前后端已按功能迁移到 `backend/` 包，但部分核心模块仍偏大，继续迭代前应进一步细分。
 - “安全问题在单机版影响较小”只适用于本机试用。一旦开源、内网多人使用或部署到公网，认证、CORS、密钥、错误脱敏和上传校验必须优先处理。
 
@@ -914,7 +931,7 @@ docker run -d \
 
 ### P1：稳定性与任务可靠性
 
-- [ ] 为 DashScope/Qwen 调用增加重试、指数退避、限流提示和可配置超时。
+- [x] 为 DashScope/Qwen 调用增加重试、指数退避、限流提示和可配置超时。
 - [ ] 为 Supabase 写入增加幂等设计，重点覆盖章节保存、批量排序、批量生成状态更新和知识库入库。
 - [ ] 将批量章节生成状态从前端内存态逐步迁移为后端任务态，支持刷新页面后恢复进度。
 - [x] 历史记录已合并 Supabase 文件状态与本地 MinerU 状态文件，支持展示解析中、解析失败、失败原因和解析任务 ID。

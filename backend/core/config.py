@@ -18,6 +18,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "request_timeout_seconds": 120,
     "stream_connect_timeout_seconds": 15,
     "stream_read_timeout_seconds": 180,
+    "max_retries": 2,
+    "retry_base_delay_seconds": 1.5,
+    "retry_max_delay_seconds": 12,
+    "retry_status_codes": "429,500,502,503,504",
     "upload_dir": "uploads/",
     "output_dir": "outputs/",
     "vector_store": "supabase_pgvector",
@@ -51,6 +55,10 @@ ENV_MAPPING = {
     "request_timeout_seconds": "DASHSCOPE_REQUEST_TIMEOUT_SECONDS",
     "stream_connect_timeout_seconds": "DASHSCOPE_STREAM_CONNECT_TIMEOUT_SECONDS",
     "stream_read_timeout_seconds": "DASHSCOPE_STREAM_READ_TIMEOUT_SECONDS",
+    "max_retries": "DASHSCOPE_MAX_RETRIES",
+    "retry_base_delay_seconds": "DASHSCOPE_RETRY_BASE_DELAY_SECONDS",
+    "retry_max_delay_seconds": "DASHSCOPE_RETRY_MAX_DELAY_SECONDS",
+    "retry_status_codes": "DASHSCOPE_RETRY_STATUS_CODES",
     "upload_dir": "UPLOAD_DIR",
     "output_dir": "OUTPUT_DIR",
     "chroma_dir": "CHROMA_DIR",
@@ -74,6 +82,12 @@ INT_KEYS = {
     "stream_read_timeout_seconds",
     "embedding_dimensions",
     "rerank_top_n",
+    "max_retries",
+}
+
+FLOAT_KEYS = {
+    "retry_base_delay_seconds",
+    "retry_max_delay_seconds",
 }
 
 BOOL_KEYS = {
@@ -94,6 +108,11 @@ def _coerce_value(key: str, value: Any) -> Any:
             return value
         if isinstance(value, str):
             return value.lower() in {"1", "true", "yes", "on"}
+    if key in FLOAT_KEYS:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return DEFAULT_SETTINGS[key]
     return value
 
 
