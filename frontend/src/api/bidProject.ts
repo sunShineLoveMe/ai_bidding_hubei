@@ -1,6 +1,6 @@
 import { apiClient } from './client';
 import type { GenerateBidDocumentResponse, OnlyOfficeConfigResponse, ParseStatusResponse, UploadResponse } from '../types/bid';
-import type { BidLengthFeasibility, BidLengthSettings, BidSection, ComplianceReport, InterpretationResponse } from '../types/interpretation';
+import type { BidLengthFeasibility, BidLengthSettings, BidSection, ComplianceReport, InterpretationResponse, SemanticComplianceReport } from '../types/interpretation';
 
 export async function identifyUser(fingerprintId: string): Promise<{ userId: string | number; isNew: boolean; storage?: string }> {
   const response = await apiClient.post('/api/users/identify', { fingerprintId });
@@ -45,6 +45,21 @@ export async function getInterpretation(projectId: string): Promise<Interpretati
 export async function getComplianceCheck(projectId: string, options?: { volumeType?: string }): Promise<ComplianceReport> {
   const response = await apiClient.get(`/api/bidding/interpretations/${projectId}/compliance-check`, {
     params: options?.volumeType ? { volumeType: options.volumeType } : undefined,
+    skipGlobalLoading: true,
+  });
+  return response.data;
+}
+
+export async function runSemanticComplianceCheck(projectId: string, options?: {
+  volumeType?: string;
+  limit?: number;
+  useLlm?: boolean;
+}): Promise<SemanticComplianceReport> {
+  const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/semantic-compliance-check`, {
+    volumeType: options?.volumeType,
+    limit: options?.limit || 12,
+    useLlm: options?.useLlm ?? true,
+  }, {
     skipGlobalLoading: true,
   });
   return response.data;

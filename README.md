@@ -125,6 +125,8 @@ GET /api/bidding/interpretations/{project_id}/compliance-check
 
 返回内容包括总检查项、已响应项、待补强项、未响应项、高风险未响应数量、分册摘要、明细列表和处理建议。该指标在界面中命名为“条款响应覆盖率”，用于追踪招标条款、评分项、风险项是否被当前章节映射或正文片段承接，不等同于最终 Word 标书合规结论。接口支持 `volumeType=technical|business|qualification|price|attachment`；`business` 保持商务包兼容口径，会覆盖商务、资格、报价、附件和其他非技术章节。标书工作台右侧实时质量仪表盘会展示当前范围响应率，并列出技术标、商务响应、资格文件、报价文件和附件材料的分册摘要。若下载前仍存在未响应或高风险未响应项，会先按当前下载范围弹窗提示风险，再由用户决定继续下载或返回补强。
 
+工作台还提供“语义复核”入口，对高风险项、评分项、未覆盖项和待补强项执行 LLM 语义合规复核。语义复核会输出 `已覆盖 / 部分覆盖 / 未覆盖`、正文证据摘录、置信度、评分权重或风险等级、补强建议和建议章节。为控制成本，默认不全量复核所有条款；模型调用失败时会使用规则兜底结果，保证页面不会因模型异常中断。
+
 ## Token 用量与成本统计
 
 系统已接入第一版 AI 用量与成本统计，用于评估单次招标解读、章节大纲生成、章节正文生成、知识库检索增强和智能客服问答等流程的大模型调用成本。
@@ -904,6 +906,7 @@ docker run -d \
 | `POST /api/bidding/interpretations/<project_id>/bid-outline` | 生成分册化章节大纲，返回 `volumes + chapters` |
 | `GET /api/bidding/interpretations/<project_id>/bid-outline/stream` | SSE 流式生成分册化章节大纲 |
 | `POST /api/bidding/interpretations/<project_id>/length-settings` | 保存全文篇幅设置，按技术标/商务标目标页数或字数刷新章节写作计划 |
+| `POST /api/bidding/interpretations/<project_id>/semantic-compliance-check` | 对高风险、评分、未覆盖和待补强项执行 LLM 语义合规复核 |
 | `POST /api/bidding/interpretations/<project_id>/sections/stream` | 流式生成章节正文 |
 | `POST /api/bidding/interpretations/<project_id>/download-docx` | 创建 DOCX 导出任务；可传 `volumeType` 单独导出技术标或商务标 |
 | `GET /api/bidding/interpretations/<project_id>/export-tasks/<task_id>` | 查询 DOCX 导出任务状态和下载地址 |
@@ -1035,7 +1038,7 @@ docker run -d \
 - [x] 章节大纲生成已升级为轻量分册模型：AI Prompt 输出 `volumes`，规则 fallback 输出 `volumes`，同时保留扁平 `chapters` 兼容现有工作台。
 - [x] 分册正文生成策略已接入：技术标、商务标、资格文件、报价文件和附件材料分别注入不同写作约束、资料召回侧重点和图片策略。
 - [ ] 分册模型稳定后新增正式 `bid_volumes` 表，承载分册状态、顺序、完成率、风险数量和用户自定义分册名称。
-- [ ] 将合规检查升级为 LLM 语义复核：逐条检查要求项、评分项、风险项是否被正文实质响应。
+- [x] 将合规检查升级为 LLM 语义复核 MVP：优先复核高风险项、评分项、未覆盖项和待补强项，判断正文是否实质响应并输出证据摘录、置信度和补强建议。
 - [ ] 增加评分点覆盖报告，按评分项输出“已覆盖 / 待补强 / 高风险缺失”。
 - [ ] 增加 AI 伴写能力：选中文字润色、扩写、缩写、改写为更正式、补充证明材料、生成表格。
 - [ ] 增加长上下文管理：章节摘要、历史章节压缩、相邻章节引用，降低多章生成时的上下文污染。

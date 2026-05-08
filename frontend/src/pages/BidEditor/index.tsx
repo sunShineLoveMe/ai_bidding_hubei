@@ -40,6 +40,7 @@ import {
   getLatestSectionGenerationTask,
   reorderBidSections,
   resetBidSectionsGeneration,
+  runSemanticComplianceCheck,
   saveBidSection,
   saveBidLengthSettings,
   updateSectionGenerationTaskItem,
@@ -48,7 +49,7 @@ import type { SectionGenerationTask } from '../../api/bidProject';
 import type { BidExportTask } from '../../api/bidProject';
 import { BrandMark } from '../../components/common/BrandMark';
 import { TiptapBidEditor } from '../../components/editor/TiptapBidEditor';
-import type { BidLengthFeasibility, BidLengthSettings, BidOutline, BidOutlineChapter, BidSection, ChapterWritingPlan, ComplianceReport, ComplianceRow, InterpretationResponse } from '../../types/interpretation';
+import type { BidLengthFeasibility, BidLengthSettings, BidOutline, BidOutlineChapter, BidSection, ChapterWritingPlan, ComplianceReport, ComplianceRow, InterpretationResponse, SemanticComplianceReport, SemanticComplianceReview } from '../../types/interpretation';
 
 type EditorMode = '正文模式' | '目录模式';
 type VolumeType = 'all' | 'technical' | 'business';
@@ -358,6 +359,9 @@ export function BidEditorPage(): JSX.Element {
   const [complianceLastCheckedAt, setComplianceLastCheckedAt] = useState<Date | null>(null);
   const [complianceError, setComplianceError] = useState('');
   const [complianceDrawerOpen, setComplianceDrawerOpen] = useState(false);
+  const [semanticReport, setSemanticReport] = useState<SemanticComplianceReport | null>(null);
+  const [semanticRefreshing, setSemanticRefreshing] = useState(false);
+  const [semanticDrawerOpen, setSemanticDrawerOpen] = useState(false);
   const [qualityCollapsed, setQualityCollapsed] = useState(false);
   const [supplementingRowId, setSupplementingRowId] = useState('');
   const [contentDirty, setContentDirty] = useState(false);
@@ -437,6 +441,24 @@ export function BidEditorPage(): JSX.Element {
       if (!options?.silent) {
         setComplianceRefreshing(false);
       }
+    }
+  }
+
+  async function runSemanticReview(projectId: string): Promise<void> {
+    setSemanticRefreshing(true);
+    try {
+      const report = await runSemanticComplianceCheck(projectId, {
+        volumeType: complianceVolumeParam(activeVolume),
+        limit: 12,
+        useLlm: true,
+      });
+      setSemanticReport(report);
+      setSemanticDrawerOpen(true);
+      message.success(`语义复核完成：已复核 ${report.summary.total} 项`);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSemanticRefreshing(false);
     }
   }
 
@@ -976,6 +998,17 @@ export function BidEditorPage(): JSX.Element {
             <Button size="small" icon={<Eye size={14} />} disabled={!pendingComplianceRows.length} onClick={() => setComplianceDrawerOpen(true)}>
               查看未响应
             </Button>
+            <Button
+              size="small"
+              type="primary"
+              ghost
+              icon={<Sparkles size={14} />}
+              loading={semanticRefreshing}
+              disabled={!data?.project?.id || complianceRefreshing}
+              onClick={() => data?.project?.id && void runSemanticReview(data.project.id)}
+            >
+              语义复核
+            </Button>
           </Space>
         </div>
         <div className="quality-dashboard-grid">
@@ -1102,6 +1135,80 @@ export function BidEditorPage(): JSX.Element {
                   <Space direction="vertical" size={2}>
                     <span>建议补强章节：{row.suggestedChapter || row.matchedChapter || '需新增补强章节/段落'}</span>
                     <span>来源页码：{row.sourcePage ? `第 ${row.sourcePage} 页` : '需复核'}</span>
+                  </Space>
+                )}
+              />
+            </List.Item>
+          )}
+        />
+      </Drawer>
+    );
+  }
+
+  function semanticStatusColor(status: SemanticComplianceReview['status']): 'green' | 'orange' | 'red' {
+    if (status === 'covered') return 'green';
+    if (status === 'partial') return 'orange';
+    return 'red';
+  }
+
+  function SemanticComplianceDrawer(): JSX.Element {
+    const summary = semanticReport?.summary;
+    return (
+      <Drawer
+        title={`语义合规复核 - ${semanticReport?.volumeName || volumeLabel(activeVolume)}`}
+        width={760}
+        open={semanticDrawerOpen}
+        onClose={() => setSemanticDrawerOpen(false)}
+      >
+        <Alert
+          type="info"
+          showIcon
+          className="mb-3"
+          message={summary ? `复核 ${summary.total} 项，语义覆盖率 ${summary.percent}%` : '语义复核用于检查正文是否实质响应条款'}
+          description="系统优先复核高风险项、评分项、未覆盖和待补强项。证据摘录和置信度用于下载前质量把关，不替代人工终审。"
+        />
+        <List
+          dataSource={semanticReport?.reviews || []}
+          locale={{ emptyText: '暂无语义复核结果' }}
+          renderItem={row => (
+            <List.Item
+              actions={[
+                <Button
+                  key="jump"
+                  size="small"
+                  type="link"
+                  disabled={!row.targetSectionId}
+                  onClick={() => {
+                    const target = chapters.find(chapter => chapter.id === row.targetSectionId);
+                    if (!target) {
+                      message.warning('建议章节不在当前目录中，请刷新后重试。');
+                      return;
+                    }
+                    setSelectedId(target.id);
+                    setActiveVolume(deliveryVolumeType(target));
+                    setMode('正文模式');
+                    setSemanticDrawerOpen(false);
+                  }}
+                >
+                  定位章节
+                </Button>,
+              ]}
+            >
+              <List.Item.Meta
+                title={(
+                  <Space size={6} wrap>
+                    <Tag color={row.category === '风险项' ? 'red' : row.category === '评分项' ? 'green' : 'blue'}>{row.category}</Tag>
+                    <Tag color={semanticStatusColor(row.status)}>{row.status === 'covered' ? '已覆盖' : row.status === 'partial' ? '部分覆盖' : '未覆盖'}</Tag>
+                    <Tag color="purple">置信度 {Math.round((row.confidence || 0) * 100)}%</Tag>
+                    <Tag>{row.weight}</Tag>
+                    {row.llmReviewed ? <Tag color="geekblue">LLM</Tag> : <Tag>规则兜底</Tag>}
+                  </Space>
+                )}
+                description={(
+                  <Space direction="vertical" size={4}>
+                    <span>建议章节：{row.targetSectionTitle || '需新增或人工定位'}</span>
+                    <span>证据摘录：{row.evidence || '未找到可直接引用的正文证据'}</span>
+                    <span>补强建议：{row.suggestion}</span>
                   </Space>
                 )}
               />
@@ -1730,6 +1837,15 @@ export function BidEditorPage(): JSX.Element {
   function customWritingPlaceholder(chapter: ChapterDraft): string {
     const title = `${chapter.title || ''} ${chapter.purpose || ''} ${(chapter.response_points || []).join(' ')}`;
     const plan = chapterWritingPlan(chapter);
+    const compact = (items?: unknown[], limit = 2): string => (items || [])
+      .map(item => String(item || '').trim())
+      .filter(Boolean)
+      .slice(0, limit)
+      .join('、');
+    const responseHint = compact(chapter.response_points, 2);
+    const scoringHint = compact(chapter.mapped_scoring_items, 2);
+    const riskHint = compact(chapter.mapped_risks, 2);
+    const materialHint = compact(chapter.required_materials, 2);
     if (/安全|应急|文明施工|生产/.test(title)) {
       return '请输入本章补充要求，例如：补齐安全生产责任体系、危险源辨识、班前教育、应急预案、特种作业管理和安全检查闭环；结合本项目施工风险写具体措施。';
     }
@@ -1763,7 +1879,16 @@ export function BidEditorPage(): JSX.Element {
     if (plan.needs_case) {
       return '请输入本章补充要求，例如：结合类似项目经验补充做法、成效、适用条件和证明材料索引；缺少业绩事实时使用待补充占位。';
     }
-    return '请输入本章补充要求，例如：围绕本章标题、评分项、风险点和招标要求补充可执行措施、证明材料索引和人工复核提示。';
+    return [
+      `请输入「${chapter.title || '本章'}」的补充要求。`,
+      responseHint ? `可围绕响应要点：${responseHint}。` : '',
+      scoringHint ? `重点补强评分项：${scoringHint}。` : '',
+      riskHint ? `注意回应风险点：${riskHint}。` : '',
+      materialHint ? `建议补充材料索引：${materialHint}。` : '',
+      plan.needs_table ? '如适合，请要求补充表格字段、责任部门、完成时限和可量化承诺。' : '',
+      plan.needs_image ? '如适合，请要求补充流程图、设备图、现场布置图或附件图片说明。' : '',
+      '不要编造证书编号、人员姓名、金额、日期或未提供的业绩事实。',
+    ].filter(Boolean).join(' ');
   }
 
   function customWriteChapter(chapter: ChapterDraft): void {
@@ -2469,6 +2594,7 @@ export function BidEditorPage(): JSX.Element {
         </Modal>
         <LengthSettingsModal />
         <ComplianceDrawer />
+        <SemanticComplianceDrawer />
       </div>
     );
   }
@@ -2664,6 +2790,7 @@ export function BidEditorPage(): JSX.Element {
       </main>
       <QualityDashboard />
       <ComplianceDrawer />
+      <SemanticComplianceDrawer />
     </div>
   );
 }

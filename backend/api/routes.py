@@ -21,6 +21,7 @@ from backend.ai.chapter_planner import generate_bid_outline, stream_bid_outline
 from backend.ai.section_writer import stream_bid_section
 from backend.ai.interpreter import generate_ai_interpretation_report
 from backend.ai.compliance_checker import build_compliance_report
+from backend.ai.semantic_compliance import build_semantic_compliance_report
 from backend.db.supabase_repo import cancel_bid_generation_task, create_bid_export_task, create_bid_generation_task, create_knowledge_asset, delete_bid_project, delete_bid_section, download_bid_file_to_local, download_knowledge_asset_file_variant, get_ai_usage_overview, get_bid_export_task, get_bid_file, get_latest_bid_file_for_project, get_latest_bid_generation_task, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_analysis_project_meta, update_bid_export_task, update_bid_file_parse_status, update_bid_generation_task_item, update_bid_section_content, update_knowledge_asset, upload_knowledge_asset_file, upsert_bid_section
 from backend.core.llm_json_utils import strip_llm_json
 from backend.core.bid_volumes import asset_applicable_volumes, asset_matches_volume, delivery_volume_type, normalize_volume_list, section_volume_type, volume_name
@@ -1192,6 +1193,31 @@ def get_interpretation_compliance_check(project_id):
     except Exception as e:
         logging.exception("生成合规覆盖检查失败: %s", project_id)
         return jsonify({'error': f'生成合规覆盖检查失败: {str(e)}'}), 500
+
+
+@bp.route('/interpretations/<project_id>/semantic-compliance-check', methods=['POST'])
+def run_interpretation_semantic_compliance_check(project_id):
+    """对高价值条款执行 LLM 语义合规复核。"""
+    try:
+        uuid.UUID(project_id)
+        payload = request.get_json(silent=True) or {}
+        volume_type = payload.get("volumeType")
+        if volume_type not in {"technical", "business"}:
+            volume_type = None
+        limit = int(payload.get("limit") or 12)
+        use_llm = bool(payload.get("useLlm", True))
+        return jsonify(build_semantic_compliance_report(
+            project_id,
+            volume_type=volume_type,
+            limit=limit,
+            use_llm=use_llm,
+        ))
+    except ValueError:
+        return jsonify({'error': 'project_id 不是合法 UUID。'}), 400
+    except Exception as e:
+        logging.exception("生成语义合规复核失败: %s", project_id)
+        return jsonify({'error': f'生成语义合规复核失败: {str(e)}'}), 500
+
 
 @bp.route('/interpretations/<project_id>/bid-outline/stream', methods=['GET'])
 def stream_interpretation_bid_outline(project_id):

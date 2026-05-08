@@ -275,6 +275,37 @@ export interface ComplianceReport {
   recommendations: string[];
 }
 
+export interface SemanticComplianceReview {
+  rowId: string;
+  category: string;
+  importance?: string;
+  status: 'covered' | 'partial' | 'missing';
+  evidence: string;
+  confidence: number;
+  weight: string;
+  suggestion: string;
+  targetSectionId?: string | null;
+  targetSectionTitle?: string | null;
+  llmReviewed?: boolean;
+}
+
+export interface SemanticComplianceReport {
+  projectId: string;
+  volumeType: string;
+  volumeName: string;
+  baseSummary?: ComplianceReport['summary'];
+  summary: {
+    total: number;
+    covered: number;
+    partial: number;
+    missing: number;
+    percent: number;
+    llmReviewed?: number;
+  };
+  reviews: SemanticComplianceReview[];
+  recommendations: string[];
+}
+
 export interface DocumentChunk {
   id: string;
   chunk_index: number;
