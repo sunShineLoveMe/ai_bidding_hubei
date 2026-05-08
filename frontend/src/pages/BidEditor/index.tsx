@@ -584,6 +584,7 @@ export function BidEditorPage(): JSX.Element {
     ? complianceLastCheckedAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
     : '尚未检查';
   const pendingComplianceRows = (complianceReport?.rows || []).filter(row => row.status !== 'covered');
+  const complianceVolumeSummaries = (complianceReport?.volumeSummaries || []).filter(item => item.total > 0 || item.highRiskMissing || item.missing);
 
   function jumpToComplianceRow(row: ComplianceRow): void {
     const targetId = row.suggestedChapterId || row.matchedChapterId;
@@ -734,6 +735,28 @@ export function BidEditorPage(): JSX.Element {
             </article>
           </Tooltip>
         </div>
+        {complianceVolumeSummaries.length ? (
+          <div className="mt-3 grid gap-2">
+            {complianceVolumeSummaries.map(item => (
+              <Tooltip
+                key={item.volumeType}
+                title={`${item.volumeName}：共 ${item.total} 项，已响应 ${item.covered} 项，待补强 ${item.partial} 项，未响应 ${item.missing} 项。`}
+              >
+                <button
+                  type="button"
+                  className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm hover:border-blue-300 hover:bg-blue-50"
+                  onClick={() => {
+                    setComplianceDrawerOpen(true);
+                  }}
+                >
+                  <span className="font-semibold text-slate-700">{item.volumeName}</span>
+                  <span className="text-slate-500">{item.percent}%</span>
+                  {item.highRiskMissing ? <Tag color="red">{item.highRiskMissing} 高风险</Tag> : item.missing ? <Tag color="orange">{item.missing} 未响应</Tag> : <Tag color="green">正常</Tag>}
+                </button>
+              </Tooltip>
+            ))}
+          </div>
+        ) : null}
       </aside>
     );
   }

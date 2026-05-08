@@ -222,6 +222,21 @@ export interface ComplianceRow {
   suggestedChapterId?: string | null;
   sourcePage?: number | null;
   sourceText?: string | null;
+  volumeType?: string;
+  volumeName?: string;
+  deliveryVolumeType?: string;
+  deliveryVolumeName?: string;
+}
+
+export interface ComplianceVolumeSummary {
+  volumeType: string;
+  volumeName: string;
+  total: number;
+  covered: number;
+  partial: number;
+  missing: number;
+  percent: number;
+  highRiskMissing?: number;
 }
 
 export interface ComplianceReport {
@@ -239,6 +254,7 @@ export interface ComplianceReport {
     percent: number;
     highRiskMissing?: number;
   };
+  volumeSummaries?: ComplianceVolumeSummary[];
   rows: ComplianceRow[];
   recommendations: string[];
 }

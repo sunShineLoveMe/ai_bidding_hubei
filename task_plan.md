@@ -736,3 +736,56 @@ npm run build
 
 ## Status
 **Complete** - 企业资产适用分册字段、RAG 硬过滤、前端维护入口、测试和文档同步已完成。
+
+---
+
+# Task Plan: P3.4 分册维度合规检查与质量闭环
+
+## Goal
+将条款响应检查从整本/技术标/商务包扩展为技术标、商务响应、资格文件、报价文件、附件材料等内部分册摘要，让用户在下载前明确知道各分册响应率和高风险缺口。
+
+## Scope
+- 后端合规检查新增内部 `volumeSummaries`。
+- 保持 `volumeType=business` 商务包兼容口径：覆盖商务、资格、报价、附件和其他非技术章节。
+- 支持 `volumeType=qualification|price|attachment` 内部分册精确检查。
+- 工作台质量仪表盘展示各分册响应率、未响应项和高风险数量。
+- 补充测试覆盖资格文件分册统计和商务包兼容口径。
+
+## Phases
+- [x] Phase 1: 梳理现有合规检查和下载前检查口径
+- [x] Phase 2: 后端合规报告扩展内部分册摘要
+- [x] Phase 3: 前端质量仪表盘展示分册摘要
+- [x] Phase 4: 补充分册合规测试
+- [x] Phase 5: 执行后端测试、语法检查和前端 build
+- [x] Phase 6: README 和分册整改 TODO 同步
+
+## Files Changed
+- `backend/ai/compliance_checker.py`
+- `frontend/src/pages/BidEditor/index.tsx`
+- `frontend/src/types/interpretation.ts`
+- `tests/test_compliance.py`
+- `README.md`
+- `docs/技术标商务标分册整改TODO.md`
+- `task_plan.md`
+
+## Verification
+
+```bash
+python -m unittest discover -s tests -p 'test_compliance.py'
+python -m unittest discover -s tests
+python -m py_compile backend/ai/compliance_checker.py backend/api/routes.py
+npm run build
+```
+
+验证结果：
+- 合规专项测试通过，当前 4 个合规测试。
+- 后端 MVP 测试通过，当前共 30 个测试。
+- Python 语法检查通过。
+- 前端生产构建通过；Vite 仍提示主包超过 500 kB，这是既有体积警告。
+
+## Notes
+- `business` 仍是用户下载商务标时的商务包口径，内部摘要会显示商务响应、资格文件、报价文件和附件材料。
+- 规则版合规检查仍不是 LLM 语义复核；后续可继续增强评分权重和证据摘录。
+
+## Status
+**Complete** - 分册维度条款响应摘要、工作台质量展示、测试和文档同步已完成。

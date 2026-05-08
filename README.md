@@ -123,7 +123,7 @@ flowchart TD
 GET /api/bidding/interpretations/{project_id}/compliance-check
 ```
 
-返回内容包括总检查项、已响应项、待补强项、未响应项、高风险未响应数量、明细列表和处理建议。该指标在界面中命名为“条款响应覆盖率”，用于追踪招标条款、评分项、风险项是否被当前章节映射或正文片段承接，不等同于最终 Word 标书合规结论。接口支持 `volumeType=technical|business` 按技术标或商务标统计；标书工作台顶部会常驻显示实时质量仪表盘，并在进入工作台、生成正文、批量生成、保存章节和切换分册后刷新当前分册的条款响应报告。若下载前仍存在未响应或高风险未响应项，会先按当前下载范围弹窗提示风险，再由用户决定继续下载或返回补强。
+返回内容包括总检查项、已响应项、待补强项、未响应项、高风险未响应数量、分册摘要、明细列表和处理建议。该指标在界面中命名为“条款响应覆盖率”，用于追踪招标条款、评分项、风险项是否被当前章节映射或正文片段承接，不等同于最终 Word 标书合规结论。接口支持 `volumeType=technical|business|qualification|price|attachment`；`business` 保持商务包兼容口径，会覆盖商务、资格、报价、附件和其他非技术章节。标书工作台右侧实时质量仪表盘会展示当前范围响应率，并列出技术标、商务响应、资格文件、报价文件和附件材料的分册摘要。若下载前仍存在未响应或高风险未响应项，会先按当前下载范围弹窗提示风险，再由用户决定继续下载或返回补强。
 
 ## Token 用量与成本统计
 
@@ -527,7 +527,7 @@ python -m unittest discover -s tests
 | `tests/test_docx_export.py` | DOCX 正式文本清理、表格保留、图片插入上限和跳过报告 |
 | `tests/test_api_sections.py` | 章节 API 参数校验、保存、排序、导出任务非法参数 |
 | `tests/test_mineru_status.py` | MinerU 手动导入失败状态、断点续传 Range、有效 zip 产物识别 |
-| `tests/test_compliance.py` | 正文命中后覆盖率提升、高风险缺失项识别 |
+| `tests/test_compliance.py` | 正文命中后覆盖率提升、高风险缺失项识别、内部分册统计和商务包兼容口径 |
 | `tests/test_rag_retrieval.py` | RAG 文本召回、图片资产向量召回、关键词兜底、来源和图片 Prompt 组装 |
 | `tests/test_rag_asset_scoring.py` | 技术标/资格文件/商务文件的企业产品库、资信库和图片资产匹配策略 |
 
