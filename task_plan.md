@@ -530,3 +530,96 @@ npm run build
 
 ## Status
 **Complete** - MinerU 下载、解析和导入链路已增加断点重试、失败阶段标准化和用户可见错误提示。
+
+---
+
+# Task Plan: P3.1 后端 Smoke Test 最小闭环
+
+## Goal
+补齐第一版后端自动化 smoke test，用于在继续拆分路由、增强解析和导出能力前锁住最基础的主链路行为。
+
+## Scope
+- 使用 Python 标准库 `unittest`，避免新增测试依赖。
+- 覆盖 `/api/health` 健康检查。
+- 覆盖非法招标文件上传在外部服务前被拦截。
+- 覆盖 MinerU 下载失败状态中的失败阶段、错误类型、用户提示、可重试标记和重试次数透出。
+- 覆盖 DOCX 转换遇到失效 Markdown 图片时降级跳过，不中断 Word 生成。
+- README 同步测试文件、测试命令和适用场景。
+
+## Phases
+- [x] Phase 1: 确认 Flask app 初始化和可测试接口边界
+- [x] Phase 2: 新增 `tests/test_smoke.py`
+- [x] Phase 3: 编写健康检查、上传校验、解析状态和 DOCX 图片降级测试
+- [x] Phase 4: 执行 `python -m unittest discover -s tests`
+- [x] Phase 5: README 和任务清单同步
+
+## Files Changed
+- `tests/test_smoke.py`
+- `README.md`
+- `task_plan.md`
+
+## Verification
+
+```bash
+python -m py_compile tests/test_smoke.py
+python -m unittest discover -s tests
+```
+
+验证结果：
+- `tests/test_smoke.py` 编译通过。
+- 后端 smoke test 通过，当前共 4 个测试。
+
+## Notes
+- 测试不依赖真实 DashScope、MinerU 或 Supabase 调用。
+- 解析状态测试会 mock Supabase 文件查询和 MinerU 下载重试函数，只验证 Flask 路由返回字段和自动重试触发。
+- DOCX 图片降级测试使用临时目录生成 Markdown 和 Word 文件，不污染项目输出目录。
+
+## Status
+**Complete** - 后端 smoke test 最小闭环已完成，可用 `python -m unittest discover -s tests` 执行。
+
+---
+
+# Task Plan: P3.2 后端 MVP 生产场景测试扩展
+
+## Goal
+在第一版 smoke test 基础上，继续覆盖真实生产更容易出问题的 DOCX、章节 API、MinerU 导入/下载和合规覆盖口径，形成可持续扩展的后端 MVP 测试集。
+
+## Scope
+- DOCX 导出回归：正式文本清理、表格保留、图片插入上限和跳过报告。
+- 章节 API：非法项目 ID、章节保存、章节排序、导出任务非法参数。
+- MinerU 状态：手动导入坏 zip 写入失败状态、断点续传 Range 请求、有效 zip 产物识别。
+- 合规检查：正文实质命中后覆盖率提升，高风险缺失项识别。
+- README 同步测试文件和覆盖场景。
+
+## Phases
+- [x] Phase 1: 新增 `tests/test_docx_export.py`
+- [x] Phase 2: 新增 `tests/test_api_sections.py`
+- [x] Phase 3: 新增 `tests/test_mineru_status.py`
+- [x] Phase 4: 新增 `tests/test_compliance.py`
+- [x] Phase 5: 执行 `python -m unittest discover -s tests`
+- [x] Phase 6: README 和任务清单同步
+
+## Files Changed
+- `tests/test_docx_export.py`
+- `tests/test_api_sections.py`
+- `tests/test_mineru_status.py`
+- `tests/test_compliance.py`
+- `README.md`
+- `task_plan.md`
+
+## Verification
+
+```bash
+python -m unittest discover -s tests
+```
+
+验证结果：
+- 后端 MVP 测试通过，当前共 16 个测试。
+
+## Notes
+- 仍然不是完整覆盖率测试；当前重点是锁住无外部依赖的高风险主链路。
+- 测试使用 mock 和临时目录，避免真实调用模型厂商、MinerU、Supabase 或污染输出目录。
+- 后续应继续补 RAG 检索测试、DOCX 更细粒度样式测试、用量统计成本测试和前端 Playwright 流程测试。
+
+## Status
+**Complete** - 后端 MVP 生产场景测试已扩展到 DOCX、章节 API、MinerU 状态和合规覆盖基础口径。

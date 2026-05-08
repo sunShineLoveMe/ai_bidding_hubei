@@ -504,6 +504,31 @@ cd frontend
 npm run dev
 ```
 
+### 2.1 运行后端 MVP 测试
+
+项目已提供第一版后端 MVP 测试，覆盖健康检查、上传文件类型拦截、MinerU 解析失败状态透出、MinerU zip 导入、DOCX 导出格式回归、章节 API 参数校验和合规覆盖基础口径。测试不依赖真实 DashScope、MinerU 或 Supabase 调用，适合开发、实施和交付前快速检查主链路是否被破坏。
+
+```bash
+python -m unittest discover -s tests
+```
+
+建议每次修改后端核心链路后至少执行：
+
+```bash
+python -m py_compile backend/api/routes.py backend/parsing/document_parser.py backend/parsing/mineru_client.py backend/export/md_to_word.py
+python -m unittest discover -s tests
+```
+
+当前测试文件：
+
+| 文件 | 覆盖内容 |
+| --- | --- |
+| `tests/test_smoke.py` | Flask 健康检查、非法招标文件上传拦截、MinerU 下载失败状态字段、DOCX 失效图片降级 |
+| `tests/test_docx_export.py` | DOCX 正式文本清理、表格保留、图片插入上限和跳过报告 |
+| `tests/test_api_sections.py` | 章节 API 参数校验、保存、排序、导出任务非法参数 |
+| `tests/test_mineru_status.py` | MinerU 手动导入失败状态、断点续传 Range、有效 zip 产物识别 |
+| `tests/test_compliance.py` | 正文命中后覆盖率提升、高风险缺失项识别 |
+
 ### 3. 配置环境变量
 
 复制示例文件：
@@ -799,6 +824,8 @@ docker run -d \
 ```text
 .
 ├── main.py                         # Flask 服务入口
+├── tests/                          # 后端 smoke test
+│   └── test_smoke.py
 ├── backend/                        # 后端业务代码包
 │   ├── api/                        # Flask API 路由与用户接口
 │   │   ├── routes.py
@@ -968,7 +995,7 @@ docker run -d \
 
 ### P3：测试与质量保障
 
-- [ ] 增加后端 smoke test：健康检查、上传、解析状态、项目查询、章节生成、DOCX 下载。
+- [x] 增加后端 smoke test：健康检查、上传校验、解析状态失败信息透出、DOCX 图片失败降级。
 - [ ] 增加 RAG 检索测试：文本召回、图片资产召回、无关问题拒答、来源展示。
 - [ ] 增加 DOCX 导出回归测试：标题层级、表格、页眉、中文字体、图片插入、Markdown 符号清理。
 - [ ] 增加前端关键流程测试：上传招标文件、生成大纲、单章生成、批量生成、目录模式、重置状态。
