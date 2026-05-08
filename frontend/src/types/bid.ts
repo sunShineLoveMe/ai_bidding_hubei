@@ -12,6 +12,12 @@ export interface UploadResponse {
 export interface ParseStatusResponse {
   fileId: string;
   parseStatus?: string | null;
+  failureStage?: string | null;
+  errorType?: string | null;
+  error?: string | null;
+  userMessage?: string | null;
+  retryable?: boolean;
+  downloadRetryCount?: number;
   supabaseFile?: Record<string, unknown> | null;
   mineru?: Record<string, unknown>;
 }

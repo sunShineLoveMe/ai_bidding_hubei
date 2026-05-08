@@ -197,11 +197,13 @@ def _download_with_curl(zip_url: str, tmp_zip_path: Path, timeout: int, verify_s
     parsed_url = urlparse(zip_url)
     host = parsed_url.hostname
     resolve_ips = _resolve_download_host(host) if host else []
+    resume_enabled = os.getenv("MINERU_DOWNLOAD_RESUME", "true").lower() not in {"false", "0", "no"}
 
     errors: list[str] = []
     resolve_attempts: list[str | None] = [None, *resolve_ips]
     for resolve_ip in resolve_attempts:
-        if tmp_zip_path.exists():
+        resume_from = tmp_zip_path.stat().st_size if resume_enabled and tmp_zip_path.exists() else 0
+        if tmp_zip_path.exists() and not resume_enabled:
             tmp_zip_path.unlink()
         command = [
             curl_path,
@@ -222,6 +224,8 @@ def _download_with_curl(zip_url: str, tmp_zip_path: Path, timeout: int, verify_s
             "-o",
             str(tmp_zip_path),
         ]
+        if resume_from > 0:
+            command.extend(["--continue-at", "-"])
         if resolve_ip and host:
             command.extend(["--resolve", f"{host}:443:{resolve_ip}"])
         command.append(zip_url)
@@ -314,40 +318,67 @@ def download_and_extract_zip(zip_url: str, output_dir: str | Path, timeout: int 
     zip_path = output_path / "mineru_result.zip"
     tmp_zip_path = output_path / "mineru_result.zip.part"
     verify_ssl = os.getenv("MINERU_DOWNLOAD_VERIFY_SSL", "true").lower() not in {"false", "0", "no"}
+    resume_enabled = os.getenv("MINERU_DOWNLOAD_RESUME", "true").lower() not in {"false", "0", "no"}
+    keep_partial = os.getenv("MINERU_DOWNLOAD_KEEP_PARTIAL", "true").lower() not in {"false", "0", "no"}
     parsed_url = urlparse(zip_url)
     skip_requests = _host_uses_fake_ip(parsed_url.hostname)
+    download_info: dict[str, Any] = {
+        "url_host": parsed_url.hostname,
+        "resume_enabled": resume_enabled,
+        "used_curl_fallback": False,
+        "resumed_from_bytes": 0,
+        "downloaded_bytes": 0,
+    }
 
     try:
-        if tmp_zip_path.exists():
+        if tmp_zip_path.exists() and not resume_enabled:
             tmp_zip_path.unlink()
         try:
             if skip_requests:
                 raise MinerUDownloadError("System DNS resolved MinerU CDN to fake-ip; using curl --resolve")
             else:
+                resume_from = tmp_zip_path.stat().st_size if resume_enabled and tmp_zip_path.exists() else 0
+                headers = {"User-Agent": "Mozilla/5.0 ai-bidding-mineru-downloader"}
+                if resume_from > 0:
+                    headers["Range"] = f"bytes={resume_from}-"
                 response = _download_session().get(
                     zip_url,
                     stream=True,
                     timeout=timeout,
                     verify=verify_ssl,
-                    headers={"User-Agent": "Mozilla/5.0 ai-bidding-mineru-downloader"},
+                    headers=headers,
                 )
                 response.raise_for_status()
-                with open(tmp_zip_path, "wb") as f:
+                mode = "ab" if resume_from > 0 and response.status_code == 206 else "wb"
+                if resume_from > 0 and response.status_code != 206:
+                    resume_from = 0
+                download_info["resumed_from_bytes"] = resume_from
+                downloaded_bytes = 0
+                with open(tmp_zip_path, mode) as f:
                     for chunk in response.iter_content(chunk_size=1024 * 1024):
                         if chunk:
+                            downloaded_bytes += len(chunk)
                             f.write(chunk)
+                download_info["downloaded_bytes"] = downloaded_bytes
         except Exception as requests_error:
-            if tmp_zip_path.exists():
+            if tmp_zip_path.exists() and not keep_partial:
                 tmp_zip_path.unlink()
             if os.getenv("MINERU_DOWNLOAD_USE_CURL_FALLBACK", "true").lower() in {"false", "0", "no"}:
                 raise
+            download_info["used_curl_fallback"] = True
             _download_with_curl(zip_url, tmp_zip_path, timeout, verify_ssl)
         if tmp_zip_path.stat().st_size == 0:
             raise MinerUDownloadError("MinerU result zip download returned empty file")
+        download_info["zip_size"] = tmp_zip_path.stat().st_size
         tmp_zip_path.replace(zip_path)
     except Exception as e:
-        if tmp_zip_path.exists():
+        if tmp_zip_path.exists() and not keep_partial:
             tmp_zip_path.unlink()
+        if tmp_zip_path.exists():
+            download_info["partial_path"] = str(tmp_zip_path)
+            download_info["partial_size"] = tmp_zip_path.stat().st_size
         raise MinerUDownloadError(f"MinerU result zip download failed: {e}") from e
 
-    return extract_zip_artifacts(zip_path, output_dir)
+    artifacts = extract_zip_artifacts(zip_path, output_dir)
+    artifacts["download_info"] = download_info
+    return artifacts

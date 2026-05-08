@@ -475,3 +475,58 @@ PY
 
 ## Status
 **Complete** - 图文并茂 DOCX 导出已增加图片选择解释、分册数量上限、失败降级、转换报告和前端复核提示。
+
+---
+
+# Task Plan: P1.7 MinerU 下载、解析、导入断点重试和失败原因展示
+
+## Goal
+提升 MinerU/OCR 主链路稳定性，让结果 zip 下载失败、手动导入失败、解析失败和原生抽取失败都有可重试状态、用户可读原因和明确处理阶段。
+
+## Scope
+- MinerU 结果 zip 下载支持保留 `.part` 临时文件并在后续重试时断点续传。
+- 下载失败时保留 retryable、failure_stage、error_type、user_message、download_retry_count 等字段。
+- 手动导入 MinerU zip 失败时写入 `mineru_import_failed` 和用户可读原因。
+- parse-status 接口返回失败阶段、错误类型、用户提示、重试次数和可重试标记。
+- 历史记录页展示失败阶段和下载重试次数。
+- 自动流程解析等待页展示下载重试状态和用户提示。
+- README、`.env.example` 和任务清单同步。
+
+## Phases
+- [x] Phase 1: 梳理现有 MinerU 状态机、下载重试、手动导入和历史记录展示
+- [x] Phase 2: MinerU zip 下载增加断点续传和下载报告
+- [x] Phase 3: 解析、下载、导入失败状态标准化
+- [x] Phase 4: parse-status 和历史记录接口透出失败阶段、重试次数和用户提示
+- [x] Phase 5: 前端工作流和历史记录页展示失败原因与重试信息
+- [x] Phase 6: 后端编译、前端构建和必要冒烟验证
+- [x] Phase 7: README 和任务清单同步
+
+## Files Changed
+- `backend/parsing/mineru_client.py`
+- `backend/parsing/document_parser.py`
+- `backend/api/routes.py`
+- `frontend/src/types/bid.ts`
+- `frontend/src/components/workflow/BidWorkflow.tsx`
+- `frontend/src/pages/History/index.tsx`
+- `.env.example`
+- `README.md`
+- `task_plan.md`
+
+## Verification
+
+```bash
+python -m py_compile backend/parsing/mineru_client.py backend/parsing/document_parser.py backend/api/routes.py
+npm run build
+```
+
+验证结果：
+- 后端编译通过。
+- 前端构建通过，仍有既有 chunk size warning。
+
+## Notes
+- MinerU 结果 zip 下载默认保留 `.part` 临时文件，后续重试优先使用 HTTP Range 断点续传；curl 兜底也会尝试 `--continue-at -`。
+- parse-status 返回 `failureStage`、`errorType`、`userMessage`、`retryable` 和 `downloadRetryCount`，历史记录页和自动流程会展示这些信息。
+- 手动导入 MinerU zip 失败会写入 `mineru_import_failed`，不再只是接口返回 500。
+
+## Status
+**Complete** - MinerU 下载、解析和导入链路已增加断点重试、失败阶段标准化和用户可见错误提示。

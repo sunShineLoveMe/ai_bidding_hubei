@@ -139,7 +139,9 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
       const splitDetail = mineru.split && mineru.part_count
         ? `当前为超 200 页 PDF，已自动分为 ${mineru.part_count} 份解析${mineru.current_part ? `，正在处理第 ${mineru.current_part} 份（${mineru.current_part_pages || ''} 页）` : ''}。`
         : '';
-      setDetail(`解析状态：${parseStatus}。${splitDetail}系统正在抽取文本、表格和图片信息，第 ${count} 次检查。`);
+      const retryDetail = data.downloadRetryCount ? `结果下载已重试 ${data.downloadRetryCount} 次。` : '';
+      const userHint = data.userMessage ? `${data.userMessage}。` : '';
+      setDetail(`解析状态：${parseStatus}。${splitDetail}${retryDetail}${userHint}系统正在抽取文本、表格和图片信息，第 ${count} 次检查。`);
 
       if (parseStatus === 'indexed') {
         return;
@@ -152,7 +154,7 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
         'mineru_import_failed',
         'supabase_sync_failed',
       ].includes(parseStatus)) {
-        const errorDetail = String(mineru.error || mineru.reason || '');
+        const errorDetail = String(data.userMessage || mineru.user_message || mineru.error || mineru.reason || data.error || '');
         throw new Error(errorDetail || '招标文件解析失败，请检查文件是否可读，或在历史记录中重试 MinerU/OCR 解析。');
       }
       await delay(5000);

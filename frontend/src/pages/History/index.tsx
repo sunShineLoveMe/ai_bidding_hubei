@@ -29,7 +29,11 @@ interface HistoryItem {
   latest_file_id?: string | null;
   parse_task_id?: string | null;
   parse_error?: string | null;
+  parse_raw_error?: string | null;
   parse_retryable?: boolean;
+  parse_failure_stage?: string | null;
+  parse_error_type?: string | null;
+  parse_download_retry_count?: number;
   parse_updated_at?: string | null;
   latest_file_name?: string | null;
   created_at?: string | null;
@@ -249,6 +253,12 @@ export function HistoryPage(): JSX.Element {
             {record.parse_error ? (
               <div className="line-clamp-2 max-w-[200px] text-xs font-semibold text-red-500" title={record.parse_error}>
                 原因：{record.parse_error}
+              </div>
+            ) : null}
+            {record.parse_failure_stage || record.parse_download_retry_count ? (
+              <div className="text-[11px] font-semibold text-slate-400">
+                {record.parse_failure_stage ? `阶段 ${record.parse_failure_stage}` : ''}
+                {record.parse_download_retry_count ? ` · 下载重试 ${record.parse_download_retry_count} 次` : ''}
               </div>
             ) : null}
             {record.parse_task_id ? (

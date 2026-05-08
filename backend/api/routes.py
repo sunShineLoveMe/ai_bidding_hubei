@@ -833,7 +833,11 @@ def get_parse_status(file_id):
                 or retry_is_stale
             )
         ):
-            write_parse_status(file_id, {"parse_status": "mineru_download_retrying"})
+            write_parse_status(file_id, {
+                "parse_status": "mineru_download_retrying",
+                "user_message": "MinerU 结果下载失败，系统正在自动断点重试。",
+                "retryable": True,
+            })
             threading.Thread(target=retry_mineru_result_download, args=(file_id,), daemon=True).start()
             local_status = read_parse_status(file_id) or local_status
 
@@ -851,6 +855,12 @@ def get_parse_status(file_id):
         return jsonify({
             'fileId': file_id,
             'parseStatus': local_status.get('parse_status') or (supabase_file or {}).get('parse_status'),
+            'failureStage': local_status.get('failure_stage'),
+            'errorType': local_status.get('error_type'),
+            'error': local_status.get('error') or local_status.get('reason'),
+            'userMessage': local_status.get('user_message'),
+            'retryable': bool(local_status.get('retryable')),
+            'downloadRetryCount': int(local_status.get('download_retry_count') or 0),
             'supabaseFile': supabase_file,
             'mineru': local_status,
         })
@@ -942,11 +952,20 @@ def get_bid_history():
             item["parse_status"] = parse_status
             item["parse_task_id"] = local_status.get("_parse_id")
             item["parse_error"] = (
+                local_status.get("user_message")
+                or local_status.get("error")
+                or local_status.get("reason")
+                or local_status.get("supabase_sync_error")
+            )
+            item["parse_raw_error"] = (
                 local_status.get("error")
                 or local_status.get("reason")
                 or local_status.get("supabase_sync_error")
             )
             item["parse_retryable"] = bool(local_status.get("retryable"))
+            item["parse_failure_stage"] = local_status.get("failure_stage")
+            item["parse_error_type"] = local_status.get("error_type")
+            item["parse_download_retry_count"] = int(local_status.get("download_retry_count") or 0)
             item["parse_updated_at"] = local_status.get("updated_at")
             if parse_status in {
                 "mineru_failed",

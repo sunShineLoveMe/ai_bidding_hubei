@@ -24,6 +24,47 @@ from backend.parsing.mineru_client import (
 PARSED_OUTPUT_ROOT = Path("parsed_outputs")
 MINERU_MAX_PDF_PAGES = int(os.getenv("MINERU_MAX_PDF_PAGES", "200"))
 
+FAILED_PARSE_STATUSES = {
+    "mineru_failed",
+    "index_failed",
+    "ocr_required",
+    "mineru_download_failed",
+    "mineru_import_failed",
+    "supabase_sync_failed",
+}
+
+
+def _now_iso() -> str:
+    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+def _mineru_user_message(status: str, error: str | None = None) -> str:
+    if status == "mineru_download_failed":
+        return "MinerU 已完成解析，但结果 zip 下载失败；系统会保留断点文件并自动重试，也可在历史记录中手动重试。"
+    if status == "mineru_import_failed":
+        return "MinerU 结果 zip 导入失败，请确认 zip 文件完整且包含 full.md 或 content_list 产物。"
+    if status == "mineru_failed":
+        return "MinerU 解析失败，请检查文件是否加密、损坏、页数过多或内容无法识别。"
+    if status == "ocr_required":
+        return "当前文件无法直接抽取文本，需要配置 MinerU/OCR 后重新解析。"
+    if status == "index_failed":
+        return "原始文件文本抽取或向量化失败，请检查文件内容是否可读。"
+    return error or "解析失败，请查看错误详情。"
+
+
+def _failure_payload(status: str, error: Exception | str, *, stage: str, retryable: bool = False, **extra: Any) -> dict[str, Any]:
+    error_text = str(error)
+    return {
+        "parse_status": status,
+        "failure_stage": stage,
+        "error": error_text,
+        "error_type": error.__class__.__name__ if isinstance(error, Exception) else "RuntimeError",
+        "user_message": _mineru_user_message(status, error_text),
+        "retryable": retryable,
+        "failed_at": _now_iso(),
+        **extra,
+    }
+
 
 def _status_file(file_id: str) -> Path:
     return PARSED_OUTPUT_ROOT / file_id / "mineru_status.json"
@@ -95,6 +136,7 @@ def ingest_artifacts(parse_id: str, artifacts: dict[str, Any]) -> None:
         write_parse_status(parse_id, {
             "supabase_ingest_status": "failed",
             "supabase_ingest_error": str(e),
+            "supabase_ingest_failed_at": _now_iso(),
         })
 
 
@@ -264,10 +306,16 @@ def _run_mineru_parse_and_index(
             "parse_status": "mineru_downloading",
             "mineru_state": "done",
             "full_zip_url": full_zip_url,
+            "download_started_at": _now_iso(),
         },
     )
     artifacts = download_and_extract_zip(full_zip_url, output_dir)
-    write_parse_status(parse_id, {"parse_status": "mineru_done", "artifacts": artifacts})
+    write_parse_status(parse_id, {
+        "parse_status": "mineru_done",
+        "artifacts": artifacts,
+        "download_finished_at": _now_iso(),
+        "download_info": artifacts.get("download_info"),
+    })
     ingest_artifacts(parse_id, artifacts)
     _vectorize_markdown(artifacts.get("markdown_path"), parse_id, supabase_file_id)
 
@@ -360,11 +408,17 @@ def _run_mineru_split_parse_and_index(
             "parse_status": "mineru_downloading",
             "mineru_state": "done",
             "full_zip_url": full_zip_url,
+            "download_started_at": _now_iso(),
         })
         artifacts = download_and_extract_zip(full_zip_url, output_dir)
         part["artifacts"] = artifacts
         parsed_parts.append(part)
-        write_parse_status(part_parse_id, {"parse_status": "mineru_done", "artifacts": artifacts})
+        write_parse_status(part_parse_id, {
+            "parse_status": "mineru_done",
+            "artifacts": artifacts,
+            "download_finished_at": _now_iso(),
+            "download_info": artifacts.get("download_info"),
+        })
 
     artifacts = _merge_split_artifacts(parse_id, parsed_parts)
     _update_supabase_status(supabase_file_id, "mineru_done")
@@ -391,7 +445,9 @@ def retry_mineru_result_download(parse_id: str) -> None:
             {
                 "parse_status": "mineru_download_retrying",
                 "download_retry_count": retry_count,
-                "download_retry_started_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                "download_retry_started_at": _now_iso(),
+                "retryable": True,
+                "user_message": "正在重试下载 MinerU 解析结果，已保留可能存在的断点文件。",
             },
         )
         if not full_zip_url and batch_id:
@@ -407,25 +463,40 @@ def retry_mineru_result_download(parse_id: str) -> None:
             raise RuntimeError("No full_zip_url or batch_id found for MinerU retry")
 
         artifacts = download_and_extract_zip(full_zip_url, PARSED_OUTPUT_ROOT / parse_id)
-        write_parse_status(parse_id, {"parse_status": "mineru_done", "artifacts": artifacts})
+        write_parse_status(parse_id, {
+            "parse_status": "mineru_done",
+            "artifacts": artifacts,
+            "download_retry_finished_at": _now_iso(),
+            "download_info": artifacts.get("download_info"),
+        })
         ingest_artifacts(parse_id, artifacts)
         _vectorize_markdown(artifacts.get("markdown_path"), parse_id, supabase_file_id)
     except Exception as e:
         logging.exception("MinerU 结果下载重试失败: %s", parse_id)
         _update_supabase_status(supabase_file_id, "mineru_download_failed")
-        write_parse_status(parse_id, {"parse_status": "mineru_download_failed", "error": str(e), "download_retry_count": retry_count})
+        write_parse_status(parse_id, _failure_payload(
+            "mineru_download_failed",
+            e,
+            stage="download_retry",
+            retryable=True,
+            download_retry_count=retry_count,
+        ))
 
 
 def import_mineru_result_zip(parse_id: str, zip_file_path: str | Path) -> dict[str, str | None]:
     status = read_parse_status(parse_id) or {}
     supabase_file_id = status.get("supabase_file_id")
     output_dir = PARSED_OUTPUT_ROOT / parse_id
-    write_parse_status(parse_id, {"parse_status": "mineru_importing_zip"})
-    artifacts = extract_zip_artifacts(zip_file_path, output_dir)
-    write_parse_status(parse_id, {"parse_status": "mineru_done", "artifacts": artifacts})
-    ingest_artifacts(parse_id, artifacts)
-    _vectorize_markdown(artifacts.get("markdown_path"), parse_id, supabase_file_id)
-    return artifacts
+    try:
+        write_parse_status(parse_id, {"parse_status": "mineru_importing_zip", "import_started_at": _now_iso()})
+        artifacts = extract_zip_artifacts(zip_file_path, output_dir)
+        write_parse_status(parse_id, {"parse_status": "mineru_done", "artifacts": artifacts, "import_finished_at": _now_iso()})
+        ingest_artifacts(parse_id, artifacts)
+        _vectorize_markdown(artifacts.get("markdown_path"), parse_id, supabase_file_id)
+        return artifacts
+    except Exception as e:
+        write_parse_status(parse_id, _failure_payload("mineru_import_failed", e, stage="manual_import", retryable=True))
+        raise
 
 
 def parse_and_index_tender_file(
@@ -460,12 +531,7 @@ def parse_and_index_tender_file(
             _update_supabase_status(supabase_file_id, "mineru_download_failed")
             write_parse_status(
                 parse_id,
-                {
-                    "parse_status": "mineru_download_failed",
-                    "parser": "mineru",
-                    "error": str(e),
-                    "retryable": True,
-                },
+                _failure_payload("mineru_download_failed", e, stage="download", retryable=True, parser="mineru"),
             )
             return
         except Exception as e:
@@ -477,6 +543,9 @@ def parse_and_index_tender_file(
                     "parse_status": "mineru_fallback_native",
                     "parser": "mineru",
                     "error": str(e),
+                    "error_type": e.__class__.__name__,
+                    "user_message": "MinerU 解析失败，系统正在尝试原生文本抽取兜底。",
+                    "failed_at": _now_iso(),
                     "fallback": "native_text",
                 },
             )
@@ -500,27 +569,34 @@ def parse_and_index_tender_file(
         _update_supabase_status(supabase_file_id, "ocr_required")
         write_parse_status(
             parse_id,
-            {
-                "parse_status": "ocr_required",
-                "parser": "mineru",
-                "source_file": file_path,
-                "file_name": original_filename,
-                "reason": str(e),
-                "supabase_file_id": supabase_file_id,
-            },
+            _failure_payload(
+                "ocr_required",
+                e,
+                stage="native_text_extract",
+                retryable=has_mineru_token(),
+                parser="mineru",
+                source_file=file_path,
+                file_name=original_filename,
+                reason=str(e),
+                supabase_file_id=supabase_file_id,
+            ),
         )
     except Exception:
         logging.exception("原始文件向量化处理失败: %s", file_path)
+        error_text = "原始文件向量化处理失败"
         _update_supabase_status(supabase_file_id, "index_failed")
         write_parse_status(
             parse_id,
-            {
-                "parse_status": "index_failed",
-                "parser": "native_text",
-                "source_file": file_path,
-                "file_name": original_filename,
-                "supabase_file_id": supabase_file_id,
-            },
+            _failure_payload(
+                "index_failed",
+                error_text,
+                stage="native_vectorize",
+                retryable=False,
+                parser="native_text",
+                source_file=file_path,
+                file_name=original_filename,
+                supabase_file_id=supabase_file_id,
+            ),
         )
         return
 
@@ -531,6 +607,9 @@ def parse_and_index_tender_file(
                 "parse_status": "ocr_required",
                 "parser": "mineru",
                 "error": "MINERU_API_TOKEN is not configured",
+                "user_message": "未配置 MINERU_API_TOKEN，扫描版或图片型 PDF 无法自动 OCR，请配置后重试或手动导入解析结果。",
+                "failure_stage": "config",
+                "retryable": True,
                 "supabase_file_id": supabase_file_id,
             },
         )
@@ -545,12 +624,12 @@ def parse_and_index_tender_file(
         )
     except MinerUConfigError as e:
         _update_supabase_status(supabase_file_id, "ocr_required")
-        write_parse_status(parse_id, {"parse_status": "ocr_required", "error": str(e), "supabase_file_id": supabase_file_id})
+        write_parse_status(parse_id, _failure_payload("ocr_required", e, stage="config", retryable=True, supabase_file_id=supabase_file_id))
     except MinerUDownloadError as e:
         logging.exception("MinerU 结果 zip 下载失败，等待重试: %s", file_path)
         _update_supabase_status(supabase_file_id, "mineru_download_failed")
-        write_parse_status(parse_id, {"parse_status": "mineru_download_failed", "error": str(e), "supabase_file_id": supabase_file_id, "retryable": True})
+        write_parse_status(parse_id, _failure_payload("mineru_download_failed", e, stage="download", retryable=True, supabase_file_id=supabase_file_id))
     except Exception as e:
         logging.exception("MinerU 解析或解析结果向量化失败: %s", file_path)
         _update_supabase_status(supabase_file_id, "mineru_failed")
-        write_parse_status(parse_id, {"parse_status": "mineru_failed", "error": str(e), "supabase_file_id": supabase_file_id})
+        write_parse_status(parse_id, _failure_payload("mineru_failed", e, stage="parse_or_vectorize", retryable=True, supabase_file_id=supabase_file_id))
