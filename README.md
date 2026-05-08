@@ -631,6 +631,9 @@ DashScope/Qwen 调用已增加基础重试与退避策略：普通文本生成�
 | `ALLOWED_TENDER_EXTENSIONS` | 必填 | `pdf,doc,docx,txt,md` | 控制招标文件允许上传的后缀 | 不在列表内会被拒绝上传 |
 | `ALLOWED_KNOWLEDGE_EXTENSIONS` | 必填 | `pdf,doc,docx,txt,md,xls,xlsx,csv,png,jpg,jpeg,webp` | 控制知识库文件允许上传的后缀 | 不在列表内会被拒绝上传 |
 | `ALLOWED_ASSET_EXTENSIONS` | 必填 | `png,jpg,jpeg,webp,pdf,doc,docx` | 控制资信库/产品库资产允许上传的后缀 | 不在列表内会被拒绝上传 |
+| `DOCX_MAX_IMAGES` | 可选 | `24` | Word 转换阶段整份文档允许插入的 Markdown 图片上限 | 超出后跳过并记录导出任务图片报告 |
+| `DOCX_TOTAL_ASSET_IMAGE_LIMIT` | 可选 | `36` | 自动从资信库/产品库插入标书的图片资产总上限 | 避免图文并茂导出图片过多导致 Word 过大或排版失控 |
+| `DOCX_ALLOW_REMOTE_IMAGES` | 可选 | `false` | 是否允许 DOCX 导出下载外部 HTTP/HTTPS 图片 | 默认关闭；开启后仍会拦截 localhost、内网、回环和非公网地址 |
 | `ONLYOFFICE_JWT_SECRET` | 使用 OnlyOffice 时必填 | 至少 24 位随机字符串 | OnlyOffice 文档编辑鉴权密钥 | 未配置时无法生成 OnlyOffice 编辑配置 |
 | `DASHSCOPE_REQUEST_TIMEOUT_SECONDS` | 必填 | `120` | 普通文本模型请求超时时间 | 过短会导致长章节生成中断，过长会拉长失败等待 |
 | `DASHSCOPE_STREAM_CONNECT_TIMEOUT_SECONDS` | 必填 | `15` | 流式生成连接建立超时 | 网络慢时可适当调大 |
@@ -944,7 +947,7 @@ docker run -d \
 - [x] 历史记录页对解析中任务进行自动刷新，用户离开首页后再返回也能追踪解析进度。
 - [x] 单章生成失败时保留上一次成功正文或用户编辑稿，避免误清空有效内容。
 - [x] DOCX 导出增加任务化处理，长文档和图文并茂导出可轮询状态，避免 HTTP 请求超时。
-- [ ] 图文并茂导出增加图片命中解释、插图数量上限、图片下载失败降级和引用来源记录。
+- [x] 图文并茂导出增加图片命中解释、插图数量上限、图片下载失败降级和引用来源记录。
 - [ ] MinerU 下载、解析、导入继续保留断点重试和失败原因展示。
 
 ### P2：工程结构治理
@@ -1003,6 +1006,7 @@ docker run -d \
 - [x] 增加章节生成失败保稿保护：单章/批量章节生成失败时只更新失败状态和错误信息，不覆盖数据库正文，前端恢复生成前正文
 - [x] 增加 DOCX 导出任务化：`bid_export_tasks` 记录全书、分册、单章导出状态，后端后台生成 Word，前端轮询进度并自动打开下载链接
 - [x] 企业资信库和产品库支持资产编辑：统一按钮名称为“编辑”，可回填并维护标题、分类、说明、标签、适用章节、自动插入策略，也可选替换图片或附件并刷新检索文本
+- [x] 加固图文并茂 DOCX 导出：按分册限制自动插图数量，记录图片命中原因、来源资产和转换结果；图片下载或插入失败时降级跳过并在导出任务中保留报告
 
 ## License
 

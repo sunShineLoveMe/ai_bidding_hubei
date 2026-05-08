@@ -200,6 +200,22 @@ export type BidExportTask = {
   file_path?: string;
   download_url?: string;
   error_message?: string;
+  metadata?: {
+    image_selection?: {
+      selected?: number;
+      asset_candidates?: number;
+      warnings?: string[];
+      manifest?: Array<Record<string, unknown>>;
+    };
+    image_conversion?: {
+      found?: number;
+      inserted?: number;
+      skipped?: number;
+      failed?: number;
+      events?: Array<Record<string, unknown>>;
+    };
+    [key: string]: unknown;
+  };
   created_at?: string;
   updated_at?: string;
   finished_at?: string;

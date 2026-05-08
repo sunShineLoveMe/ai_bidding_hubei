@@ -1217,7 +1217,17 @@ export function BidEditorPage(): JSX.Element {
         }
         setDownloadUrl(task.download_url);
         window.open(task.download_url, '_blank');
-        message.success(scope === 'section' ? '本章 DOCX 已生成' : `${activeVolume === 'all' ? '全文' : volumeLabel(activeVolume)} DOCX 已生成`);
+        const imageConversion = task.metadata?.image_conversion;
+        const imageSelection = task.metadata?.image_selection;
+        const failedImages = Number(imageConversion?.failed || 0);
+        const skippedImages = Number(imageConversion?.skipped || 0);
+        const insertedImages = Number(imageConversion?.inserted || 0);
+        const selectionWarnings = imageSelection?.warnings || [];
+        if (failedImages > 0 || skippedImages > 0 || selectionWarnings.length > 0) {
+          message.warning(`DOCX 已生成，图片插入 ${insertedImages} 张，跳过 ${skippedImages} 张，失败 ${failedImages} 张，请下载后复核图文位置。`, 7);
+        } else {
+          message.success(scope === 'section' ? '本章 DOCX 已生成' : `${activeVolume === 'all' ? '全文' : volumeLabel(activeVolume)} DOCX 已生成`);
+        }
         return;
       }
       if (task.status === 'failed') {

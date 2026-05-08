@@ -415,3 +415,63 @@ npm run build
 
 ## Status
 **Complete** - 企业产品库和企业资信库编辑功能已从占位改为真实可用，支持元数据编辑和可选替换附件。
+
+---
+
+# Task Plan: P1.6 图文并茂 DOCX 导出可靠性加固
+
+## Goal
+提升图文并茂 Word 导出的可解释性和稳定性，避免图片随机插入、插图过多、图片下载失败导致导出失败或用户无法追溯图片来源。
+
+## Scope
+- 章节图片插入增加分册和章节级数量上限。
+- 每张自动插入图片记录命中原因、来源资产、所属分册、章节和匹配分数。
+- DOCX 转换阶段记录图片插入成功、跳过和失败明细。
+- 图片下载失败、路径失效、超大小、格式异常时降级跳过，不影响整份 DOCX 导出。
+- 导出任务 metadata 写入图片插入报告，便于后续前端展示下载前/下载后风险提示。
+- README 和任务清单同步。
+
+## Phases
+- [x] Phase 1: 梳理现有 Markdown 图片生成和 DOCX 插入链路
+- [x] Phase 2: 章节图片选择增加命中解释、来源记录和数量上限
+- [x] Phase 3: DOCX 图片解析插入增加失败降级和转换报告
+- [x] Phase 4: 导出任务写入图片 manifest 和转换报告
+- [x] Phase 5: 后端编译、前端构建或必要的轻量验证
+- [x] Phase 6: README 和任务清单同步
+
+## Files Changed
+- `backend/api/routes.py`
+- `backend/export/md_to_word.py`
+- `frontend/src/api/bidProject.ts`
+- `frontend/src/pages/BidEditor/index.tsx`
+- `.env.example`
+- `README.md`
+- `task_plan.md`
+
+## Verification
+
+```bash
+python -m py_compile backend/api/routes.py backend/export/md_to_word.py backend/db/supabase_repo.py
+npm run build
+python - <<'PY'
+from pathlib import Path
+from backend.export.md_to_word import convert_md_to_word
+p = Path('/private/tmp/docx_image_probe.md')
+p.write_text('# 测试项目\n\n## 章节\n\n![不存在图片](/private/tmp/not-exist-image.png)\n\n正文内容。\n', encoding='utf-8')
+out, report = convert_md_to_word(p, return_report=True)
+print(out.exists(), report['found'], report['inserted'], report['skipped'], report['failed'])
+PY
+```
+
+验证结果：
+- 后端编译通过。
+- 前端构建通过，仍有既有 chunk size warning。
+- 失效图片冒烟验证通过：DOCX 正常生成，图片报告为 `True 1 0 1 0`。
+
+## Notes
+- `DOCX_ALLOW_REMOTE_IMAGES` 默认关闭，避免导出时下载外部 HTTP 图片带来 SSRF 风险；知识资产的内部 `/api/knowledge/assets/<id>/file` 图片不受影响。
+- 图片失败、超限或跳过不会中断 DOCX 导出，结果会写入 `bid_export_tasks.metadata.image_conversion`。
+- 自动图片选择结果会写入 `bid_export_tasks.metadata.image_selection.manifest`，包含资产 ID、章节、分册、匹配分和命中原因。
+
+## Status
+**Complete** - 图文并茂 DOCX 导出已增加图片选择解释、分册数量上限、失败降级、转换报告和前端复核提示。

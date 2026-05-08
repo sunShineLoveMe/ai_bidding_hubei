@@ -33,6 +33,16 @@ from backend.core.security import UploadValidationError, safe_upload_filename, v
 
 # 操作向量数据库的函数
 from backend.parsing.document_parser import ingest_artifacts as ingest_mineru_artifacts_to_supabase, import_mineru_result_zip, parse_and_index_tender_file, read_parse_status, retry_mineru_result_download, write_parse_status
+
+DOCX_VOLUME_IMAGE_LIMITS = {
+    "technical": int(os.getenv("DOCX_TECHNICAL_SECTION_IMAGE_LIMIT", "2")),
+    "qualification": int(os.getenv("DOCX_QUALIFICATION_SECTION_IMAGE_LIMIT", "2")),
+    "business": int(os.getenv("DOCX_BUSINESS_SECTION_IMAGE_LIMIT", "1")),
+    "attachment": int(os.getenv("DOCX_ATTACHMENT_SECTION_IMAGE_LIMIT", "2")),
+    "other": int(os.getenv("DOCX_OTHER_SECTION_IMAGE_LIMIT", "1")),
+    "price": 0,
+}
+DOCX_TOTAL_ASSET_IMAGE_LIMIT = int(os.getenv("DOCX_TOTAL_ASSET_IMAGE_LIMIT", "36"))
 from backend.rag.vector_store import query_chroma
 # 创建蓝图
 bp = Blueprint('bidding', __name__)
@@ -396,11 +406,51 @@ def _asset_image_ref(asset: dict) -> str:
     return ""
 
 
-def _asset_caption(asset: dict) -> str:
+def _asset_library_label(asset: dict) -> str:
+    metadata = asset.get("metadata") or {}
+    specs = asset.get("specs") or {}
+    library_type = ""
+    if isinstance(metadata, dict):
+        library_type = str(metadata.get("library_type") or "")
+    if not library_type and isinstance(specs, dict):
+        library_type = str(specs.get("library_type") or "")
+    if library_type == "product":
+        return "企业产品库"
+    if library_type == "qualification":
+        return "企业资信库"
+    return "企业知识资产库"
+
+
+def _asset_caption(asset: dict, match_reason: str | None = None) -> str:
     title = str(asset.get("title") or "知识库图片资产").strip()
     category = str(asset.get("category") or "水利行业资料").strip()
     sensitive_note = "，脱敏示意图，不替代正式资质文件" if asset.get("is_sensitive") or asset.get("anonymized") else ""
-    return f"图示：{title}（{category}{sensitive_note}）"
+    source_note = f"来源：{_asset_library_label(asset)}"
+    reason_note = f"；匹配依据：{match_reason}" if match_reason else ""
+    return f"图示：{title}（{category}{sensitive_note}；{source_note}{reason_note}）"
+
+
+def _asset_match_reason(asset: dict, section: dict, score: int) -> str:
+    volume_type = section_volume_type(section)
+    section_text = _section_text(section)
+    asset_text = _asset_text(asset)
+    reasons: list[str] = []
+    library_label = _asset_library_label(asset)
+    if volume_type == "technical" and library_label == "企业产品库":
+        reasons.append("技术标优先使用产品/设备资料")
+    elif volume_type == "qualification" and library_label == "企业资信库":
+        reasons.append("资格文件优先使用资信/证照资料")
+    elif volume_type == "business":
+        reasons.append("商务文件仅插入证明或附件类资料")
+
+    for keyword in ["产品", "设备", "工艺", "施工", "资质", "证书", "营业执照", "业绩", "人员", "授权", "保证金", "保函"]:
+        if keyword in section_text and keyword in asset_text:
+            reasons.append(f"章节与资产同时命中“{keyword}”")
+            if len(reasons) >= 3:
+                break
+    if not reasons:
+        reasons.append(f"综合匹配分 {score}")
+    return "；".join(reasons[:3])
 
 
 def _asset_allowed_for_volume(asset: dict, section: dict) -> bool:
@@ -425,8 +475,16 @@ def _asset_allowed_for_volume(asset: dict, section: dict) -> bool:
     return True
 
 
-def _build_section_image_markdown(section: dict, assets: list[dict], used_asset_ids: set[str]) -> str:
+def _build_section_image_markdown(
+    section: dict,
+    assets: list[dict],
+    used_asset_ids: set[str],
+    image_manifest: list[dict] | None = None,
+    remaining_limit: int | None = None,
+) -> str:
     if not assets or not _section_needs_image(section):
+        return ""
+    if remaining_limit is not None and remaining_limit <= 0:
         return ""
 
     candidates: list[tuple[int, dict]] = []
@@ -458,14 +516,38 @@ def _build_section_image_markdown(section: dict, assets: list[dict], used_asset_
 
     candidates.sort(key=lambda item: item[0], reverse=True)
     volume_type = section_volume_type(section)
-    max_images = 2 if volume_type in {"technical", "qualification", "attachment"} and any(keyword in _section_text(section) for keyword in ["资质", "证书", "产品", "设备", "附件"]) else 1
+    section_limit = max(0, DOCX_VOLUME_IMAGE_LIMITS.get(volume_type, DOCX_VOLUME_IMAGE_LIMITS["other"]))
+    if remaining_limit is not None:
+        section_limit = min(section_limit, remaining_limit)
+    if section_limit <= 0:
+        return ""
     snippets: list[str] = []
-    for _, asset in candidates[:max_images]:
+    for score, asset in candidates[:section_limit]:
         image_ref = _asset_image_ref(asset)
         asset_id = str(asset.get("id") or image_ref)
         used_asset_ids.add(asset_id)
         alt = re.sub(r"[\[\]\(\)]", "", str(asset.get("title") or "水利行业配图")).strip()
-        snippets.append(f"\n\n![{alt}]({image_ref})\n\n{_asset_caption(asset)}\n\n")
+        match_reason = _asset_match_reason(asset, section, score)
+        caption = _asset_caption(asset, match_reason)
+        snippets.append(f"\n\n![{alt}]({image_ref})\n\n{caption}\n\n")
+        if image_manifest is not None:
+            image_manifest.append({
+                "asset_id": asset.get("id"),
+                "asset_title": asset.get("title"),
+                "asset_category": asset.get("category"),
+                "asset_type": asset.get("asset_type"),
+                "library": _asset_library_label(asset),
+                "section_id": section.get("id"),
+                "section_title": _section_display_title(section),
+                "volume_type": volume_type,
+                "volume_name": volume_name(volume_type),
+                "score": score,
+                "reason": match_reason,
+                "image_ref": image_ref,
+                "caption": caption,
+                "sensitive": bool(asset.get("is_sensitive")),
+                "anonymized": bool(asset.get("anonymized")),
+            })
     return "".join(snippets)
 
 
@@ -496,7 +578,7 @@ def build_project_bid_markdown(
     focus_section_id: str | None = None,
     with_images: bool = False,
     volume_type: str | None = None,
-) -> tuple[Path, str]:
+) -> tuple[Path, str, dict]:
     payload = get_project_interpretation(project_id)
     project = payload.get("project") or {}
     sections = list_bid_sections(project_id)
@@ -533,6 +615,14 @@ def build_project_bid_markdown(
         display_suffix = f"{display_suffix}-图文"
 
     image_assets: list[dict] = []
+    export_image_report: dict = {
+        "enabled": bool(with_images),
+        "asset_candidates": 0,
+        "selected": 0,
+        "max_total": DOCX_TOTAL_ASSET_IMAGE_LIMIT,
+        "manifest": [],
+        "warnings": [],
+    }
     if with_images:
         try:
             image_assets = [
@@ -541,9 +631,11 @@ def build_project_bid_markdown(
                 and _asset_allowed_for_bid(asset)
                 and str(asset.get("asset_type") or "").lower() not in {"document", "markdown", "text"}
             ]
+            export_image_report["asset_candidates"] = len(image_assets)
         except Exception:
             logging.exception("加载知识库图片资产失败，继续生成无配图 DOCX: %s", project_id)
             image_assets = []
+            export_image_report["warnings"].append("加载知识库图片资产失败，已降级为无配图导出。")
 
     document_title = f"{project_name}-{volume_name(volume_type)}" if volume_type and not focus_section else project_name
     file_stem = _display_filename(f"{project_name}{display_suffix}", fallback=document_title)
@@ -559,10 +651,22 @@ def build_project_bid_markdown(
         else:
             chunks.append("待补充章节正文。\n\n")
         if with_images and "![" not in content:
-            chunks.append(_build_section_image_markdown(section, image_assets, used_asset_ids))
+            remaining = DOCX_TOTAL_ASSET_IMAGE_LIMIT - len(export_image_report["manifest"])
+            snippet = _build_section_image_markdown(
+                section,
+                image_assets,
+                used_asset_ids,
+                image_manifest=export_image_report["manifest"],
+                remaining_limit=remaining,
+            )
+            if snippet:
+                chunks.append(snippet)
 
     markdown_path.write_text("".join(chunks), encoding="utf-8")
-    return markdown_path, document_title
+    export_image_report["selected"] = len(export_image_report["manifest"])
+    if with_images and image_assets and export_image_report["selected"] >= DOCX_TOTAL_ASSET_IMAGE_LIMIT:
+        export_image_report["warnings"].append(f"已达到整份文档自动插图上限 {DOCX_TOTAL_ASSET_IMAGE_LIMIT} 张。")
+    return markdown_path, document_title, export_image_report
 
 
 def save_onlyoffice_document_mapping(*, document_key: str, project_id: str, title: str, file_path: str, download_url: str) -> None:
@@ -1364,7 +1468,7 @@ def generate_onlyoffice_config(project_id):
             except ValueError:
                 focus_section_id = None
 
-        markdown_path, project_name = build_project_bid_markdown(project_id, focus_section_id)
+        markdown_path, project_name, _ = build_project_bid_markdown(project_id, focus_section_id)
         generated_docx_path = convert_md_to_word(markdown_path)
         if not generated_docx_path or not Path(generated_docx_path).exists():
             raise RuntimeError("DOCX 生成失败，未找到输出文件。")
@@ -1513,7 +1617,7 @@ def _run_bid_docx_export_task(app, project_id: str, task_id: str, section_id: st
                 "message": "正在整理标书 Markdown 内容。",
                 "started_at": datetime.utcnow().isoformat(),
             })
-            markdown_path, project_name = build_project_bid_markdown(
+            markdown_path, project_name, image_selection_report = build_project_bid_markdown(
                 project_id,
                 section_id,
                 with_images=with_images,
@@ -1524,10 +1628,16 @@ def _run_bid_docx_export_task(app, project_id: str, task_id: str, section_id: st
                 "message": "正在转换 Word 文档。",
                 "project_name": project_name,
             })
-            generated_docx_path = convert_md_to_word(markdown_path)
+            generated_docx_path, image_conversion_report = convert_md_to_word(markdown_path, return_report=True)
             if not generated_docx_path or not Path(generated_docx_path).exists():
                 raise RuntimeError("DOCX 生成失败，未找到输出文件。")
             generated_docx_path = Path(generated_docx_path)
+            export_metadata = {
+                "requested_from": "bid_editor",
+                "with_images": bool(with_images),
+                "image_selection": image_selection_report,
+                "image_conversion": image_conversion_report,
+            }
             update_bid_export_task(project_id, task_id, {
                 "status": "completed",
                 "progress": 100,
@@ -1536,6 +1646,7 @@ def _run_bid_docx_export_task(app, project_id: str, task_id: str, section_id: st
                 "file_name": generated_docx_path.name,
                 "file_path": str(generated_docx_path),
                 "download_url": _output_url_for_path(generated_docx_path),
+                "metadata": export_metadata,
                 "finished_at": datetime.utcnow().isoformat(),
             })
         except Exception as exc:

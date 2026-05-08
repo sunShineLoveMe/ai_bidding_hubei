@@ -16,6 +16,8 @@ from docx.oxml import OxmlElement
 import shutil
 import uuid
 import requests
+import ipaddress
+import socket
 from urllib.parse import parse_qs, urlparse, unquote
 
 try:
@@ -31,6 +33,7 @@ MARKDOWN_IMAGE_MAX_COUNT = int(os.getenv("DOCX_MAX_IMAGES", "24"))
 DOCX_IMAGE_MAX_EDGE_PX = int(os.getenv("DOCX_IMAGE_MAX_EDGE_PX", "2400"))
 DOCX_IMAGE_MAX_BYTES = int(os.getenv("DOCX_IMAGE_MAX_BYTES", str(2 * 1024 * 1024)))
 DOCX_IMAGE_JPEG_QUALITY = int(os.getenv("DOCX_IMAGE_JPEG_QUALITY", "90"))
+DOCX_ALLOW_REMOTE_IMAGES = os.getenv("DOCX_ALLOW_REMOTE_IMAGES", "false").lower() in {"1", "true", "yes", "on"}
 FORMAL_TEXT_SYMBOL_RE = re.compile(
     "["
     "\U0001f300-\U0001f5ff"
@@ -218,6 +221,33 @@ def _image_suffix_from_response(image_ref, response=None):
     return '.png'
 
 
+def _append_image_report(report, event: dict) -> None:
+    if report is not None:
+        report.setdefault("events", []).append(event)
+
+
+def _is_safe_remote_image_url(image_ref: str) -> bool:
+    if not DOCX_ALLOW_REMOTE_IMAGES:
+        return False
+    parsed = urlparse(image_ref)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+    hostname = parsed.hostname.lower()
+    if hostname in {"localhost"} or hostname.endswith(".localhost"):
+        return False
+    try:
+        addresses = socket.getaddrinfo(hostname, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+    except Exception:
+        logging.warning("远程图片地址解析失败，已跳过: %s", image_ref)
+        return False
+    for family, _, _, _, sockaddr in addresses:
+        ip = ipaddress.ip_address(sockaddr[0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+            logging.warning("远程图片地址指向非公网地址，已跳过: %s", image_ref)
+            return False
+    return True
+
+
 def _resolve_api_asset_image(image_ref):
     parsed = urlparse(image_ref)
     match = re.match(r"^/api/(?:bidding/)?knowledge/assets/([^/]+)/file$", parsed.path)
@@ -265,6 +295,8 @@ def _resolve_markdown_image(image_ref, image_cache=None):
             image_cache[image_ref] = api_image
         return api_image
     if image_ref.startswith(('http://', 'https://')):
+        if not _is_safe_remote_image_url(image_ref):
+            raise ValueError("远程图片未启用或地址不安全")
         response = requests.get(
             image_ref,
             timeout=(MARKDOWN_IMAGE_CONNECT_TIMEOUT, MARKDOWN_IMAGE_READ_TIMEOUT),
@@ -336,15 +368,22 @@ def _prepare_docx_image(image_path):
         return image_path, False
 
 
-def process_markdown_image(doc, alt_text, image_ref, image_cache=None):
+def process_markdown_image(doc, alt_text, image_ref, image_cache=None, image_report=None):
     """处理 Markdown 图片语法，插入居中图片和中文图注。"""
     image_path = None
     cleanup = False
     prepared_path = None
     prepared_cleanup = False
+    clean_alt = clean_formal_bid_text(alt_text) or "未命名图片"
     try:
         image_path, cleanup = _resolve_markdown_image(image_ref, image_cache=image_cache)
         if not image_path:
+            _append_image_report(image_report, {
+                "status": "skipped",
+                "reason": "图片路径不存在或无法解析",
+                "alt": clean_alt,
+                "ref": image_ref,
+            })
             return False
         prepared_path, prepared_cleanup = _prepare_docx_image(image_path)
         doc.add_picture(prepared_path, width=Inches(5.8))
@@ -352,9 +391,22 @@ def process_markdown_image(doc, alt_text, image_ref, image_cache=None):
         image_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
         apply_image_paragraph_format(image_para)
 
+        _append_image_report(image_report, {
+            "status": "inserted",
+            "alt": clean_alt,
+            "ref": image_ref,
+            "source_path": str(image_path),
+            "prepared": bool(prepared_cleanup),
+        })
         return True
-    except Exception:
+    except Exception as exc:
         logging.exception("插入图片失败: %s", image_ref)
+        _append_image_report(image_report, {
+            "status": "failed",
+            "reason": str(exc)[:300],
+            "alt": clean_alt,
+            "ref": image_ref,
+        })
         return False
     finally:
         if prepared_cleanup and prepared_path and os.path.exists(prepared_path):
@@ -537,7 +589,7 @@ def process_table(md_table, doc):
                     for run in paragraph.runs:
                         apply_run_font(run, east_asia='仿宋', size=10.5)
 
-def convert_md_to_word(md_file):
+def convert_md_to_word(md_file, return_report: bool = False):
     """将Markdown文件转换为Word文档"""
     # 读取Markdown文件
     with open(md_file, 'r', encoding='utf-8') as f:
@@ -558,6 +610,14 @@ def convert_md_to_word(md_file):
     i = 0
     image_cache = {}
     inserted_image_count = 0
+    image_report = {
+        "max_images": MARKDOWN_IMAGE_MAX_COUNT,
+        "found": 0,
+        "inserted": 0,
+        "skipped": 0,
+        "failed": 0,
+        "events": [],
+    }
     heading_count = 0
     while i < len(lines):
         line = lines[i].strip()
@@ -567,9 +627,25 @@ def convert_md_to_word(md_file):
 
         image_match = re.match(r'^!\[(.*?)\]\((.*?)\)\s*$', line)
         if image_match:
+            image_report["found"] += 1
             if inserted_image_count < MARKDOWN_IMAGE_MAX_COUNT:
-                if process_markdown_image(doc, image_match.group(1), image_match.group(2), image_cache=image_cache):
+                if process_markdown_image(doc, image_match.group(1), image_match.group(2), image_cache=image_cache, image_report=image_report):
                     inserted_image_count += 1
+                    image_report["inserted"] += 1
+                else:
+                    last_status = (image_report.get("events") or [{}])[-1].get("status")
+                    if last_status == "failed":
+                        image_report["failed"] += 1
+                    else:
+                        image_report["skipped"] += 1
+            else:
+                image_report["skipped"] += 1
+                _append_image_report(image_report, {
+                    "status": "skipped",
+                    "reason": f"超过整份文档插图数量上限 {MARKDOWN_IMAGE_MAX_COUNT}",
+                    "alt": clean_formal_bid_text(image_match.group(1)) or "未命名图片",
+                    "ref": image_match.group(2),
+                })
             i += 1
             continue
         
@@ -668,6 +744,8 @@ def convert_md_to_word(md_file):
             logging.warning("目标文件被占用，已生成备用文件: %s", saved_path)
 
         logging.info("已生成 Word 文档: %s", saved_path)
+        if return_report:
+            return Path(saved_path), image_report
         return Path(saved_path)
     finally:
         for image_path, cleanup in set(image_cache.values()):
