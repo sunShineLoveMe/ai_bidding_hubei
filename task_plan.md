@@ -365,3 +365,53 @@ npm run build
 
 ## Status
 **Complete** - DOCX 导出任务化第一版已完成，支持全书、分册和单章后台导出，前端轮询进度并在成功后打开下载链接。
+
+---
+
+# Task Plan: 企业资产编辑闭环
+
+## Goal
+将企业产品库和企业资信库中的“编辑/更新”占位按钮改为真实可用的资产维护能力，支持用户在已上传资料基础上修改检索属性和可选替换附件。
+
+## Scope
+- 统一产品库和资信库列表操作按钮名称为“编辑”。
+- 编辑时回填标题、分类、说明、标签、适用章节、允许自动插入、证照编号/发证机构或产品型号等字段。
+- 保存时支持只更新结构化信息，不强制重新上传文件。
+- 保存时支持可选替换图片、PDF、Word 等附件。
+- 后端新增知识资产 PATCH 更新接口，更新 `knowledge_assets` 结构化字段、检索文本和 embedding。
+- README 和任务清单同步。
+
+## Phases
+- [x] Phase 1: 后端增加 `update_knowledge_asset` 数据库更新函数
+- [x] Phase 2: 后端新增 `PATCH /api/knowledge/assets/<asset_id>` 资产编辑接口
+- [x] Phase 3: 抽取上传和编辑共用的资产 payload、检索文本和 embedding 生成逻辑
+- [x] Phase 4: 产品库编辑弹窗回填和保存接入真实接口
+- [x] Phase 5: 资信库编辑弹窗回填和保存接入真实接口
+- [x] Phase 6: README 和任务清单同步
+
+## Files Changed
+- `backend/db/supabase_repo.py`
+- `backend/api/routes.py`
+- `frontend/src/pages/ProductBase/index.tsx`
+- `frontend/src/pages/QualificationBase/index.tsx`
+- `README.md`
+- `task_plan.md`
+
+## Verification
+
+```bash
+python -m py_compile backend/api/routes.py backend/db/supabase_repo.py
+npm run build
+```
+
+验证结果：
+- 后端编译通过。
+- 前端构建通过，仍有既有 chunk size warning。
+- 前端占位提示已清理，资信库仅保留“临期提醒待接入到期字段”这一非编辑功能提示。
+
+## Notes
+- 本任务不需要新增 SQL。
+- 替换附件时会写入新的存储路径和缩略图信息；旧文件清理未纳入本次 MVP，可后续通过存储清理任务统一处理。
+
+## Status
+**Complete** - 企业产品库和企业资信库编辑功能已从占位改为真实可用，支持元数据编辑和可选替换附件。

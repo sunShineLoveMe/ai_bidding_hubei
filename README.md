@@ -858,6 +858,7 @@ docker run -d \
 | `POST /api/knowledge/search/stream` | SSE 流式 RAG 检索问答 |
 | `POST /api/knowledge/followups` | 基于用户问题、回答、资料和图片资产生成模型追问建议 |
 | `GET /api/knowledge/documents` | 查询知识库文档列表 |
+| `PATCH /api/knowledge/assets/<asset_id>` | 编辑企业资信库和产品库资产，可只更新结构化信息，也可替换图片或附件 |
 
 分册导出示例：
 
@@ -1001,6 +1002,7 @@ docker run -d \
 - [x] 增加批量章节生成后端任务态：`bid_generation_tasks` 记录整批任务和每章状态，前端刷新后恢复最近一次批量生成进度
 - [x] 增加章节生成失败保稿保护：单章/批量章节生成失败时只更新失败状态和错误信息，不覆盖数据库正文，前端恢复生成前正文
 - [x] 增加 DOCX 导出任务化：`bid_export_tasks` 记录全书、分册、单章导出状态，后端后台生成 Word，前端轮询进度并自动打开下载链接
+- [x] 企业资信库和产品库支持资产编辑：统一按钮名称为“编辑”，可回填并维护标题、分类、说明、标签、适用章节、自动插入策略，也可选替换图片或附件并刷新检索文本
 
 ## License
 

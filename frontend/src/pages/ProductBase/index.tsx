@@ -70,6 +70,7 @@ export function ProductBasePage(): JSX.Element {
   const [saving, setSaving] = useState(false);
   const [assetFile, setAssetFile] = useState<File | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const [editingAsset, setEditingAsset] = useState<KnowledgeAsset | null>(null);
   const [detail, setDetail] = useState<KnowledgeAsset | null>(null);
 
   const fetchAssets = async () => {
@@ -133,22 +134,47 @@ export function ProductBasePage(): JSX.Element {
       render: (_, record) => (
         <Space size={4}>
           <Button type="link" size="small" onClick={() => setDetail(record)}>详情</Button>
-          <Button type="link" size="small" onClick={() => message.info('产品编辑待接入资产更新接口')}>编辑</Button>
+          <Button type="link" size="small" onClick={() => openEditForm(record)}>编辑</Button>
         </Space>
       ),
     },
   ];
 
+  const openCreateForm = () => {
+    setEditingAsset(null);
+    form.resetFields();
+    setAssetFile(null);
+    setFormOpen(true);
+  };
+
+  const openEditForm = (asset: KnowledgeAsset) => {
+    setEditingAsset(asset);
+    setAssetFile(null);
+    form.setFieldsValue({
+      title: asset.title,
+      category: asset.category,
+      description: asset.description,
+      product_model: asset.specs?.product_model,
+      tags: asset.tags || [],
+      applicable_sections: asset.applicable_sections || [],
+      allowed_for_bid: asset.specs?.allowed_for_bid ?? true,
+      usage_note: asset.specs?.usage_note,
+    });
+    setFormOpen(true);
+  };
+
   const saveProductAsset = async () => {
     try {
       const values = await form.validateFields();
-      if (!assetFile) {
+      if (!editingAsset && !assetFile) {
         message.warning('请先上传产品图片、图册或附件');
         return;
       }
       setSaving(true);
       const formData = new FormData();
-      formData.append('file', assetFile);
+      if (assetFile) {
+        formData.append('file', assetFile);
+      }
       formData.append('library_type', 'product');
       formData.append('asset_type', 'product_image');
       formData.append('title', values.title);
@@ -161,12 +187,15 @@ export function ProductBasePage(): JSX.Element {
       formData.append('is_sensitive', 'false');
       formData.append('anonymized', 'true');
       formData.append('usage_note', values.usage_note || '');
-      await apiClient.post('/api/knowledge/assets/upload', formData, {
+      const url = editingAsset ? `/api/knowledge/assets/${editingAsset.id}` : '/api/knowledge/assets/upload';
+      const method = editingAsset ? 'patch' : 'post';
+      await apiClient[method](url, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      message.success('产品资料已保存并接入检索');
+      message.success(editingAsset ? '产品资料已更新并刷新检索信息' : '产品资料已保存并接入检索');
       form.resetFields();
       setAssetFile(null);
+      setEditingAsset(null);
       setFormOpen(false);
       await fetchAssets();
     } catch (error: any) {
@@ -185,11 +214,11 @@ export function ProductBasePage(): JSX.Element {
         actions={
           <>
             <Button onClick={() => {
-              form.resetFields();
-              setAssetFile(null);
-              setFormOpen(true);
+              openCreateForm();
             }}>新增产品</Button>
             <Upload showUploadList={false} beforeUpload={(file) => {
+              setEditingAsset(null);
+              form.resetFields();
               setAssetFile(file);
               setFormOpen(true);
               message.success('已选择文件，请补充产品信息后保存');
@@ -213,7 +242,7 @@ export function ProductBasePage(): JSX.Element {
         <section className="panel-card flex h-full min-h-0 flex-col overflow-hidden">
           <div className="mb-3 flex items-center justify-between gap-3">
             <h2 className="panel-title mb-0">产品与服务列表</h2>
-            <Button type="primary" icon={<UploadCloud size={16} />} onClick={() => setFormOpen(true)}>新增产品资料</Button>
+            <Button type="primary" icon={<UploadCloud size={16} />} onClick={openCreateForm}>新增产品资料</Button>
           </div>
           <Table
             rowKey="id"
@@ -231,14 +260,22 @@ export function ProductBasePage(): JSX.Element {
       </div>
 
       <Modal
-        title="产品能力维护"
+        title={editingAsset ? '编辑产品资料' : '产品能力维护'}
         open={formOpen}
-        onCancel={() => setFormOpen(false)}
+        onCancel={() => {
+          setFormOpen(false);
+          setEditingAsset(null);
+          setAssetFile(null);
+        }}
         width={920}
         destroyOnClose={false}
         footer={[
-          <Button key="cancel" onClick={() => setFormOpen(false)}>取消</Button>,
-          <Button key="save" type="primary" loading={saving} onClick={saveProductAsset}>保存产品信息</Button>,
+          <Button key="cancel" onClick={() => {
+            setFormOpen(false);
+            setEditingAsset(null);
+            setAssetFile(null);
+          }}>取消</Button>,
+          <Button key="save" type="primary" loading={saving} onClick={saveProductAsset}>{editingAsset ? '保存修改' : '保存产品信息'}</Button>,
         ]}
       >
         <Form form={form} layout="vertical" size="middle" className="compact-form">
@@ -262,10 +299,10 @@ export function ProductBasePage(): JSX.Element {
             <Form.Item label="产品图片/图册说明" name="description" rules={[{ required: true, message: '请输入说明，便于AI检索和插图' }]}>
               <Input.TextArea rows={3} placeholder="说明图片中的产品、规格、使用场景，以及适合插入的标书章节" />
             </Form.Item>
-            <Form.Item label="图片/附件文件" required>
+            <Form.Item label="图片/附件文件" required={!editingAsset}>
               <Upload
                 maxCount={1}
-                fileList={assetFile ? [{ uid: 'asset-file', name: assetFile.name, status: 'done' }] : []}
+                fileList={assetFile ? [{ uid: 'asset-file', name: assetFile.name, status: 'done' }] : editingAsset?.file_name ? [{ uid: 'asset-existing', name: editingAsset.file_name, status: 'done' }] : []}
                 beforeUpload={(file) => {
                   setAssetFile(file);
                   return false;
@@ -273,7 +310,7 @@ export function ProductBasePage(): JSX.Element {
                 onRemove={() => setAssetFile(null)}
                 accept="image/*,.pdf,.doc,.docx"
               >
-                <Button icon={<UploadCloud size={16} />}>选择产品图片或附件</Button>
+                <Button icon={<UploadCloud size={16} />}>{editingAsset ? '替换产品图片或附件' : '选择产品图片或附件'}</Button>
               </Upload>
             </Form.Item>
             <Form.Item label="允许自动插入标书" name="allowed_for_bid" valuePropName="checked" initialValue>

@@ -79,6 +79,7 @@ export function QualificationBasePage(): JSX.Element {
   const [saving, setSaving] = useState(false);
   const [assetFile, setAssetFile] = useState<File | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const [editingAsset, setEditingAsset] = useState<KnowledgeAsset | null>(null);
   const [detail, setDetail] = useState<KnowledgeAsset | null>(null);
 
   const fetchAssets = async () => {
@@ -133,22 +134,49 @@ export function QualificationBasePage(): JSX.Element {
       render: (_, record) => (
         <Space size={4}>
           <Button type="link" size="small" onClick={() => setDetail(record)}>查看</Button>
-          <Button type="link" size="small" onClick={() => message.info('证照更新流程待接入真实上传')}>更新</Button>
+          <Button type="link" size="small" onClick={() => openEditForm(record)}>编辑</Button>
         </Space>
       ),
     },
   ];
 
+  const openCreateForm = () => {
+    setEditingAsset(null);
+    form.resetFields();
+    setAssetFile(null);
+    setFormOpen(true);
+  };
+
+  const openEditForm = (asset: KnowledgeAsset) => {
+    setEditingAsset(asset);
+    setAssetFile(null);
+    form.setFieldsValue({
+      title: asset.title,
+      category: inferQualificationCategory(asset),
+      description: asset.description,
+      certificate_no: asset.specs?.certificate_no,
+      issuer: asset.specs?.issuer,
+      tags: asset.tags || [],
+      applicable_sections: asset.applicable_sections || [],
+      allowed_for_bid: asset.specs?.allowed_for_bid ?? true,
+      is_sensitive: false,
+      usage_note: asset.specs?.usage_note,
+    });
+    setFormOpen(true);
+  };
+
   const saveQualificationAsset = async () => {
     try {
       const values = await form.validateFields();
-      if (!assetFile) {
+      if (!editingAsset && !assetFile) {
         message.warning('请先上传证照图片或附件');
         return;
       }
       setSaving(true);
       const formData = new FormData();
-      formData.append('file', assetFile);
+      if (assetFile) {
+        formData.append('file', assetFile);
+      }
       formData.append('library_type', 'qualification');
       formData.append('asset_type', 'qualification_image');
       formData.append('title', values.title);
@@ -162,12 +190,15 @@ export function QualificationBasePage(): JSX.Element {
       formData.append('is_sensitive', String(values.is_sensitive ?? false));
       formData.append('anonymized', 'true');
       formData.append('usage_note', values.usage_note || '');
-      await apiClient.post('/api/knowledge/assets/upload', formData, {
+      const url = editingAsset ? `/api/knowledge/assets/${editingAsset.id}` : '/api/knowledge/assets/upload';
+      const method = editingAsset ? 'patch' : 'post';
+      await apiClient[method](url, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      message.success('资信资料已保存并接入检索');
+      message.success(editingAsset ? '资信资料已更新并刷新检索信息' : '资信资料已保存并接入检索');
       form.resetFields();
       setAssetFile(null);
+      setEditingAsset(null);
       setFormOpen(false);
       await fetchAssets();
     } catch (error: any) {
@@ -185,6 +216,8 @@ export function QualificationBasePage(): JSX.Element {
         description="维护营业执照、资质证书、人员证书、财务资料、项目业绩和授权模板，避免投标材料过期或缺失。"
         actions={
           <Upload showUploadList={false} beforeUpload={(file) => {
+            setEditingAsset(null);
+            form.resetFields();
             setAssetFile(file);
             setFormOpen(true);
             message.success('已选择文件，请补充证照信息后保存');
@@ -207,7 +240,7 @@ export function QualificationBasePage(): JSX.Element {
         <section className="panel-card flex h-full min-h-0 flex-col overflow-hidden">
           <div className="mb-3 flex items-center justify-between gap-3">
             <h2 className="panel-title mb-0">资信文件列表</h2>
-            <Button type="primary" icon={<UploadCloud size={16} />} onClick={() => setFormOpen(true)}>新增资信资料</Button>
+            <Button type="primary" icon={<UploadCloud size={16} />} onClick={openCreateForm}>新增资信资料</Button>
           </div>
           <Table
             rowKey="id"
@@ -225,14 +258,22 @@ export function QualificationBasePage(): JSX.Element {
       </div>
 
       <Modal
-        title="证照信息维护"
+        title={editingAsset ? '编辑资信资料' : '证照信息维护'}
         open={formOpen}
-        onCancel={() => setFormOpen(false)}
+        onCancel={() => {
+          setFormOpen(false);
+          setEditingAsset(null);
+          setAssetFile(null);
+        }}
         width={920}
         destroyOnClose={false}
         footer={[
-          <Button key="cancel" onClick={() => setFormOpen(false)}>取消</Button>,
-          <Button key="save" type="primary" loading={saving} onClick={saveQualificationAsset}>保存资信信息</Button>,
+          <Button key="cancel" onClick={() => {
+            setFormOpen(false);
+            setEditingAsset(null);
+            setAssetFile(null);
+          }}>取消</Button>,
+          <Button key="save" type="primary" loading={saving} onClick={saveQualificationAsset}>{editingAsset ? '保存修改' : '保存资信信息'}</Button>,
         ]}
       >
         <Form form={form} layout="vertical" size="middle" className="compact-form">
@@ -259,10 +300,10 @@ export function QualificationBasePage(): JSX.Element {
             <Form.Item label="图片/附件说明" name="description" rules={[{ required: true, message: '请输入图片说明，便于AI检索和插图' }]}>
               <Input.TextArea rows={3} placeholder="说明该证照适合出现在哪类标书章节、是否为脱敏样张、使用注意事项等" />
             </Form.Item>
-            <Form.Item label="图片/附件文件" required>
+            <Form.Item label="图片/附件文件" required={!editingAsset}>
               <Upload
                 maxCount={1}
-                fileList={assetFile ? [{ uid: 'asset-file', name: assetFile.name, status: 'done' }] : []}
+                fileList={assetFile ? [{ uid: 'asset-file', name: assetFile.name, status: 'done' }] : editingAsset?.file_name ? [{ uid: 'asset-existing', name: editingAsset.file_name, status: 'done' }] : []}
                 beforeUpload={(file) => {
                   setAssetFile(file);
                   return false;
@@ -270,7 +311,7 @@ export function QualificationBasePage(): JSX.Element {
                 onRemove={() => setAssetFile(null)}
                 accept="image/*,.pdf,.doc,.docx"
               >
-                <Button icon={<UploadCloud size={16} />}>选择证照图片或附件</Button>
+                <Button icon={<UploadCloud size={16} />}>{editingAsset ? '替换证照图片或附件' : '选择证照图片或附件'}</Button>
               </Upload>
             </Form.Item>
             <Form.Item label="允许自动插入标书" name="allowed_for_bid" valuePropName="checked" initialValue>

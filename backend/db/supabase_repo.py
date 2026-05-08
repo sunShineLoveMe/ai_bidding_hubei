@@ -1702,3 +1702,16 @@ def create_knowledge_asset(payload: dict[str, Any]) -> dict[str, Any]:
     if not response.data:
         raise RuntimeError("Supabase knowledge_assets insert returned no data")
     return response.data[0]
+
+
+def update_knowledge_asset(asset_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    client = get_supabase_client()
+    response = (
+        client.table("knowledge_assets")
+        .update(payload)
+        .eq("id", asset_id)
+        .execute()
+    )
+    if not response.data:
+        raise RuntimeError("Supabase knowledge_assets update returned no data")
+    return response.data[0]

@@ -21,7 +21,7 @@ from backend.ai.chapter_planner import generate_bid_outline, stream_bid_outline
 from backend.ai.section_writer import stream_bid_section
 from backend.ai.interpreter import generate_ai_interpretation_report
 from backend.ai.compliance_checker import build_compliance_report
-from backend.db.supabase_repo import cancel_bid_generation_task, create_bid_export_task, create_bid_generation_task, create_knowledge_asset, delete_bid_project, delete_bid_section, download_bid_file_to_local, download_knowledge_asset_file_variant, get_ai_usage_overview, get_bid_export_task, get_bid_file, get_latest_bid_file_for_project, get_latest_bid_generation_task, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_export_task, update_bid_file_parse_status, update_bid_generation_task_item, update_bid_section_content, upload_knowledge_asset_file, upsert_bid_section
+from backend.db.supabase_repo import cancel_bid_generation_task, create_bid_export_task, create_bid_generation_task, create_knowledge_asset, delete_bid_project, delete_bid_section, download_bid_file_to_local, download_knowledge_asset_file_variant, get_ai_usage_overview, get_bid_export_task, get_bid_file, get_latest_bid_file_for_project, get_latest_bid_generation_task, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_export_task, update_bid_file_parse_status, update_bid_generation_task_item, update_bid_section_content, update_knowledge_asset, upload_knowledge_asset_file, upsert_bid_section
 from backend.core.llm_json_utils import strip_llm_json
 from backend.core.bid_volumes import delivery_volume_type, section_volume_type, volume_name
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -2431,6 +2431,88 @@ def _build_asset_searchable_text(payload: dict) -> str:
     return "\n".join(str(part).strip() for part in parts if str(part or "").strip())
 
 
+def _asset_payload_from_form(storage_info: dict | None = None, existing: dict | None = None) -> dict:
+    existing = existing or {}
+    storage_info = storage_info or {}
+    library_type = request.form.get('library_type') or (existing.get("metadata") or {}).get("library_type") or (existing.get("specs") or {}).get("library_type") or 'qualification'
+    if library_type not in {'qualification', 'product'}:
+        raise ValueError('library_type 仅支持 qualification 或 product')
+
+    asset_type = request.form.get('asset_type') or existing.get("asset_type") or ('qualification_image' if library_type == 'qualification' else 'product_image')
+    category = request.form.get('category') or existing.get("category") or ('企业资信' if library_type == 'qualification' else '产品资料')
+    title = (request.form.get('title') or existing.get("title") or '').strip()
+    description = (request.form.get('description') or existing.get("description") or '').strip()
+    tags = _split_form_list(request.form.get('tags')) if 'tags' in request.form else (existing.get("tags") or [])
+    applicable_sections = _split_form_list(request.form.get('applicable_sections')) if 'applicable_sections' in request.form else (existing.get("applicable_sections") or [])
+    allowed_for_bid = request.form.get('allowed_for_bid', str((existing.get("specs") or {}).get("allowed_for_bid", True))).lower() in {'1', 'true', 'yes', 'on'}
+    is_sensitive = request.form.get('is_sensitive', str(existing.get("is_sensitive", False))).lower() in {'1', 'true', 'yes', 'on'}
+    anonymized = request.form.get('anonymized', str(existing.get("anonymized", True))).lower() in {'1', 'true', 'yes', 'on'}
+    specs = {
+        **(existing.get("specs") or {}),
+        "library_type": library_type,
+        "allowed_for_bid": allowed_for_bid,
+        "usage_note": request.form.get('usage_note') or (existing.get("specs") or {}).get("usage_note") or '',
+        "certificate_no": request.form.get('certificate_no') or (existing.get("specs") or {}).get("certificate_no") or '',
+        "issuer": request.form.get('issuer') or (existing.get("specs") or {}).get("issuer") or '',
+        "product_model": request.form.get('product_model') or (existing.get("specs") or {}).get("product_model") or '',
+    }
+    metadata = {
+        **(existing.get("metadata") or {}),
+        "library_type": library_type,
+        "allowed_for_bid": allowed_for_bid,
+        "upload_source": "enterprise_library_page",
+    }
+    if storage_info:
+        metadata.update({
+            "thumbnail_storage_bucket": storage_info.get("thumbnail_bucket"),
+            "thumbnail_storage_path": storage_info.get("thumbnail_path"),
+            "thumbnail_mime_type": storage_info.get("thumbnail_mime_type"),
+            "thumbnail_size": storage_info.get("thumbnail_size"),
+        })
+
+    payload = {
+        "title": title,
+        "description": description,
+        "category": category,
+        "asset_type": asset_type,
+        "source_type": existing.get("source_type") or "user_upload",
+        "license": request.form.get('license') or existing.get("license") or "企业自有资料",
+        "attribution": request.form.get('attribution') or existing.get("attribution") or "用户上传",
+        "is_synthetic": bool(existing.get("is_synthetic", False)),
+        "is_sensitive": is_sensitive,
+        "anonymized": anonymized,
+        "industry": existing.get("industry") or "水利行业",
+        "applicable_sections": applicable_sections,
+        "tags": tags,
+        "specs": specs,
+        "ai_caption": description,
+        "status": "indexed",
+        "metadata": metadata,
+    }
+    if storage_info:
+        payload.update({
+            "file_name": storage_info.get("file_name"),
+            "file_ext": storage_info.get("file_ext"),
+            "mime_type": storage_info.get("mime_type"),
+            "file_size": storage_info.get("file_size"),
+            "storage_bucket": storage_info.get("bucket"),
+            "storage_path": storage_info.get("object_path"),
+            "public_url": storage_info.get("public_url"),
+        })
+    payload["searchable_text"] = _build_asset_searchable_text(payload)
+    return payload
+
+
+def _maybe_attach_asset_embedding(payload: dict) -> None:
+    try:
+        from backend.rag.vector_store import init_ali_client, get_embeddings
+        embeddings = get_embeddings(init_ali_client(), [payload["searchable_text"]])
+        if embeddings:
+            payload["embedding"] = embeddings[0]
+    except Exception:
+        logging.exception("知识资产 embedding 生成失败，将仅保存结构化资产")
+
+
 @knowledge_bp.route('/assets/upload', methods=['POST'])
 @bp.route('/knowledge/assets/upload', methods=['POST'])
 def upload_knowledge_asset():
@@ -2443,20 +2525,6 @@ def upload_knowledge_asset():
         except UploadValidationError as exc:
             return jsonify({'error': str(exc)}), 400
 
-        library_type = request.form.get('library_type') or 'qualification'
-        if library_type not in {'qualification', 'product'}:
-            return jsonify({'error': 'library_type 仅支持 qualification 或 product'}), 400
-
-        asset_type = request.form.get('asset_type') or ('qualification_image' if library_type == 'qualification' else 'product_image')
-        category = request.form.get('category') or ('企业资信' if library_type == 'qualification' else '产品资料')
-        title = (request.form.get('title') or file.filename).strip()
-        description = (request.form.get('description') or '').strip()
-        tags = _split_form_list(request.form.get('tags'))
-        applicable_sections = _split_form_list(request.form.get('applicable_sections'))
-        allowed_for_bid = request.form.get('allowed_for_bid', 'true').lower() in {'1', 'true', 'yes', 'on'}
-        is_sensitive = request.form.get('is_sensitive', 'false').lower() in {'1', 'true', 'yes', 'on'}
-        anonymized = request.form.get('anonymized', 'true').lower() in {'1', 'true', 'yes', 'on'}
-
         upload_dir = Path(current_app.config['UPLOAD_FOLDER'])
         upload_dir.mkdir(parents=True, exist_ok=True)
         original_filename = file.filename
@@ -2467,62 +2535,57 @@ def upload_knowledge_asset():
         storage_info = upload_knowledge_asset_file(
             local_file_path=local_path,
             original_filename=original_filename,
-            library_type=library_type,
+            library_type=request.form.get('library_type') or 'qualification',
         )
+        storage_info["file_name"] = original_filename
 
-        payload = {
-            "title": title,
-            "description": description,
-            "category": category,
-            "asset_type": asset_type,
-            "file_name": original_filename,
-            "file_ext": storage_info.get("file_ext"),
-            "mime_type": storage_info.get("mime_type"),
-            "file_size": storage_info.get("file_size"),
-            "storage_bucket": storage_info.get("bucket"),
-            "storage_path": storage_info.get("object_path"),
-            "public_url": storage_info.get("public_url"),
-            "source_type": "user_upload",
-            "license": "企业自有资料",
-            "attribution": request.form.get('attribution') or "用户上传",
-            "is_synthetic": False,
-            "is_sensitive": is_sensitive,
-            "anonymized": anonymized,
-            "industry": "水利行业",
-            "applicable_sections": applicable_sections,
-            "tags": tags,
-            "specs": {
-                "library_type": library_type,
-                "allowed_for_bid": allowed_for_bid,
-                "usage_note": request.form.get('usage_note') or '',
-                "certificate_no": request.form.get('certificate_no') or '',
-                "issuer": request.form.get('issuer') or '',
-                "product_model": request.form.get('product_model') or '',
-            },
-            "ai_caption": description,
-            "status": "indexed",
-            "metadata": {
-                "library_type": library_type,
-                "allowed_for_bid": allowed_for_bid,
-                "upload_source": "enterprise_library_page",
-                "thumbnail_storage_bucket": storage_info.get("thumbnail_bucket"),
-                "thumbnail_storage_path": storage_info.get("thumbnail_path"),
-                "thumbnail_mime_type": storage_info.get("thumbnail_mime_type"),
-                "thumbnail_size": storage_info.get("thumbnail_size"),
-            },
-        }
-        payload["searchable_text"] = _build_asset_searchable_text(payload)
-
-        try:
-            from backend.rag.vector_store import init_ali_client, get_embeddings
-            embeddings = get_embeddings(init_ali_client(), [payload["searchable_text"]])
-            if embeddings:
-                payload["embedding"] = embeddings[0]
-        except Exception:
-            logging.exception("知识资产 embedding 生成失败，将仅保存结构化资产")
+        payload = _asset_payload_from_form(storage_info=storage_info)
+        _maybe_attach_asset_embedding(payload)
 
         asset = create_knowledge_asset(payload)
         return jsonify(asset), 201
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         logging.exception("上传知识资产失败")
         return jsonify({'error': f'上传失败: {str(e)}'}), 500
+
+
+@knowledge_bp.route('/assets/<asset_id>', methods=['PATCH'])
+@bp.route('/knowledge/assets/<asset_id>', methods=['PATCH'])
+def update_knowledge_asset_api(asset_id):
+    try:
+        existing = get_knowledge_asset_detail(asset_id)
+        if not existing:
+            return jsonify({'error': '知识资产不存在'}), 404
+
+        file = request.files.get('file')
+        storage_info = None
+        if file and file.filename:
+            try:
+                validate_uploaded_file(file, kind="asset")
+            except UploadValidationError as exc:
+                return jsonify({'error': str(exc)}), 400
+            library_type = request.form.get('library_type') or (existing.get("metadata") or {}).get("library_type") or (existing.get("specs") or {}).get("library_type") or 'qualification'
+            upload_dir = Path(current_app.config['UPLOAD_FOLDER'])
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            original_filename = file.filename
+            unique_filename = f"asset-{uuid.uuid4()}-{safe_upload_filename(original_filename, 'asset')}"
+            local_path = upload_dir / unique_filename
+            file.save(local_path)
+            storage_info = upload_knowledge_asset_file(
+                local_file_path=local_path,
+                original_filename=original_filename,
+                library_type=library_type,
+            )
+            storage_info["file_name"] = original_filename
+
+        payload = _asset_payload_from_form(storage_info=storage_info, existing=existing)
+        _maybe_attach_asset_embedding(payload)
+        asset = update_knowledge_asset(asset_id, payload)
+        return jsonify(asset), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logging.exception("更新知识资产失败")
+        return jsonify({'error': f'更新失败: {str(e)}'}), 500
