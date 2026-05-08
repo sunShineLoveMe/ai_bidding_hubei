@@ -21,9 +21,10 @@ from backend.ai.chapter_planner import generate_bid_outline, stream_bid_outline
 from backend.ai.section_writer import stream_bid_section
 from backend.ai.interpreter import generate_ai_interpretation_report
 from backend.ai.compliance_checker import build_compliance_report
-from backend.db.supabase_repo import cancel_bid_generation_task, create_bid_export_task, create_bid_generation_task, create_knowledge_asset, delete_bid_project, delete_bid_section, download_bid_file_to_local, download_knowledge_asset_file_variant, get_ai_usage_overview, get_bid_export_task, get_bid_file, get_latest_bid_file_for_project, get_latest_bid_generation_task, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_export_task, update_bid_file_parse_status, update_bid_generation_task_item, update_bid_section_content, update_knowledge_asset, upload_knowledge_asset_file, upsert_bid_section
+from backend.db.supabase_repo import cancel_bid_generation_task, create_bid_export_task, create_bid_generation_task, create_knowledge_asset, delete_bid_project, delete_bid_section, download_bid_file_to_local, download_knowledge_asset_file_variant, get_ai_usage_overview, get_bid_export_task, get_bid_file, get_latest_bid_file_for_project, get_latest_bid_generation_task, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_analysis_project_meta, update_bid_export_task, update_bid_file_parse_status, update_bid_generation_task_item, update_bid_section_content, update_knowledge_asset, upload_knowledge_asset_file, upsert_bid_section
 from backend.core.llm_json_utils import strip_llm_json
 from backend.core.bid_volumes import asset_applicable_volumes, asset_matches_volume, delivery_volume_type, normalize_volume_list, section_volume_type, volume_name
+from backend.ai.length_settings import apply_length_allocations_to_sections, allocate_chapter_length_targets, evaluate_length_feasibility, normalize_length_settings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import shutil
@@ -1098,6 +1099,50 @@ def get_interpretation(project_id):
     except Exception as e:
         logging.exception("查询招标解读失败: %s", project_id)
         return jsonify({'error': f'查询招标解读失败: {str(e)}'}), 500
+
+
+@bp.route('/interpretations/<project_id>/length-settings', methods=['POST'])
+def save_interpretation_length_settings(project_id):
+    """保存全文篇幅设置，并按技术标/商务标目标刷新章节写作计划。"""
+    try:
+        uuid.UUID(project_id)
+    except ValueError:
+        return jsonify({'error': 'project_id 不是合法 UUID。'}), 400
+
+    try:
+        payload = request.get_json(force=True) or {}
+        interpretation = get_project_interpretation(project_id)
+        analysis = interpretation.get("analysis") or {}
+        sections = interpretation.get("sections") or []
+        if not analysis:
+            return jsonify({'error': '当前项目尚无招标解读结果，无法保存全文设置。'}), 404
+        if not sections:
+            return jsonify({'error': '当前项目尚无标书章节，需先生成章节大纲。'}), 400
+
+        settings = normalize_length_settings(payload)
+        feasibility = evaluate_length_feasibility(settings, sections)
+        allocations = allocate_chapter_length_targets(sections, settings)
+        next_sections = apply_length_allocations_to_sections(sections, allocations, settings)
+        saved_sections = [upsert_bid_section(project_id, section) for section in next_sections]
+
+        project_meta = analysis.get("project_meta") if isinstance(analysis.get("project_meta"), dict) else {}
+        next_project_meta = {
+            **project_meta,
+            "length_settings": settings,
+            "length_feasibility": feasibility,
+        }
+        update_bid_analysis_project_meta(project_id, next_project_meta)
+
+        return jsonify({
+            "settings": settings,
+            "feasibility": feasibility,
+            "allocations": allocations,
+            "sections": saved_sections,
+        })
+    except Exception as e:
+        logging.exception("保存全文篇幅设置失败: %s", project_id)
+        return jsonify({'error': f'保存全文篇幅设置失败: {str(e)}'}), 500
+
 
 @bp.route('/interpretations/<project_id>/ai-report', methods=['POST'])
 def generate_interpretation_ai_report(project_id):

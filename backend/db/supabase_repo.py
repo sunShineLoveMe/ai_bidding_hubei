@@ -671,6 +671,17 @@ def replace_bid_analysis(project_id: str, payload: dict[str, Any]) -> dict[str, 
     return rows[0] if rows else None
 
 
+def update_bid_analysis_project_meta(project_id: str, project_meta: dict[str, Any]) -> dict[str, Any] | None:
+    response = (
+        get_supabase_client()
+        .table("bid_analysis")
+        .update({"project_meta": project_meta})
+        .eq("project_id", project_id)
+        .execute()
+    )
+    return response.data[0] if response.data else None
+
+
 def _is_valid_uuid(value: Any) -> bool:
     if not value or not isinstance(value, str):
         return False

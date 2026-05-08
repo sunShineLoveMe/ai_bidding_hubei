@@ -1766,6 +1766,35 @@ textarea {
   line-height: 1.65;
 }
 
+.length-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.length-settings-preview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: #eff6ff;
+  padding: 12px;
+}
+
+.length-settings-preview span {
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+@media (max-width: 860px) {
+  .length-settings-grid,
+  .length-settings-preview {
+    grid-template-columns: 1fr;
+  }
+}
+
 .outline-chapters {
   display: grid;
   gap: 12px;

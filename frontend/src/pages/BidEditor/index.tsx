@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { Alert, Button, Drawer, Dropdown, Empty, Input, List, Modal, Progress, Segmented, Space, Tag, Tooltip, message } from 'antd';
+import { Alert, Button, Drawer, Dropdown, Empty, Form, Input, InputNumber, List, Modal, Progress, Radio, Segmented, Space, Tag, Tooltip, message } from 'antd';
 import type { MenuProps } from 'antd';
 import {
   BookOpen,
@@ -41,13 +41,14 @@ import {
   reorderBidSections,
   resetBidSectionsGeneration,
   saveBidSection,
+  saveBidLengthSettings,
   updateSectionGenerationTaskItem,
 } from '../../api/bidProject';
 import type { SectionGenerationTask } from '../../api/bidProject';
 import type { BidExportTask } from '../../api/bidProject';
 import { BrandMark } from '../../components/common/BrandMark';
 import { TiptapBidEditor } from '../../components/editor/TiptapBidEditor';
-import type { BidOutline, BidOutlineChapter, BidSection, ChapterWritingPlan, ComplianceReport, ComplianceRow, InterpretationResponse } from '../../types/interpretation';
+import type { BidLengthFeasibility, BidLengthSettings, BidOutline, BidOutlineChapter, BidSection, ChapterWritingPlan, ComplianceReport, ComplianceRow, InterpretationResponse } from '../../types/interpretation';
 
 type EditorMode = '正文模式' | '目录模式';
 type VolumeType = 'all' | 'technical' | 'business';
@@ -85,6 +86,18 @@ type PersistedBatchTask = {
 };
 
 const BATCH_SECTION_CONCURRENCY = 3;
+const DEFAULT_LENGTH_SETTINGS: BidLengthSettings = {
+  mode: 'pages',
+  technicalPages: 80,
+  businessPages: 40,
+  technicalWords: 56000,
+  businessWords: 22000,
+  allowAutoExpand: false,
+};
+const WORDS_PER_PAGE = {
+  technical: 700,
+  business: 550,
+};
 
 const volumeOptions: Array<{ value: VolumeType; label: string; shortLabel: string }> = [
   { value: 'all', label: '全部', shortLabel: '全部' },
@@ -103,6 +116,66 @@ const internalVolumeOptions: Array<{ value: InternalVolumeType; label: string; k
 
 function asBidOutline(meta: Record<string, unknown> | undefined | null): BidOutline | null {
   return (meta?.bid_outline || null) as BidOutline | null;
+}
+
+function asBidLengthSettings(meta: Record<string, unknown> | undefined | null): BidLengthSettings {
+  const raw = (meta?.length_settings || {}) as Partial<BidLengthSettings>;
+  const mode = raw.mode === 'words' ? 'words' : 'pages';
+  const technicalPages = Number(raw.technicalPages || DEFAULT_LENGTH_SETTINGS.technicalPages);
+  const businessPages = Number(raw.businessPages || DEFAULT_LENGTH_SETTINGS.businessPages);
+  const technicalWords = Number(raw.technicalWords || technicalPages * WORDS_PER_PAGE.technical);
+  const businessWords = Number(raw.businessWords || businessPages * WORDS_PER_PAGE.business);
+  return {
+    mode,
+    technicalPages,
+    businessPages,
+    technicalWords,
+    businessWords,
+    allowAutoExpand: Boolean(raw.allowAutoExpand),
+  };
+}
+
+function asBidLengthFeasibility(meta: Record<string, unknown> | undefined | null): BidLengthFeasibility | null {
+  return (meta?.length_feasibility || null) as BidLengthFeasibility | null;
+}
+
+function normalizeLengthFormValues(values: Partial<BidLengthSettings>): BidLengthSettings {
+  const mode = values.mode === 'words' ? 'words' : 'pages';
+  const technicalPages = Math.max(1, Number(values.technicalPages || DEFAULT_LENGTH_SETTINGS.technicalPages));
+  const businessPages = Math.max(1, Number(values.businessPages || DEFAULT_LENGTH_SETTINGS.businessPages));
+  let technicalWords = Math.max(1, Number(values.technicalWords || DEFAULT_LENGTH_SETTINGS.technicalWords));
+  let businessWords = Math.max(1, Number(values.businessWords || DEFAULT_LENGTH_SETTINGS.businessWords));
+  let nextTechnicalPages = technicalPages;
+  let nextBusinessPages = businessPages;
+  if (mode === 'pages') {
+    technicalWords = technicalPages * WORDS_PER_PAGE.technical;
+    businessWords = businessPages * WORDS_PER_PAGE.business;
+  } else {
+    nextTechnicalPages = Math.max(1, Math.round(technicalWords / WORDS_PER_PAGE.technical));
+    nextBusinessPages = Math.max(1, Math.round(businessWords / WORDS_PER_PAGE.business));
+  }
+  return {
+    mode,
+    technicalPages: nextTechnicalPages,
+    businessPages: nextBusinessPages,
+    technicalWords,
+    businessWords,
+    allowAutoExpand: Boolean(values.allowAutoExpand),
+  };
+}
+
+function localLengthWarnings(settings: BidLengthSettings): string[] {
+  const warnings: string[] = [];
+  if (settings.technicalPages > 180) {
+    warnings.push(`技术标目标 ${settings.technicalPages} 页偏高，建议补充专项施工方案、设备参数、进度资源、质量安全和图纸材料后再扩写。`);
+  }
+  if (settings.businessPages > 120) {
+    warnings.push(`商务标目标 ${settings.businessPages} 页偏高，资格、报价和附件类章节将以资料完整性和人工复核为主，不建议按篇幅灌水。`);
+  }
+  if (settings.technicalPages + settings.businessPages >= 300) {
+    warnings.push('总目标页数达到 300 页以上，建议拆分多轮生成和人工复核，避免重复、泛化或证据不足。');
+  }
+  return warnings;
 }
 
 function makeChapterId(chapter: BidOutlineChapter, index: number): string {
@@ -295,34 +368,45 @@ export function BidEditorPage(): JSX.Element {
   const [resetClearContent, setResetClearContent] = useState(false);
   const [resettingGeneration, setResettingGeneration] = useState(false);
   const [persistedBatchTask, setPersistedBatchTask] = useState<PersistedBatchTask | null>(null);
+  const [lengthSettingsOpen, setLengthSettingsOpen] = useState(false);
+  const [lengthSettingsSaving, setLengthSettingsSaving] = useState(false);
+  const [lengthFeasibility, setLengthFeasibility] = useState<BidLengthFeasibility | null>(null);
+  const [lengthForm] = Form.useForm<BidLengthSettings>();
   const streamStartedRef = useRef(false);
   const batchCancelRequestedRef = useRef(false);
   const batchAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const persistedBatchTaskIdRef = useRef('');
   const batchTaskSyncAtRef = useRef<Map<string, number>>(new Map());
 
-  function applyPersistedBatchTask(task: SectionGenerationTask | null): void {
+  function applyPersistedBatchTask(task: SectionGenerationTask | null, sourceChapters: ChapterDraft[] = chapters): void {
     if (!task?.id || !Array.isArray(task.items) || !task.items.length) {
       setPersistedBatchTask(null);
       persistedBatchTaskIdRef.current = '';
       return;
     }
-    const nextTasks = Object.fromEntries(task.items.map(item => [item.section_id, {
-      status: item.status,
-      percent: item.percent || 0,
+    const generatedIds = new Set(sourceChapters.filter(isChapterGenerated).map(chapter => chapter.id));
+    const activeItems = task.items.filter(item => {
+      if (generatedIds.has(item.section_id) && (item.status === 'queued' || item.status === 'running')) {
+        return false;
+      }
+      return item.status === 'queued' || item.status === 'running' || item.status === 'failed' || item.status === 'stopped';
+    });
+    const nextTasks = Object.fromEntries(activeItems.map(item => [item.section_id, {
+      status: generatedIds.has(item.section_id) && item.status !== 'failed' && item.status !== 'stopped' ? 'done' : item.status,
+      percent: generatedIds.has(item.section_id) ? 100 : item.percent || 0,
       chars: item.chars || 0,
       targetWords: item.target_words || 800,
-      message: item.message || item.error || batchStatusLabel(item.status),
+      message: generatedIds.has(item.section_id) ? '已完成' : item.message || item.error || batchStatusLabel(item.status),
     } satisfies BatchTask]));
     setPersistedBatchTask({ id: task.id, status: task.status });
     persistedBatchTaskIdRef.current = task.id;
     setBatchTasks(nextTasks);
   }
 
-  async function refreshLatestBatchTask(projectId: string): Promise<void> {
+  async function refreshLatestBatchTask(projectId: string, sourceChapters?: ChapterDraft[]): Promise<void> {
     try {
       const task = await getLatestSectionGenerationTask(projectId);
-      applyPersistedBatchTask(task);
+      applyPersistedBatchTask(task, sourceChapters || chapters);
     } catch (error) {
       console.warn('恢复批量章节生成任务失败', error);
     }
@@ -356,6 +440,51 @@ export function BidEditorPage(): JSX.Element {
     }
   }
 
+  function openLengthSettings(): void {
+    const settings = asBidLengthSettings(data?.analysis?.project_meta);
+    lengthForm.setFieldsValue(settings);
+    setLengthFeasibility(asBidLengthFeasibility(data?.analysis?.project_meta));
+    setLengthSettingsOpen(true);
+  }
+
+  async function saveLengthSettings(): Promise<void> {
+    if (!data?.project?.id) {
+      message.warning('当前项目不存在，无法保存全文设置。');
+      return;
+    }
+    try {
+      const values = await lengthForm.validateFields();
+      const settings = normalizeLengthFormValues(values);
+      setLengthSettingsSaving(true);
+      const result = await saveBidLengthSettings(data.project.id, settings);
+      const drafts = sectionsToDrafts(result.sections || []);
+      setChapters(drafts);
+      setData(current => current ? {
+        ...current,
+        sections: result.sections || current.sections,
+        analysis: current.analysis ? {
+          ...current.analysis,
+          project_meta: {
+            ...(current.analysis.project_meta || {}),
+            length_settings: result.settings,
+            length_feasibility: result.feasibility,
+          },
+        } : current.analysis,
+      } : current);
+      setLengthFeasibility(result.feasibility);
+      setSelectedId(current => current || drafts[0]?.id || '');
+      setLengthSettingsOpen(false);
+      message.success('全文篇幅设置已保存，章节目标字数已更新');
+    } catch (error) {
+      if (error && typeof error === 'object' && 'errorFields' in error) {
+        return;
+      }
+      message.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLengthSettingsSaving(false);
+    }
+  }
+
   async function load(): Promise<void> {
     setLoading(true);
     setDownloadUrl('');
@@ -363,7 +492,9 @@ export function BidEditorPage(): JSX.Element {
       const projectId = searchParams.get('projectId');
       const result = projectId ? await getInterpretation(projectId) : await getLatestInterpretation();
       setData(result);
+      setLengthFeasibility(asBidLengthFeasibility(result.analysis?.project_meta));
       setContentDirty(false);
+      let loadedDrafts: ChapterDraft[] = [];
       if (searchParams.get('autoGenerate') === 'outline' && result.project?.id) {
         startOutlineStream(result.project.id);
       } else {
@@ -371,12 +502,13 @@ export function BidEditorPage(): JSX.Element {
         setOutlineMeta(outline);
         const sectionDrafts = sectionsToDrafts(result.sections);
         const drafts = sectionDrafts.length ? sectionDrafts : flattenChapters(outline);
+        loadedDrafts = drafts;
         setChapters(drafts);
         setSelectedId(current => current || drafts[0]?.id || '');
       }
       if (result.project?.id) {
         void refreshComplianceReport(result.project.id, { silent: true });
-        void refreshLatestBatchTask(result.project.id);
+        void refreshLatestBatchTask(result.project.id, loadedDrafts);
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -392,12 +524,13 @@ export function BidEditorPage(): JSX.Element {
     const sectionDrafts = sectionsToDrafts(result.sections);
     const drafts = sectionDrafts.length ? sectionDrafts : flattenChapters(outline);
     setData(result);
+    setLengthFeasibility(asBidLengthFeasibility(result.analysis?.project_meta));
     setOutlineMeta(outline);
     setChapters(drafts);
     setSelectedId(current => current || drafts[0]?.id || '');
     setContentDirty(false);
     void refreshComplianceReport(projectId, { silent: true });
-    void refreshLatestBatchTask(projectId);
+    void refreshLatestBatchTask(projectId, drafts);
   }
 
   useEffect(() => {
@@ -520,6 +653,7 @@ export function BidEditorPage(): JSX.Element {
 
   const savedOutline = asBidOutline(data?.analysis?.project_meta);
   const outline = outlineMeta || savedOutline;
+  const lengthSettings = useMemo(() => asBidLengthSettings(data?.analysis?.project_meta), [data?.analysis?.project_meta]);
   const volumeCounts = useMemo(() => {
     const counts = Object.fromEntries(volumeOptions.map(item => [item.value, 0])) as Record<VolumeType, number>;
     chapters.forEach(chapter => {
@@ -560,9 +694,27 @@ export function BidEditorPage(): JSX.Element {
   const estimatedTotalChars = scopedChapters.reduce((sum, chapter) => (
     sum + (isChapterGenerated(chapter) ? chapterActualWords(chapter) : targetChapterWords(chapter))
   ), 0);
+  const technicalActualChars = chapters.filter(chapter => deliveryVolumeType(chapter) === 'technical').reduce((sum, chapter) => sum + (isChapterGenerated(chapter) ? chapterActualWords(chapter) : 0), 0);
+  const businessActualChars = chapters.filter(chapter => deliveryVolumeType(chapter) === 'business').reduce((sum, chapter) => sum + (isChapterGenerated(chapter) ? chapterActualWords(chapter) : 0), 0);
+  const lengthGoalChars = activeVolume === 'technical'
+    ? lengthSettings.technicalWords
+    : activeVolume === 'business'
+      ? lengthSettings.businessWords
+      : lengthSettings.technicalWords + lengthSettings.businessWords;
+  const lengthGoalPages = activeVolume === 'technical'
+    ? lengthSettings.technicalPages
+    : activeVolume === 'business'
+      ? lengthSettings.businessPages
+      : lengthSettings.technicalPages + lengthSettings.businessPages;
+  const currentEstimatedPages = activeVolume === 'technical'
+    ? Math.max(0, Math.ceil(actualChars / WORDS_PER_PAGE.technical))
+    : activeVolume === 'business'
+      ? Math.max(0, Math.ceil(actualChars / WORDS_PER_PAGE.business))
+      : Math.max(0, Math.ceil(technicalActualChars / WORDS_PER_PAGE.technical) + Math.ceil(businessActualChars / WORDS_PER_PAGE.business));
   const estimatedPages = Math.max(1, Math.ceil(estimatedTotalChars / 700));
   const generatedCount = scopedChapters.filter(isChapterGenerated).length;
   const generationProgress = scopedChapters.length ? Math.round((generatedCount / scopedChapters.length) * 10000) / 100 : 0;
+  const lengthProgress = lengthGoalChars ? Math.min(100, Math.round((actualChars / lengthGoalChars) * 10000) / 100) : 0;
   const complianceSummary = complianceReport?.summary || {
     metricName: '条款响应覆盖率',
     scopeNote: '基于招标条款、评分项、风险项与当前章节映射/正文片段的响应追踪结果，不等同于最终 Word 标书合规结论。',
@@ -639,6 +791,141 @@ export function BidEditorPage(): JSX.Element {
     } finally {
       setSupplementingRowId('');
     }
+  }
+
+  function LengthSettingsModal(): JSX.Element {
+    return (
+      <Modal
+        title="全文生成设置"
+        open={lengthSettingsOpen}
+        okText="保存并刷新章节目标"
+        cancelText="取消"
+        confirmLoading={lengthSettingsSaving}
+        width={760}
+        onOk={() => void saveLengthSettings()}
+        onCancel={() => setLengthSettingsOpen(false)}
+        destroyOnClose
+      >
+        <Alert
+          className="mb-4"
+          type="info"
+          showIcon
+          message="按技术标和商务标设置目标篇幅"
+          description="页数是用户侧主要设置项，系统会换算为目标字数并分配到各章节。资格文件、报价文件和附件材料归入商务标整体控制，但会限制空泛扩写。"
+        />
+        {lengthFeasibility?.warnings?.length ? (
+          <Alert
+            className="mb-4"
+            type="warning"
+            showIcon
+            message="当前目标篇幅需要补充支撑材料"
+            description={(
+              <Space direction="vertical" size={4}>
+                {lengthFeasibility.warnings.map(item => <span key={item}>{item}</span>)}
+              </Space>
+            )}
+          />
+        ) : null}
+        <Form<BidLengthSettings>
+          form={lengthForm}
+          layout="vertical"
+          initialValues={DEFAULT_LENGTH_SETTINGS}
+        >
+          <Form.Item name="mode" label="设置方式" rules={[{ required: true, message: '请选择设置方式' }]}>
+            <Radio.Group
+              optionType="button"
+              buttonStyle="solid"
+              options={[
+                { label: '按页数设置', value: 'pages' },
+                { label: '按字数设置', value: 'words' },
+              ]}
+            />
+          </Form.Item>
+
+          <Form.Item noStyle shouldUpdate={(prev, next) => prev.mode !== next.mode}>
+            {({ getFieldValue }) => {
+              const mode = getFieldValue('mode') === 'words' ? 'words' : 'pages';
+              return mode === 'pages' ? (
+                <div className="length-settings-grid">
+                  <Form.Item
+                    name="technicalPages"
+                    label="技术标目标页数"
+                    rules={[{ required: true, message: '请输入技术标目标页数' }]}
+                  >
+                    <InputNumber min={1} max={600} addonAfter="页" className="w-full" />
+                  </Form.Item>
+                  <Form.Item
+                    name="businessPages"
+                    label="商务标目标页数"
+                    rules={[{ required: true, message: '请输入商务标目标页数' }]}
+                  >
+                    <InputNumber min={1} max={600} addonAfter="页" className="w-full" />
+                  </Form.Item>
+                </div>
+              ) : (
+                <div className="length-settings-grid">
+                  <Form.Item
+                    name="technicalWords"
+                    label="技术标目标字数"
+                    rules={[{ required: true, message: '请输入技术标目标字数' }]}
+                  >
+                    <InputNumber min={1000} max={420000} step={1000} addonAfter="字" className="w-full" />
+                  </Form.Item>
+                  <Form.Item
+                    name="businessWords"
+                    label="商务标目标字数"
+                    rules={[{ required: true, message: '请输入商务标目标字数' }]}
+                  >
+                    <InputNumber min={1000} max={330000} step={1000} addonAfter="字" className="w-full" />
+                  </Form.Item>
+                </div>
+              );
+            }}
+          </Form.Item>
+
+          <Form.Item
+            name="allowAutoExpand"
+            label="资料不足时的生成策略"
+            tooltip="建议选择稳健模式。系统不会为了凑页数虚构证书、业绩、金额、人员或无关段落。"
+          >
+            <Radio.Group
+              options={[
+                { label: '稳健生成：不足处使用待补充占位', value: false },
+                { label: '允许扩写：仅围绕评分点和可验证措施扩展', value: true },
+              ]}
+            />
+          </Form.Item>
+
+          <Form.Item noStyle shouldUpdate>
+            {({ getFieldsValue }) => {
+              const preview = normalizeLengthFormValues(getFieldsValue());
+              const warnings = localLengthWarnings(preview);
+              return (
+                <Space direction="vertical" size={10} className="w-full">
+                  <div className="length-settings-preview">
+                    <span>技术标：{preview.technicalPages} 页 / {preview.technicalWords.toLocaleString()} 字</span>
+                    <span>商务标：{preview.businessPages} 页 / {preview.businessWords.toLocaleString()} 字</span>
+                    <span>合计：{preview.technicalPages + preview.businessPages} 页 / {(preview.technicalWords + preview.businessWords).toLocaleString()} 字</span>
+                  </div>
+                  {warnings.length ? (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message="当前目标篇幅偏高"
+                      description={(
+                        <Space direction="vertical" size={4}>
+                          {warnings.map(item => <span key={item}>{item}</span>)}
+                        </Space>
+                      )}
+                    />
+                  ) : null}
+                </Space>
+              );
+            }}
+          </Form.Item>
+        </Form>
+      </Modal>
+    );
   }
 
   function QualityDashboard(): JSX.Element {
@@ -879,9 +1166,27 @@ export function BidEditorPage(): JSX.Element {
     }
     const generated = isChapterGenerated(chapter);
     if (generated) {
+      const actualWords = chapterActualWords(chapter);
+      const targetWords = targetChapterWords(chapter);
+      if (actualWords < targetWords * 0.75) {
+        return {
+          label: `建议扩写 ${actualWords}/${targetWords}字`,
+          tooltip: `当前正文低于目标字数 75%。建议结合评分点、风险项和企业资料补充，不要用重复或无关内容凑字数。`,
+          generated: true,
+          failed: false,
+        };
+      }
+      if (actualWords > targetWords * 1.35) {
+        return {
+          label: `篇幅偏长 ${actualWords}/${targetWords}字`,
+          tooltip: `当前正文明显超过目标字数。建议复核是否存在重复段落、无关内容或格式性材料过度展开。`,
+          generated: true,
+          failed: false,
+        };
+      }
       return {
-        label: `已完成 ${chapterActualWords(chapter)}字`,
-        tooltip: `已完成字数：按当前章节正文去除空白后统计。计划目标：${targetChapterWords(chapter)}字。`,
+        label: `已完成 ${actualWords}字`,
+        tooltip: `已完成字数：按当前章节正文去除空白后统计。计划目标：${targetWords}字。`,
         generated: true,
         failed: false,
       };
@@ -931,6 +1236,17 @@ export function BidEditorPage(): JSX.Element {
     if (!['generated', 'edited', 'completed'].includes(status)) return false;
     const content = (chapter.content || '').trim();
     return !!content && !content.includes('请在此编写章节内容') && !content.includes('待进一步生成正文');
+  }
+
+  function isChapterUnderTarget(chapter: ChapterDraft): boolean {
+    if (!isChapterGenerated(chapter)) {
+      return false;
+    }
+    return chapterActualWords(chapter) < targetChapterWords(chapter) * 0.75;
+  }
+
+  function needsBatchWriting(chapter: ChapterDraft): boolean {
+    return !isChapterGenerated(chapter) || isChapterUnderTarget(chapter);
   }
 
   function chapterIndent(level?: number): number {
@@ -1309,15 +1625,15 @@ export function BidEditorPage(): JSX.Element {
     }));
   }
 
-  function syncBatchTaskItem(chapterId: string, patch: Partial<BatchTask> & { error?: string; saved_section_id?: string }): void {
+  function syncBatchTaskItem(chapterId: string, patch: Partial<BatchTask> & { error?: string; saved_section_id?: string }): Promise<void> {
     const taskId = persistedBatchTaskIdRef.current || persistedBatchTask?.id;
     if (!data?.project?.id || !taskId) {
-      return;
+      return Promise.resolve();
     }
     const now = Date.now();
     const lastSyncAt = batchTaskSyncAtRef.current.get(chapterId) || 0;
     if (patch.status === 'running' && now - lastSyncAt < 5000) {
-      return;
+      return Promise.resolve();
     }
     batchTaskSyncAtRef.current.set(chapterId, now);
     const payload = {
@@ -1329,7 +1645,7 @@ export function BidEditorPage(): JSX.Element {
       error: patch.error,
       saved_section_id: patch.saved_section_id,
     };
-    void updateSectionGenerationTaskItem(data.project.id, taskId, chapterId, payload).then(task => {
+    return updateSectionGenerationTaskItem(data.project.id, taskId, chapterId, payload).then(task => {
       setPersistedBatchTask({ id: task.id, status: task.status });
       persistedBatchTaskIdRef.current = task.id;
     }).catch(error => {
@@ -1411,14 +1727,54 @@ export function BidEditorPage(): JSX.Element {
     });
   }
 
+  function customWritingPlaceholder(chapter: ChapterDraft): string {
+    const title = `${chapter.title || ''} ${chapter.purpose || ''} ${(chapter.response_points || []).join(' ')}`;
+    const plan = chapterWritingPlan(chapter);
+    if (/安全|应急|文明施工|生产/.test(title)) {
+      return '请输入本章补充要求，例如：补齐安全生产责任体系、危险源辨识、班前教育、应急预案、特种作业管理和安全检查闭环；结合本项目施工风险写具体措施。';
+    }
+    if (/质量|检验|检测|验收|试验/.test(title)) {
+      return '请输入本章补充要求，例如：补齐质量保证体系、工序检验、材料进场复验、隐蔽工程验收、第三方检测和质量问题整改闭环。';
+    }
+    if (/进度|工期|计划|节点/.test(title)) {
+      return '请输入本章补充要求，例如：补齐总进度计划、关键线路、节点工期、资源投入、雨季影响应对和进度偏差纠偏措施。';
+    }
+    if (/环保|水保|扬尘|噪声|绿色/.test(title)) {
+      return '请输入本章补充要求，例如：补齐扬尘控制、噪声控制、废水泥浆处置、水土保持、生态保护和环保监测记录要求。';
+    }
+    if (/设备|机械|材料|资源/.test(title)) {
+      return '请输入本章补充要求，例如：补齐主要设备配置、设备参数、进退场计划、维护保养、备件保障和关键工序设备适配说明。';
+    }
+    if (/施工方案|施工组织|工艺|防渗|灌浆|旋喷/.test(title)) {
+      return '请输入本章补充要求，例如：补齐施工流程、关键工艺参数、现场布置、质量控制点、施工难点、风险应对和可量化验收标准。';
+    }
+    if (/资格|资质|证书|人员|项目经理|技术负责人|业绩/.test(title) || plan.needs_qualification) {
+      return '请输入本章补充要求，例如：补齐资质证书、人员证书、类似业绩、社保或任职证明的附件索引；敏感编号和日期使用待补充占位。';
+    }
+    if (/商务|合同|付款|履约|服务|承诺|偏离|投标函/.test(title)) {
+      return '请输入本章补充要求，例如：补齐商务条款响应、付款和履约承诺、偏离说明、服务保障、保密廉政承诺和人工复核占位。';
+    }
+    if (/报价|清单|价格|单价|工程量/.test(title)) {
+      return '请输入本章补充要求，例如：补齐报价口径、工程量清单复核、税费说明、风险边界和人工复核提示；不得编造金额、单价和工程量。';
+    }
+    if (plan.needs_table) {
+      return '请输入本章补充要求，例如：补齐可量化承诺、表格字段、责任部门、完成时限、证明材料索引和人工复核说明。';
+    }
+    if (plan.needs_case) {
+      return '请输入本章补充要求，例如：结合类似项目经验补充做法、成效、适用条件和证明材料索引；缺少业绩事实时使用待补充占位。';
+    }
+    return '请输入本章补充要求，例如：围绕本章标题、评分项、风险点和招标要求补充可执行措施、证明材料索引和人工复核提示。';
+  }
+
   function customWriteChapter(chapter: ChapterDraft): void {
     let instruction = '';
+    const placeholder = customWritingPlaceholder(chapter);
     Modal.confirm({
       title: `自定义编写：${chapter.title || '未命名章节'}`,
       content: (
         <Input.TextArea
           rows={5}
-          placeholder="请输入本章补充要求，例如：重点突出质量保障和类似项目经验，语气更正式。"
+          placeholder={placeholder}
           onChange={event => {
             instruction = event.target.value;
           }}
@@ -1621,11 +1977,16 @@ export function BidEditorPage(): JSX.Element {
         percent: 0,
         message: '已停止',
       });
+      await syncBatchTaskItem(chapter.id, {
+        status: 'stopped',
+        message: '已停止',
+      });
       return;
     }
     const targetWords = targetChapterWords(chapter);
     const originalContent = chapter.content || '';
     const controller = new AbortController();
+    const finalSyncs: Promise<void>[] = [];
     batchAbortControllersRef.current.set(chapter.id, controller);
     updateBatchTask(chapter.id, {
       status: 'running',
@@ -1634,7 +1995,7 @@ export function BidEditorPage(): JSX.Element {
       targetWords,
       message: '正在编写',
     });
-    syncBatchTaskItem(chapter.id, {
+    void syncBatchTaskItem(chapter.id, {
       status: 'running',
       percent: 2,
       chars: 0,
@@ -1657,7 +2018,7 @@ export function BidEditorPage(): JSX.Element {
             percent: Math.min(98, Math.max(3, Math.round((chars / Math.max(targetWords, 1)) * 100))),
             message: '正在编写',
           });
-          syncBatchTaskItem(chapter.id, {
+          void syncBatchTaskItem(chapter.id, {
             status: 'running',
             chars,
             percent: Math.min(98, Math.max(3, Math.round((chars / Math.max(targetWords, 1)) * 100))),
@@ -1671,10 +2032,10 @@ export function BidEditorPage(): JSX.Element {
               status: 'stopped',
               message: '已停止',
             });
-            syncBatchTaskItem(chapter.id, {
+            finalSyncs.push(syncBatchTaskItem(chapter.id, {
               status: 'stopped',
               message: '已停止',
-            });
+            }));
             return;
           }
           updateBatchTask(chapter.id, {
@@ -1682,22 +2043,25 @@ export function BidEditorPage(): JSX.Element {
             percent: 100,
             message: '已完成',
           });
-          syncBatchTaskItem(chapter.id, {
+          finalSyncs.push(syncBatchTaskItem(chapter.id, {
             status: 'done',
             percent: 100,
             targetWords,
             message: '已完成',
-          });
+          }));
           setChapters(items => items.map(item => item.id === chapter.id ? { ...item, status: 'generated' } : item));
         },
       });
+      if (finalSyncs.length) {
+        await Promise.allSettled(finalSyncs);
+      }
     } catch (error) {
       if (controller.signal.aborted || batchCancelRequestedRef.current) {
         updateBatchTask(chapter.id, {
           status: 'stopped',
           message: '已停止',
         });
-        syncBatchTaskItem(chapter.id, {
+        await syncBatchTaskItem(chapter.id, {
           status: 'stopped',
           message: '已停止',
         });
@@ -1710,7 +2074,7 @@ export function BidEditorPage(): JSX.Element {
         percent: 100,
         message: preserveMessage,
       });
-      syncBatchTaskItem(chapter.id, {
+      await syncBatchTaskItem(chapter.id, {
         status: 'failed',
         percent: 100,
         targetWords,
@@ -1734,8 +2098,13 @@ export function BidEditorPage(): JSX.Element {
     }
 
     const sourceChapters = activeVolume === 'all' ? chapters : chapters.filter(chapter => matchesActiveVolume(chapter, activeVolume));
-    const targets = sourceChapters.filter(chapter => !isChapterGenerated(chapter));
+    const targets = sourceChapters.filter(needsBatchWriting);
     if (!targets.length) {
+      setBatchTasks({});
+      if (persistedBatchTask?.status === 'queued' || persistedBatchTask?.status === 'running') {
+        setPersistedBatchTask(null);
+        persistedBatchTaskIdRef.current = '';
+      }
       message.info(`当前${volumeLabel(activeVolume)}章节都已生成，如需重写请点击单章重写正文`);
       return;
     }
@@ -1915,8 +2284,10 @@ export function BidEditorPage(): JSX.Element {
             <div className="outline-summary">
               <span>{volumeLabel(activeVolume)}章节：{scopedChapters.length}</span>
               <span>已生成：{generatedCount}</span>
-              <span>已完成字数：{actualChars}</span>
-              <span>预计总字数：{estimatedTotalChars}（约{estimatedPages}页）</span>
+              <span>目标页数：{currentEstimatedPages}/{lengthGoalPages} 页</span>
+              <span>目标字数：{actualChars.toLocaleString()}/{lengthGoalChars.toLocaleString()} 字</span>
+              <span>计划总字数：{estimatedTotalChars.toLocaleString()}（约{estimatedPages}页）</span>
+              <span>篇幅进度：{lengthProgress}%</span>
               <span>进度：{generationProgress}%</span>
               {batchGenerating ? <span>批量并发：{BATCH_SECTION_CONCURRENCY} 路</span> : null}
             </div>
@@ -1940,7 +2311,9 @@ export function BidEditorPage(): JSX.Element {
                   />
                   <span>全篇图文并茂</span>
                 </label>
-                <Button size="small" icon={<SlidersHorizontal size={14} />}>全文设置</Button>
+                <Tooltip title="设置目标页数、目标字数、技术标/商务标篇幅和生成策略">
+                  <Button size="small" icon={<SlidersHorizontal size={14} />} onClick={openLengthSettings}>全文设置</Button>
+                </Tooltip>
                 <Button
                   size="small"
                   danger
@@ -2094,6 +2467,7 @@ export function BidEditorPage(): JSX.Element {
             <span>同时清空全部章节正文内容</span>
           </label>
         </Modal>
+        <LengthSettingsModal />
         <ComplianceDrawer />
       </div>
     );

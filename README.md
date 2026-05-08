@@ -265,6 +265,22 @@ GET /api/bidding/settings/ai-usage?days=30&projectId=<project_id>
 | 报价文件 | 报价口径、工程量清单、分项报价说明、税费和风险边界 | 禁止编造金额、单价、总价、税率和工程量 | 优先召回报价说明和风险提示；默认不自动插图 |
 | 附件材料 | 附件清单、来源、适用章节、缺失状态和替换要求 | 不把附件清单写成正式事实证明 | 可按附件清单插入相关图片或证明样张，并标明来源 |
 
+### 全文篇幅设置
+
+标书工作台目录模式顶部提供【全文设置】入口，用于设置技术标、商务标两个投标包的目标篇幅。系统面向单企业部署，不区分普通用户/高级用户，也不单独暴露资格文件、报价文件、附件材料的篇幅设置；这些内部材料归入商务标整体控制，但仍以资料完整性、占位和人工复核为主，不鼓励为了凑字数扩写。
+
+默认规则：
+
+| 分册 | 默认页数 | 字数换算 |
+| --- | ---: | ---: |
+| 技术标 | 80 页 | 约 700 字/页 |
+| 商务标 | 40 页 | 约 550 字/页 |
+| 完整标书 | 约 120 页 | 按技术标和商务标合计 |
+
+用户可选择按页数或按字数设置。保存后，后端会把设置写入 `bid_analysis.project_meta.length_settings`，并按章节重要性、评分项、风险项、章节层级和分册类型重新分配 `bid_sections.metadata.writing_plan.target_words`。单章生成和一键编写全文都会读取该目标字数。
+
+当用户设置超大目标页数，例如 300 页以上或明显超过当前章节/资料可支撑范围时，系统会在全文设置中提示风险和建议补充资料。正文生成 Prompt 明确禁止为了达到目标篇幅而重复、泛化、塞入无关内容或虚构证书、业绩、人员、金额、设备参数；资料不足时应使用 `【待补充：...】` 标明需要人工补齐的材料。
+
 ## RAG 知识库架构
 
 系统使用 Supabase PostgreSQL + pgvector 作为企业知识库主链路。ChromaDB 仍保留为本地兼容能力，便于早期测试和离线验证。
@@ -887,6 +903,7 @@ docker run -d \
 | `POST /api/bidding/interpretations/<project_id>/ai-report` | 生成 AI 深度解读 |
 | `POST /api/bidding/interpretations/<project_id>/bid-outline` | 生成分册化章节大纲，返回 `volumes + chapters` |
 | `GET /api/bidding/interpretations/<project_id>/bid-outline/stream` | SSE 流式生成分册化章节大纲 |
+| `POST /api/bidding/interpretations/<project_id>/length-settings` | 保存全文篇幅设置，按技术标/商务标目标页数或字数刷新章节写作计划 |
 | `POST /api/bidding/interpretations/<project_id>/sections/stream` | 流式生成章节正文 |
 | `POST /api/bidding/interpretations/<project_id>/download-docx` | 创建 DOCX 导出任务；可传 `volumeType` 单独导出技术标或商务标 |
 | `GET /api/bidding/interpretations/<project_id>/export-tasks/<task_id>` | 查询 DOCX 导出任务状态和下载地址 |

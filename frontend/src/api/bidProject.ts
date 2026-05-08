@@ -1,6 +1,6 @@
 import { apiClient } from './client';
 import type { GenerateBidDocumentResponse, OnlyOfficeConfigResponse, ParseStatusResponse, UploadResponse } from '../types/bid';
-import type { BidSection, ComplianceReport, InterpretationResponse } from '../types/interpretation';
+import type { BidLengthFeasibility, BidLengthSettings, BidSection, ComplianceReport, InterpretationResponse } from '../types/interpretation';
 
 export async function identifyUser(fingerprintId: string): Promise<{ userId: string | number; isNew: boolean; storage?: string }> {
   const response = await apiClient.post('/api/users/identify', { fingerprintId });
@@ -84,6 +84,18 @@ export async function saveBidSection(projectId: string, section: Partial<BidSect
     skipGlobalLoading: true,
   });
   return response.data.section;
+}
+
+export async function saveBidLengthSettings(projectId: string, settings: BidLengthSettings): Promise<{
+  settings: BidLengthSettings;
+  feasibility: BidLengthFeasibility;
+  allocations: Array<{ sectionId: string; targetWords: number }>;
+  sections: BidSection[];
+}> {
+  const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/length-settings`, settings, {
+    skipGlobalLoading: true,
+  });
+  return response.data;
 }
 
 export async function deleteBidSection(projectId: string, sectionId: string): Promise<void> {

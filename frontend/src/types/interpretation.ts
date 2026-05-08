@@ -81,6 +81,22 @@ export interface ChapterWritingPlan {
   strategy?: string;
 }
 
+export interface BidLengthSettings {
+  mode: 'pages' | 'words';
+  technicalPages: number;
+  businessPages: number;
+  technicalWords: number;
+  businessWords: number;
+  allowAutoExpand?: boolean;
+}
+
+export interface BidLengthFeasibility {
+  level: 'ok' | 'warning' | string;
+  recommendedTechnicalPages?: number;
+  recommendedBusinessPages?: number;
+  warnings?: string[];
+}
+
 export interface BidSection extends BidOutlineChapter {
   id: string;
   project_id: string;
