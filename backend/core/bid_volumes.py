@@ -34,6 +34,41 @@ VOLUME_DEFINITIONS: dict[str, dict[str, str]] = {
 
 VOLUME_ORDER = ["qualification", "business", "technical", "price", "attachment", "other"]
 
+VOLUME_ALIASES: dict[str, str] = {
+    "technical": "technical",
+    "技术": "technical",
+    "技术标": "technical",
+    "技术文件": "technical",
+    "技术响应": "technical",
+    "技术响应文件": "technical",
+    "施工组织设计": "technical",
+    "business": "business",
+    "商务": "business",
+    "商务标": "business",
+    "商务文件": "business",
+    "商务响应": "business",
+    "商务响应文件": "business",
+    "qualification": "qualification",
+    "资格": "qualification",
+    "资信": "qualification",
+    "资格文件": "qualification",
+    "资格审查": "qualification",
+    "资格审查资料": "qualification",
+    "企业资信": "qualification",
+    "企业资信库": "qualification",
+    "price": "price",
+    "报价": "price",
+    "报价文件": "price",
+    "工程量清单": "price",
+    "投标报价": "price",
+    "attachment": "attachment",
+    "附件": "attachment",
+    "附件材料": "attachment",
+    "附件册": "attachment",
+    "other": "other",
+    "其他": "other",
+}
+
 VOLUME_GENERATION_STRATEGIES: dict[str, dict[str, Any]] = {
     "technical": {
         "focus": [
@@ -130,7 +165,54 @@ def _contains_any(text: str, keywords: list[str]) -> bool:
 
 def normalize_volume_type(value: Any) -> str:
     volume_type = _text(value).strip().lower()
+    if volume_type in VOLUME_ALIASES:
+        return VOLUME_ALIASES[volume_type]
+    raw_text = _text(value).strip()
+    if raw_text in VOLUME_ALIASES:
+        return VOLUME_ALIASES[raw_text]
     return volume_type if volume_type in VOLUME_DEFINITIONS and volume_type != "all" else "other"
+
+
+def normalize_volume_list(values: Any) -> list[str]:
+    if values is None:
+        return []
+    if isinstance(values, str):
+        raw_values = [item.strip() for item in values.replace("，", ",").split(",")]
+    elif isinstance(values, (list, tuple, set)):
+        raw_values = list(values)
+    else:
+        raw_values = [values]
+    normalized: list[str] = []
+    for value in raw_values:
+        volume_type = normalize_volume_type(value)
+        if volume_type != "other" and volume_type not in normalized:
+            normalized.append(volume_type)
+    return normalized
+
+
+def asset_applicable_volumes(asset: dict[str, Any]) -> list[str]:
+    values = asset.get("applicable_volumes")
+    if not values:
+        specs = asset.get("specs") if isinstance(asset.get("specs"), dict) else {}
+        metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
+        values = specs.get("applicable_volumes") or metadata.get("applicable_volumes")
+    return normalize_volume_list(values)
+
+
+def asset_matches_volume(asset: dict[str, Any], volume_type: Any, *, allow_unscoped: bool = True) -> bool:
+    target = normalize_volume_type(volume_type)
+    if target == "other":
+        return True
+    volumes = asset_applicable_volumes(asset)
+    if not volumes:
+        return allow_unscoped
+    if target in volumes:
+        return True
+    if target == "qualification" and "attachment" in volumes:
+        return True
+    if target == "business" and any(item in volumes for item in ["qualification", "attachment"]):
+        return True
+    return False
 
 
 def volume_name(volume_type: Any) -> str:

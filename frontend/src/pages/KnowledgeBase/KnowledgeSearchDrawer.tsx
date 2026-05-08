@@ -36,6 +36,7 @@ interface KnowledgeAsset {
   license?: string;
   attribution?: string;
   applicable_sections?: string[];
+  applicable_volumes?: string[];
   tags?: string[];
   similarity?: number;
 }

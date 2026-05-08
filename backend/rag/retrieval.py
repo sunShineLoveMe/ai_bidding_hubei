@@ -9,6 +9,7 @@ from backend.rag.vector_store import init_ali_client, get_embeddings
 from backend.ai.qwen_client import stream_dashscope_api
 from backend.core.config import get_setting
 from backend.ai.rerank_client import rerank_documents
+from backend.core.bid_volumes import asset_applicable_volumes, asset_matches_volume, normalize_volume_type
 
 def search_knowledge_base(query: str, match_threshold: float = 0.5, match_count: int = 5) -> List[Dict[str, Any]]:
     """
@@ -37,7 +38,7 @@ def search_knowledge_base(query: str, match_threshold: float = 0.5, match_count:
     return rerank_documents(query, rows, text_key="content", top_n=match_count)
 
 
-def search_knowledge_assets(query: str, match_count: int = 8) -> List[Dict[str, Any]]:
+def search_knowledge_assets(query: str, match_count: int = 8, volume_type: str | None = None) -> List[Dict[str, Any]]:
     """
     检索企业知识库中的图片/资质资产。
     图片本身不直接参与语义检索，检索的是 OCR、AI 描述、规格参数和适用章节组成的 searchable_text。
@@ -49,23 +50,31 @@ def search_knowledge_assets(query: str, match_count: int = 8) -> List[Dict[str, 
     if not query_embeddings:
         return []
 
+    target_volume = normalize_volume_type(volume_type) if volume_type else None
+    rpc_payload = {
+        "query_embedding": query_embeddings[0],
+        "match_count": max(match_count * 3, match_count),
+        "filter_category": None,
+        "filter_asset_type": None,
+    }
+    if target_volume:
+        rpc_payload["filter_applicable_volume"] = target_volume
+
     response = client.rpc(
         "match_knowledge_assets",
-        {
-            "query_embedding": query_embeddings[0],
-            "match_count": max(match_count * 3, match_count),
-            "filter_category": None,
-            "filter_asset_type": None,
-        },
+        rpc_payload,
     ).execute()
 
-    assets = rerank_documents(query, response.data or [], text_key="searchable_text", top_n=match_count)
+    rpc_rows = response.data or []
+    if target_volume:
+        rpc_rows = [asset for asset in rpc_rows if asset_matches_volume(asset, target_volume, allow_unscoped=True)]
+    assets = rerank_documents(query, rpc_rows, text_key="searchable_text", top_n=match_count)
     # 过滤掉明显弱相关的资产，保留图片来源展示的准确性。
     strong_assets = [asset for asset in assets if float(asset.get("similarity") or 0) >= 0.28]
     if len(strong_assets) >= min(match_count, 3):
         return strong_assets[:match_count]
 
-    fallback_assets = _keyword_search_knowledge_assets(query, match_count=match_count)
+    fallback_assets = _keyword_search_knowledge_assets(query, match_count=match_count, volume_type=target_volume)
     merged: list[dict[str, Any]] = []
     seen: set[str] = set()
     for asset in [*strong_assets, *fallback_assets]:
@@ -80,7 +89,7 @@ def search_knowledge_assets(query: str, match_count: int = 8) -> List[Dict[str, 
     return merged
 
 
-def _keyword_search_knowledge_assets(query: str, match_count: int = 8) -> list[dict[str, Any]]:
+def _keyword_search_knowledge_assets(query: str, match_count: int = 8, volume_type: str | None = None) -> list[dict[str, Any]]:
     """
     企业资信库/产品库里经常是短标题、短说明和图片附件，纯向量召回可能偏弱。
     这里补一层轻量关键词召回，确保“营业执照图片、社保缴纳证明、类似业绩证明”等私有资产问题不会被误拒。
@@ -100,8 +109,12 @@ def _keyword_search_knowledge_assets(query: str, match_count: int = 8) -> list[d
 
     scored: list[tuple[int, dict[str, Any]]] = []
     for asset in rows:
+        if volume_type and not asset_matches_volume(asset, volume_type, allow_unscoped=True):
+            continue
         text = _asset_search_text(asset)
         score = sum(1 for token in query_tokens if token and token in text)
+        if volume_type and asset_matches_volume(asset, volume_type, allow_unscoped=False):
+            score += 4
         if "图片" in query or "照片" in query or "附件" in query or "材料" in query:
             mime_type = str(asset.get("mime_type") or "")
             if mime_type.startswith("image/"):
@@ -133,6 +146,7 @@ def _asset_search_text(asset: dict[str, Any]) -> str:
     ]
     parts.extend(asset.get("tags") or [])
     parts.extend(asset.get("applicable_sections") or [])
+    parts.extend(asset_applicable_volumes(asset))
     specs = asset.get("specs") or {}
     if isinstance(specs, dict):
         parts.extend(str(value) for value in specs.values() if value)

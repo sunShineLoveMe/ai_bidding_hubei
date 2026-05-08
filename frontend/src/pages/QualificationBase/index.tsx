@@ -20,6 +20,7 @@ interface KnowledgeAsset {
   storage_path?: string;
   license?: string;
   attribution?: string;
+  applicable_volumes?: string[];
   applicable_sections?: string[];
   tags?: string[];
   specs?: Record<string, unknown>;
@@ -38,6 +39,22 @@ const categoryMap: Record<string, string> = {
   项目业绩: '项目业绩',
   授权模板: '授权模板',
 };
+
+const volumeOptions = [
+  { label: '技术标', value: 'technical' },
+  { label: '商务标', value: 'business' },
+  { label: '资格文件', value: 'qualification' },
+  { label: '报价文件', value: 'price' },
+  { label: '附件材料', value: 'attachment' },
+];
+
+const volumeLabelMap: Record<string, string> = Object.fromEntries(volumeOptions.map(item => [item.value, item.label]));
+
+function applicableVolumes(asset: KnowledgeAsset): string[] {
+  const specs = asset.specs || {};
+  const values = asset.applicable_volumes || (specs.applicable_volumes as string[] | undefined) || [];
+  return Array.isArray(values) ? values : [];
+}
 
 function inferQualificationCategory(asset: KnowledgeAsset): string {
   const text = `${asset.title || ''} ${(asset.tags || []).join('、')} ${asset.description || ''}`;
@@ -156,6 +173,7 @@ export function QualificationBasePage(): JSX.Element {
       description: asset.description,
       certificate_no: asset.specs?.certificate_no,
       issuer: asset.specs?.issuer,
+      applicable_volumes: applicableVolumes(asset).length ? applicableVolumes(asset) : ['qualification', 'business', 'attachment'],
       tags: asset.tags || [],
       applicable_sections: asset.applicable_sections || [],
       allowed_for_bid: asset.specs?.allowed_for_bid ?? true,
@@ -184,6 +202,7 @@ export function QualificationBasePage(): JSX.Element {
       formData.append('description', values.description || '');
       formData.append('certificate_no', values.certificate_no || '');
       formData.append('issuer', values.issuer || '');
+      formData.append('applicable_volumes', JSON.stringify(values.applicable_volumes || ['qualification']));
       formData.append('tags', JSON.stringify(values.tags || []));
       formData.append('applicable_sections', JSON.stringify(values.applicable_sections || []));
       formData.append('allowed_for_bid', String(values.allowed_for_bid ?? true));
@@ -291,6 +310,9 @@ export function QualificationBasePage(): JSX.Element {
               <Input placeholder="请输入机构名称，可填写脱敏机构" />
             </Form.Item>
           </div>
+            <Form.Item label="适用分册" name="applicable_volumes" initialValue={['qualification', 'business', 'attachment']} rules={[{ required: true, message: '请选择至少一个适用分册' }]}>
+              <Select mode="multiple" placeholder="用于控制 RAG 召回和自动插图范围" options={volumeOptions} />
+            </Form.Item>
             <Form.Item label="适用投标场景" name="applicable_sections">
               <Select mode="multiple" placeholder="选择场景" options={['资格审查资料', '商务响应文件', '企业概况', '发包人提供的资料', '项目业绩'].map(value => ({ label: value, value }))} />
             </Form.Item>
@@ -351,6 +373,7 @@ export function QualificationBasePage(): JSX.Element {
             <Descriptions size="small" bordered column={1}>
               <Descriptions.Item label="文件名称">{detail.title}</Descriptions.Item>
               <Descriptions.Item label="分类">{inferQualificationCategory(detail)}</Descriptions.Item>
+              <Descriptions.Item label="适用分册">{applicableVolumes(detail).map(value => volumeLabelMap[value] || value).join('、') || '-'}</Descriptions.Item>
               <Descriptions.Item label="说明">{detail.description || '-'}</Descriptions.Item>
               <Descriptions.Item label="适用章节">{(detail.applicable_sections || []).join('、') || '-'}</Descriptions.Item>
               <Descriptions.Item label="标签">{(detail.tags || []).join('、') || '-'}</Descriptions.Item>

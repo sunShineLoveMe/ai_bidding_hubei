@@ -528,6 +528,8 @@ python -m unittest discover -s tests
 | `tests/test_api_sections.py` | 章节 API 参数校验、保存、排序、导出任务非法参数 |
 | `tests/test_mineru_status.py` | MinerU 手动导入失败状态、断点续传 Range、有效 zip 产物识别 |
 | `tests/test_compliance.py` | 正文命中后覆盖率提升、高风险缺失项识别 |
+| `tests/test_rag_retrieval.py` | RAG 文本召回、图片资产向量召回、关键词兜底、来源和图片 Prompt 组装 |
+| `tests/test_rag_asset_scoring.py` | 技术标/资格文件/商务文件的企业产品库、资信库和图片资产匹配策略 |
 
 ### 3. 配置环境变量
 
@@ -735,6 +737,7 @@ python main.py
 -- sql/20260508_create_bid_generation_tasks.sql
 -- sql/20260508_create_bid_export_tasks.sql
 -- sql/20260508_supabase_idempotency_indexes.sql
+-- sql/20260508_add_asset_applicable_volumes.sql
 ```
 
 上述脚本会创建或补充：
@@ -747,7 +750,7 @@ python main.py
 | `ai_usage_logs` | 保存 AI 调用明细，包括项目、阶段、模型、Token、人民币费用和原始 usage |
 | `ai_usage_project_summary` / `ai_usage_daily_summary` | 汇总项目级和日期级调用成本，供用量与成本中心展示 |
 
-如果 `20260429` 脚本尚未执行，系统会尽量回退 SQLite；但推荐新部署直接执行 SQL，确保主链路统一到 Supabase。`20260507_create` 脚本是 Token 用量与成本统计的必需表结构，未执行时一级菜单「用量与成本」无法展示真实统计。若历史环境已写入 USD 口径价格或日志，请补充执行 `20260507_update_ai_usage_pricing_cny.sql`，将价格和历史成本折算为人民币。`20260508_create_bid_generation_tasks.sql` 用于记录“一键编写全文”的后端任务态，支持刷新后恢复批量章节生成进度。`20260508_create_bid_export_tasks.sql` 用于记录 DOCX 导出任务，支持长文档后台导出和前端轮询。`20260508_supabase_idempotency_indexes.sql` 用于给知识库文档、知识库分片和资信/产品资产补充防重复索引，其中资信/产品资产按 `storage_bucket/storage_path` 防重；如果历史库已有重复记录，需先备份并清理重复数据后再执行。
+如果 `20260429` 脚本尚未执行，系统会尽量回退 SQLite；但推荐新部署直接执行 SQL，确保主链路统一到 Supabase。`20260507_create` 脚本是 Token 用量与成本统计的必需表结构，未执行时一级菜单「用量与成本」无法展示真实统计。若历史环境已写入 USD 口径价格或日志，请补充执行 `20260507_update_ai_usage_pricing_cny.sql`，将价格和历史成本折算为人民币。`20260508_create_bid_generation_tasks.sql` 用于记录“一键编写全文”的后端任务态，支持刷新后恢复批量章节生成进度。`20260508_create_bid_export_tasks.sql` 用于记录 DOCX 导出任务，支持长文档后台导出和前端轮询。`20260508_supabase_idempotency_indexes.sql` 用于给知识库文档、知识库分片和资信/产品资产补充防重复索引，其中资信/产品资产按 `storage_bucket/storage_path` 防重；如果历史库已有重复记录，需先备份并清理重复数据后再执行。`20260508_add_asset_applicable_volumes.sql` 用于给企业资信库和产品库增加 `applicable_volumes` 独立适用分册字段，并升级 `match_knowledge_assets` RPC，支持 RAG 和自动插图按技术标、商务标、资格文件、报价文件、附件材料做硬过滤。
 
 ### 4. 启动后端
 
@@ -996,7 +999,7 @@ docker run -d \
 ### P3：测试与质量保障
 
 - [x] 增加后端 smoke test：健康检查、上传校验、解析状态失败信息透出、DOCX 图片失败降级。
-- [ ] 增加 RAG 检索测试：文本召回、图片资产召回、无关问题拒答、来源展示。
+- [x] 增加基础 RAG 检索测试：文本召回、图片资产召回、关键词兜底、来源展示和分册资产匹配策略。
 - [ ] 增加 DOCX 导出回归测试：标题层级、表格、页眉、中文字体、图片插入、Markdown 符号清理。
 - [ ] 增加前端关键流程测试：上传招标文件、生成大纲、单章生成、批量生成、目录模式、重置状态。
 - [ ] 增加 CI：后端语法检查、前端 build、基础测试、README 链接和 SQL 文件检查。

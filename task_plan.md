@@ -619,7 +619,120 @@ python -m unittest discover -s tests
 ## Notes
 - 仍然不是完整覆盖率测试；当前重点是锁住无外部依赖的高风险主链路。
 - 测试使用 mock 和临时目录，避免真实调用模型厂商、MinerU、Supabase 或污染输出目录。
-- 后续应继续补 RAG 检索测试、DOCX 更细粒度样式测试、用量统计成本测试和前端 Playwright 流程测试。
+- 后续应继续补无关问题拒答、DOCX 更细粒度样式测试、用量统计成本测试和前端 Playwright 流程测试。
 
 ## Status
 **Complete** - 后端 MVP 生产场景测试已扩展到 DOCX、章节 API、MinerU 状态和合规覆盖基础口径。
+
+---
+
+# Task Plan: P3.3 RAG 召回质量确认与补齐
+
+## Goal
+确认企业知识助手、企业资信库、企业产品库和标书章节生成中的 RAG/资产召回真实能力，并补齐可重复验证的 MVP 测试与任务状态说明。
+
+## Scope
+- 区分“已有通用 RAG/图片资产召回”和“分册维度显式过滤/加权”的能力边界。
+- 验证知识库文本召回、图片资产向量召回、关键词兜底、Prompt 来源与图片上下文。
+- 验证章节生成和 DOCX 自动配图对技术标、资格文件、商务文件的资产选择是否符合业务常识。
+- 同步 README 和分册整改 TODO，避免后续误判为“RAG 未接入”。
+
+## Phases
+- [x] Phase 1: 梳理现有 RAG 与资产召回实现
+- [x] Phase 2: 新增 RAG/资产召回质量测试
+- [x] Phase 3: 根据测试结果补齐轻量逻辑缺口
+- [x] Phase 4: 执行后端 MVP 测试集
+- [x] Phase 5: README、任务清单和分册 TODO 同步
+
+## Findings
+- 企业知识助手已通过 `backend/rag/retrieval.py` 支持文本分片、图片/资质资产、Rerank 和关键词兜底召回。
+- 标书章节生成已通过 `backend/ai/section_writer.py` 按分册策略选择企业资料候选。
+- DOCX 图文导出已通过 `backend/api/routes.py` 对图片资产做章节/分册打分、数量限制和导出报告。
+- 当前缺口主要是缺少测试证明与任务清单状态修正，不是从零接入 RAG。
+- 新增测试确认：技术标优先产品/设备图，资格文件优先资信/证照图，商务文件默认谨慎插图，仅明确附件或证明材料时插图。
+- 当时独立“适用分册”字段仍未新增；后续已在 P2.4 中补齐 `applicable_volumes`。
+
+## Files Changed
+- `tests/test_rag_retrieval.py`
+- `tests/test_rag_asset_scoring.py`
+- `README.md`
+- `docs/技术标商务标分册整改TODO.md`
+- `task_plan.md`
+
+## Verification
+
+```bash
+python -m unittest discover -s tests
+```
+
+验证结果：
+- 后端 MVP 测试通过，当前共 26 个测试。
+
+## Errors Encountered
+- `python -m unittest tests.test_rag_retrieval tests.test_rag_asset_scoring` 因 `tests/` 不是 Python package 导致模块名导入失败；改用 `python -m unittest discover -s tests -p 'test_rag*.py'` 后通过。
+- 初版商务标插图测试预期过宽；实际策略是商务标默认谨慎插图。测试已改为同时覆盖“默认不插图”和“明确证明材料时插图”。
+
+## Status
+**Complete** - RAG 召回质量已通过后端测试确认，资料/产品/资信召回能力和分册资产匹配状态已同步到 README 与分册整改 TODO。
+
+---
+
+# Task Plan: P2.4 企业资产适用分册硬过滤
+
+## Goal
+为企业资信库和产品库增加独立适用分册字段，并让 RAG、章节生成和 DOCX 自动插图优先遵守该字段，减少跨分册误召回。
+
+## Scope
+- Supabase 增加 `knowledge_assets.applicable_volumes` 字段和 GIN 索引。
+- 升级 `match_knowledge_assets` RPC，支持 `filter_applicable_volume`。
+- 后端上传/编辑资产时保存 `applicable_volumes`，同时写入 `specs/metadata` 兼容老代码和老数据。
+- 企业产品库、企业资信库编辑弹窗增加“适用分册”多选。
+- RAG 资产检索、章节资料候选、DOCX 图片选择接入显式分册过滤；未标注老数据保持兼容召回。
+- 补充测试验证显式分册过滤和跨分册阻断。
+
+## Phases
+- [x] Phase 1: 新增 Supabase SQL migration
+- [x] Phase 2: 后端资产 payload、RAG 检索和图片选择接入 `applicable_volumes`
+- [x] Phase 3: 产品库、资信库前端表单增加适用分册字段
+- [x] Phase 4: 补充 RAG/资产匹配测试
+- [x] Phase 5: 执行后端测试、语法检查和前端 build
+- [x] Phase 6: README 和分册整改 TODO 同步
+
+## Files Changed
+- `sql/20260508_add_asset_applicable_volumes.sql`
+- `sql/20260428_create_knowledge_assets.sql`
+- `backend/core/bid_volumes.py`
+- `backend/api/routes.py`
+- `backend/ai/section_writer.py`
+- `backend/rag/retrieval.py`
+- `frontend/src/pages/ProductBase/index.tsx`
+- `frontend/src/pages/QualificationBase/index.tsx`
+- `frontend/src/pages/KnowledgeBase/KnowledgeSearchDrawer.tsx`
+- `tests/test_rag_retrieval.py`
+- `tests/test_rag_asset_scoring.py`
+- `README.md`
+- `docs/技术标商务标分册整改TODO.md`
+- `task_plan.md`
+
+## Verification
+
+```bash
+python -m unittest discover -s tests -p 'test_rag*.py'
+python -m unittest discover -s tests
+python -m py_compile backend/core/bid_volumes.py backend/api/routes.py backend/ai/section_writer.py backend/rag/retrieval.py
+npm run build
+```
+
+验证结果：
+- RAG 相关测试通过，当前 12 个 RAG 测试。
+- 后端 MVP 测试通过，当前共 28 个测试。
+- Python 语法检查通过。
+- 前端生产构建通过；Vite 仍提示主包超过 500 kB，这是既有体积警告，不影响本次功能。
+
+## Notes
+- 新库或已上线 Supabase 环境需要执行 `sql/20260508_add_asset_applicable_volumes.sql`。
+- 新字段为硬过滤优先；空字段老资产仍允许按原规则召回，避免历史数据突然不可用。
+- 产品库默认适用 `technical`；资信库默认适用 `qualification/business/attachment`。
+
+## Status
+**Complete** - 企业资产适用分册字段、RAG 硬过滤、前端维护入口、测试和文档同步已完成。

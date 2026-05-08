@@ -2,7 +2,7 @@ import re
 from typing import Any, Iterator
 
 from backend.core.config import build_enterprise_context
-from backend.core.bid_volumes import section_volume_type, volume_generation_strategy, volume_name
+from backend.core.bid_volumes import asset_applicable_volumes, asset_matches_volume, section_volume_type, volume_generation_strategy, volume_name
 from backend.ai.bid_writing_plan import ensure_chapter_writing_plan
 from backend.db.supabase_repo import get_project_interpretation, list_knowledge_assets
 from backend.ai.qwen_client import call_dashscope_api, stream_dashscope_api
@@ -41,6 +41,7 @@ def _asset_text(asset: dict[str, Any]) -> str:
     ]
     parts.extend(asset.get("tags") or [])
     parts.extend(asset.get("applicable_sections") or [])
+    parts.extend(asset_applicable_volumes(asset))
     specs = asset.get("specs") or {}
     if isinstance(specs, dict):
         parts.extend(str(value) for value in specs.values() if value)
@@ -71,6 +72,10 @@ def _supporting_asset_score(asset: dict[str, Any], chapter: dict[str, Any], volu
     ).lower()
     library_type = _asset_library_type(asset)
     score = 0
+    if not asset_matches_volume(asset, volume_type, allow_unscoped=True):
+        return -100
+    if asset_matches_volume(asset, volume_type, allow_unscoped=False):
+        score += 30
     if volume_type == "technical":
         if library_type == "product" or any(keyword in asset_text for keyword in ["产品", "设备", "参数", "工艺", "施工", "质量", "安全"]):
             score += 20

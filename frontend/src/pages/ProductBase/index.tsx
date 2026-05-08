@@ -20,6 +20,7 @@ interface KnowledgeAsset {
   storage_path?: string;
   license?: string;
   attribution?: string;
+  applicable_volumes?: string[];
   applicable_sections?: string[];
   tags?: string[];
   specs?: Record<string, unknown>;
@@ -42,8 +43,25 @@ const preferredCategories = [
   '水库除险加固',
 ];
 
+const volumeOptions = [
+  { label: '技术标', value: 'technical' },
+  { label: '商务标', value: 'business' },
+  { label: '资格文件', value: 'qualification' },
+  { label: '报价文件', value: 'price' },
+  { label: '附件材料', value: 'attachment' },
+];
+
+const volumeLabelMap: Record<string, string> = Object.fromEntries(volumeOptions.map(item => [item.value, item.label]));
+
+function applicableVolumes(asset: KnowledgeAsset): string[] {
+  const specs = asset.specs || {};
+  const values = asset.applicable_volumes || (specs.applicable_volumes as string[] | undefined) || [];
+  return Array.isArray(values) ? values : [];
+}
+
 function scenario(asset: KnowledgeAsset): string {
-  return (asset.applicable_sections || []).slice(0, 2).join('、') || '技术响应文件';
+  const volumes = applicableVolumes(asset).map(value => volumeLabelMap[value] || value).filter(Boolean);
+  return volumes.slice(0, 2).join('、') || (asset.applicable_sections || []).slice(0, 2).join('、') || '技术标';
 }
 
 function versionLabel(asset: KnowledgeAsset): string {
@@ -155,6 +173,7 @@ export function ProductBasePage(): JSX.Element {
       category: asset.category,
       description: asset.description,
       product_model: asset.specs?.product_model,
+      applicable_volumes: applicableVolumes(asset).length ? applicableVolumes(asset) : ['technical'],
       tags: asset.tags || [],
       applicable_sections: asset.applicable_sections || [],
       allowed_for_bid: asset.specs?.allowed_for_bid ?? true,
@@ -181,6 +200,7 @@ export function ProductBasePage(): JSX.Element {
       formData.append('category', values.category);
       formData.append('description', values.description || '');
       formData.append('product_model', values.product_model || '');
+      formData.append('applicable_volumes', JSON.stringify(values.applicable_volumes || ['technical']));
       formData.append('tags', JSON.stringify(values.tags || []));
       formData.append('applicable_sections', JSON.stringify(values.applicable_sections || []));
       formData.append('allowed_for_bid', String(values.allowed_for_bid ?? true));
@@ -290,6 +310,9 @@ export function ProductBasePage(): JSX.Element {
               <Input placeholder="例如：DN800、Q235B、定制加工件" />
             </Form.Item>
           </div>
+            <Form.Item label="适用分册" name="applicable_volumes" initialValue={['technical']} rules={[{ required: true, message: '请选择至少一个适用分册' }]}>
+              <Select mode="multiple" options={volumeOptions} placeholder="用于控制 RAG 召回和自动插图范围" />
+            </Form.Item>
             <Form.Item label="推荐插入章节" name="applicable_sections">
               <Select mode="multiple" options={['技术响应文件', '施工组织设计', '设备配置方案', '质量保证措施', '商务响应文件'].map(value => ({ label: value, value }))} />
             </Form.Item>
@@ -348,6 +371,7 @@ export function ProductBasePage(): JSX.Element {
               <Descriptions.Item label="产品名称">{detail.title}</Descriptions.Item>
               <Descriptions.Item label="产品分类">{detail.category || '-'}</Descriptions.Item>
               <Descriptions.Item label="适用场景">{scenario(detail)}</Descriptions.Item>
+              <Descriptions.Item label="适用分册">{applicableVolumes(detail).map(value => volumeLabelMap[value] || value).join('、') || '-'}</Descriptions.Item>
               <Descriptions.Item label="能力标签">{(detail.tags || []).join('、') || '-'}</Descriptions.Item>
               <Descriptions.Item label="产品说明">{detail.description || '-'}</Descriptions.Item>
               <Descriptions.Item label="适用章节">{(detail.applicable_sections || []).join('、') || '-'}</Descriptions.Item>

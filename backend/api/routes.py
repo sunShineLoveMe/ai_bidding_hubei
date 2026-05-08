@@ -23,7 +23,7 @@ from backend.ai.interpreter import generate_ai_interpretation_report
 from backend.ai.compliance_checker import build_compliance_report
 from backend.db.supabase_repo import cancel_bid_generation_task, create_bid_export_task, create_bid_generation_task, create_knowledge_asset, delete_bid_project, delete_bid_section, download_bid_file_to_local, download_knowledge_asset_file_variant, get_ai_usage_overview, get_bid_export_task, get_bid_file, get_latest_bid_file_for_project, get_latest_bid_generation_task, get_onlyoffice_document, get_project_interpretation, list_bid_history, list_bid_sections, list_recent_bid_projects, reorder_bid_sections, reset_bid_sections_generation, save_onlyoffice_document, sync_uploaded_tender_to_supabase, update_bid_export_task, update_bid_file_parse_status, update_bid_generation_task_item, update_bid_section_content, update_knowledge_asset, upload_knowledge_asset_file, upsert_bid_section
 from backend.core.llm_json_utils import strip_llm_json
-from backend.core.bid_volumes import delivery_volume_type, section_volume_type, volume_name
+from backend.core.bid_volumes import asset_applicable_volumes, asset_matches_volume, delivery_volume_type, normalize_volume_list, section_volume_type, volume_name
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import shutil
@@ -285,6 +285,7 @@ def _asset_text(asset: dict) -> str:
     ]
     parts.extend(asset.get("tags") or [])
     parts.extend(asset.get("applicable_sections") or [])
+    parts.extend(asset_applicable_volumes(asset))
     return " ".join(str(item) for item in parts if item).lower()
 
 
@@ -457,6 +458,8 @@ def _asset_allowed_for_volume(asset: dict, section: dict) -> bool:
     volume_type = section_volume_type(section)
     if volume_type == "price":
         return False
+    if not asset_matches_volume(asset, volume_type, allow_unscoped=True):
+        return False
     asset_text = _asset_text(asset)
     metadata = asset.get("metadata") or {}
     specs = asset.get("specs") or {}
@@ -507,6 +510,8 @@ def _build_section_image_markdown(
         for asset in assets:
             image_ref = _asset_image_ref(asset)
             if not image_ref:
+                continue
+            if not _asset_allowed_for_volume(asset, section):
                 continue
             asset_text = _asset_text(asset)
             if any(keyword in asset_text for keyword in fallback_keywords) or any(keyword in section_text for keyword in fallback_keywords):
@@ -2340,6 +2345,7 @@ def _compact_followup_assets(assets: list[dict]) -> list[dict]:
             "description": asset.get("description"),
             "tags": asset.get("tags") or [],
             "applicable_sections": asset.get("applicable_sections") or [],
+            "applicable_volumes": asset_applicable_volumes(asset),
         })
     return compacted
 
@@ -2555,6 +2561,7 @@ def _build_asset_searchable_text(payload: dict) -> str:
     ]
     parts.extend(payload.get("tags") or [])
     parts.extend(payload.get("applicable_sections") or [])
+    parts.extend(payload.get("applicable_volumes") or [])
     specs = payload.get("specs") or {}
     if isinstance(specs, dict):
         parts.extend(str(value) for value in specs.values() if value)
@@ -2574,6 +2581,17 @@ def _asset_payload_from_form(storage_info: dict | None = None, existing: dict | 
     description = (request.form.get('description') or existing.get("description") or '').strip()
     tags = _split_form_list(request.form.get('tags')) if 'tags' in request.form else (existing.get("tags") or [])
     applicable_sections = _split_form_list(request.form.get('applicable_sections')) if 'applicable_sections' in request.form else (existing.get("applicable_sections") or [])
+    fallback_volumes = (
+        existing.get("applicable_volumes")
+        or (existing.get("specs") or {}).get("applicable_volumes")
+        or (existing.get("metadata") or {}).get("applicable_volumes")
+        or (["technical"] if library_type == "product" else ["qualification", "business", "attachment"])
+    )
+    applicable_volumes = (
+        normalize_volume_list(_split_form_list(request.form.get('applicable_volumes')))
+        if 'applicable_volumes' in request.form
+        else normalize_volume_list(fallback_volumes)
+    )
     allowed_for_bid = request.form.get('allowed_for_bid', str((existing.get("specs") or {}).get("allowed_for_bid", True))).lower() in {'1', 'true', 'yes', 'on'}
     is_sensitive = request.form.get('is_sensitive', str(existing.get("is_sensitive", False))).lower() in {'1', 'true', 'yes', 'on'}
     anonymized = request.form.get('anonymized', str(existing.get("anonymized", True))).lower() in {'1', 'true', 'yes', 'on'}
@@ -2581,6 +2599,7 @@ def _asset_payload_from_form(storage_info: dict | None = None, existing: dict | 
         **(existing.get("specs") or {}),
         "library_type": library_type,
         "allowed_for_bid": allowed_for_bid,
+        "applicable_volumes": applicable_volumes,
         "usage_note": request.form.get('usage_note') or (existing.get("specs") or {}).get("usage_note") or '',
         "certificate_no": request.form.get('certificate_no') or (existing.get("specs") or {}).get("certificate_no") or '',
         "issuer": request.form.get('issuer') or (existing.get("specs") or {}).get("issuer") or '',
@@ -2590,6 +2609,7 @@ def _asset_payload_from_form(storage_info: dict | None = None, existing: dict | 
         **(existing.get("metadata") or {}),
         "library_type": library_type,
         "allowed_for_bid": allowed_for_bid,
+        "applicable_volumes": applicable_volumes,
         "upload_source": "enterprise_library_page",
     }
     if storage_info:
@@ -2613,6 +2633,7 @@ def _asset_payload_from_form(storage_info: dict | None = None, existing: dict | 
         "anonymized": anonymized,
         "industry": existing.get("industry") or "水利行业",
         "applicable_sections": applicable_sections,
+        "applicable_volumes": applicable_volumes,
         "tags": tags,
         "specs": specs,
         "ai_caption": description,

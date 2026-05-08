@@ -48,6 +48,7 @@ create table if not exists public.knowledge_assets (
   -- 业务标签
   industry text default '水利行业',
   applicable_sections text[] default '{}',
+  applicable_volumes text[] default '{}',
   tags text[] default '{}',
   specs jsonb default '{}'::jsonb,
 
@@ -85,6 +86,9 @@ create index if not exists knowledge_assets_tags_idx
 create index if not exists knowledge_assets_applicable_sections_idx
   on public.knowledge_assets using gin(applicable_sections);
 
+create index if not exists knowledge_assets_applicable_volumes_idx
+  on public.knowledge_assets using gin(applicable_volumes);
+
 create index if not exists knowledge_assets_metadata_idx
   on public.knowledge_assets using gin(metadata);
 
@@ -116,7 +120,8 @@ create or replace function public.match_knowledge_assets(
   query_embedding vector(1024),
   match_count int default 8,
   filter_category text default null,
-  filter_asset_type text default null
+  filter_asset_type text default null,
+  filter_applicable_volume text default null
 )
 returns table (
   id uuid,
@@ -131,6 +136,7 @@ returns table (
   license text,
   attribution text,
   applicable_sections text[],
+  applicable_volumes text[],
   tags text[],
   specs jsonb,
   searchable_text text,
@@ -153,6 +159,7 @@ as $$
     ka.license,
     ka.attribution,
     ka.applicable_sections,
+    ka.applicable_volumes,
     ka.tags,
     ka.specs,
     ka.searchable_text,
@@ -163,6 +170,13 @@ as $$
     and ka.status = 'indexed'
     and (filter_category is null or ka.category = filter_category)
     and (filter_asset_type is null or ka.asset_type = filter_asset_type)
+    and (
+      filter_applicable_volume is null
+      or coalesce(array_length(ka.applicable_volumes, 1), 0) = 0
+      or filter_applicable_volume = any(ka.applicable_volumes)
+      or (filter_applicable_volume = 'qualification' and 'attachment' = any(ka.applicable_volumes))
+      or (filter_applicable_volume = 'business' and ('qualification' = any(ka.applicable_volumes) or 'attachment' = any(ka.applicable_volumes)))
+    )
   order by ka.embedding <=> query_embedding
   limit match_count;
 $$;
