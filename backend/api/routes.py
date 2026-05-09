@@ -18,7 +18,7 @@ from urllib.parse import quote
 from backend.ai.qwen_client import call_dashscope_api, generate_bid_section
 from backend.export.md_to_word import clean_formal_bid_text, convert_md_to_word
 from backend.ai.chapter_planner import generate_bid_outline, stream_bid_outline
-from backend.ai.section_writer import stream_bid_section
+from backend.ai.section_writer import estimate_bid_content_words, stream_bid_section
 from backend.ai.interpreter import generate_ai_interpretation_report
 from backend.ai.compliance_checker import build_compliance_report
 from backend.ai.semantic_compliance import build_semantic_compliance_report
@@ -1331,7 +1331,28 @@ def stream_interpretation_bid_section(project_id):
                                 yield f"data: {json.dumps({'content': image_markdown}, ensure_ascii=False)}\n\n"
                         except Exception:
                             logging.exception("章节图文配图失败，继续保存纯文本章节: %s", chapter.get("id"))
-                    saved_section = update_bid_section_content(project_id, chapter["id"], full_content, "generated", chapter)
+                    actual_words = estimate_bid_content_words(full_content)
+                    target_words = None
+                    metadata = chapter.get("metadata") if isinstance(chapter.get("metadata"), dict) else {}
+                    writing_plan = metadata.get("writing_plan") if isinstance(metadata.get("writing_plan"), dict) else {}
+                    try:
+                        target_words = int(float(writing_plan.get("target_words") or 0)) or None
+                    except (TypeError, ValueError):
+                        target_words = None
+                    saved_section = update_bid_section_content(
+                        project_id,
+                        chapter["id"],
+                        full_content,
+                        "generated",
+                        chapter,
+                        metadata_patch={
+                            "generation_status": "generated",
+                            "writing_status": "generated",
+                            "actual_words": actual_words,
+                            "target_words": target_words,
+                            "length_completion_ratio": round(actual_words / target_words, 3) if target_words else None,
+                        },
+                    )
                     if saved_section.get("id") != chapter.get("id"):
                         yield "event: saved\n"
                         yield f"data: {json.dumps({'id': saved_section.get('id'), 'oldId': chapter.get('id')}, ensure_ascii=False)}\n\n"

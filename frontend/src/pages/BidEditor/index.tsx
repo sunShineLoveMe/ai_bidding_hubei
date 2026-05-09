@@ -496,7 +496,9 @@ export function BidEditorPage(): JSX.Element {
       setLengthFeasibility(result.feasibility);
       setSelectedId(current => current || drafts[0]?.id || '');
       setLengthSettingsOpen(false);
-      message.success('全文篇幅设置已保存，章节目标字数已更新');
+      const allocatedWords = (result.allocations || []).reduce((sum, item) => sum + (Number(item.targetWords) || 0), 0);
+      const targetWords = settings.technicalWords + settings.businessWords;
+      message.success(`全文篇幅设置已保存，章节计划 ${allocatedWords.toLocaleString()} / 用户目标 ${targetWords.toLocaleString()} 字`);
     } catch (error) {
       if (error && typeof error === 'object' && 'errorFields' in error) {
         return;
@@ -1300,7 +1302,9 @@ export function BidEditorPage(): JSX.Element {
     }
     return {
       label: `目标 ${targetChapterWords(chapter)}字`,
-      tooltip: '目标字数：来自章节写作计划；如当前项目尚未保存计划，则按章节标题、层级和用途临时推导。',
+      tooltip: chapterWritingPlan(chapter).length_settings_source === 'project_length_settings'
+        ? `目标字数已由全文生成设置分配；资料不足策略：${chapterWritingPlan(chapter).allow_auto_expand ? '允许围绕评分点和可验证措施扩写' : '稳健生成，缺失处使用待补充占位'}。`
+        : '目标字数：来自章节写作计划；如当前项目尚未保存计划，则按章节标题、层级和用途临时推导。',
       generated: false,
       failed: false,
     };
@@ -2408,10 +2412,10 @@ export function BidEditorPage(): JSX.Element {
             />
             <div className="outline-summary">
               <span>{volumeLabel(activeVolume)}章节：{scopedChapters.length}</span>
-              <span>已生成：{generatedCount}</span>
-              <span>目标页数：{currentEstimatedPages}/{lengthGoalPages} 页</span>
-              <span>目标字数：{actualChars.toLocaleString()}/{lengthGoalChars.toLocaleString()} 字</span>
-              <span>计划总字数：{estimatedTotalChars.toLocaleString()}（约{estimatedPages}页）</span>
+              <span>已生成章节：{generatedCount}</span>
+              <span>用户目标：{lengthGoalPages} 页 / {lengthGoalChars.toLocaleString()} 字</span>
+              <span>已生成：{currentEstimatedPages} 页 / {actualChars.toLocaleString()} 字</span>
+              <span>章节计划：{estimatedTotalChars.toLocaleString()} 字（约{estimatedPages}页）</span>
               <span>篇幅进度：{lengthProgress}%</span>
               <span>进度：{generationProgress}%</span>
               {batchGenerating ? <span>批量并发：{BATCH_SECTION_CONCURRENCY} 路</span> : null}

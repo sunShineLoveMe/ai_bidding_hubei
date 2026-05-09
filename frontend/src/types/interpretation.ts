@@ -79,6 +79,8 @@ export interface ChapterWritingPlan {
   needs_case?: boolean;
   generation_mode?: 'single_pass' | 'multi_pass' | string;
   strategy?: string;
+  length_settings_source?: string;
+  allow_auto_expand?: boolean;
 }
 
 export interface BidLengthSettings {

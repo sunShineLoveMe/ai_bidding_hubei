@@ -1,3 +1,4 @@
+import logging
 import re
 from typing import Any, Iterator
 
@@ -29,6 +30,39 @@ def _chunk_text(content: str, size: int = 90) -> Iterator[str]:
             current += part
     if current:
         yield current
+
+
+def estimate_bid_content_words(content: str) -> int:
+    """Estimate Chinese bid正文 length after stripping common Markdown syntax."""
+    text = re.sub(r"```.*?```", "", content or "", flags=re.S)
+    text = re.sub(r"!\[[^\]]*]\([^)]*\)", "", text)
+    text = re.sub(r"\[[^\]]*]\([^)]*\)", "", text)
+    text = re.sub(r"[#>*_`|:\-\s]+", "", text)
+    cjk_chars = re.findall(r"[\u4e00-\u9fff]", text)
+    latin_words = re.findall(r"[A-Za-z0-9]+", re.sub(r"[\u4e00-\u9fff]", " ", text))
+    return len(cjk_chars) + len(latin_words)
+
+
+def _target_words(chapter: dict[str, Any]) -> int:
+    plan = ensure_chapter_writing_plan(chapter)
+    try:
+        return max(0, int(float(plan.get("target_words") or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _allow_auto_expand(chapter: dict[str, Any]) -> bool:
+    metadata = chapter.get("metadata") if isinstance(chapter.get("metadata"), dict) else {}
+    length_settings = metadata.get("length_settings") if isinstance(metadata.get("length_settings"), dict) else {}
+    plan = ensure_chapter_writing_plan(chapter)
+    return bool(plan.get("allow_auto_expand") or length_settings.get("allowAutoExpand"))
+
+
+def _needs_length_supplement(content: str, chapter: dict[str, Any], threshold: float = 0.75) -> bool:
+    target_words = _target_words(chapter)
+    if target_words < 800:
+        return False
+    return estimate_bid_content_words(content) < int(target_words * threshold)
 
 
 def _asset_text(asset: dict[str, Any]) -> str:
@@ -124,6 +158,85 @@ def _compact_supporting_assets(chapter: dict[str, Any], volume_type: str, limit:
     return "\n".join(rows)
 
 
+def build_section_supplement_prompt(project_id: str, chapter: dict[str, Any], current_content: str) -> str:
+    payload = get_project_interpretation(project_id)
+    project = payload.get("project") or {}
+    analysis = payload.get("analysis") or {}
+    project_meta = analysis.get("project_meta") or {}
+
+    title = _text(chapter.get("title")) or "未命名章节"
+    purpose = _text(chapter.get("purpose"))
+    writing_plan = ensure_chapter_writing_plan(chapter)
+    volume_type = section_volume_type(chapter)
+    volume_strategy = volume_generation_strategy(volume_type)
+    target_words = _target_words(chapter)
+    actual_words = estimate_bid_content_words(current_content)
+    missing_words = max(0, target_words - actual_words)
+    allow_auto_expand = _allow_auto_expand(chapter)
+    supporting_assets = _compact_supporting_assets(chapter, volume_type)
+    current_excerpt = (current_content or "").strip()
+    if len(current_excerpt) > 4200:
+        current_excerpt = current_excerpt[-4200:]
+
+    expand_rule = (
+        "允许围绕评分点、可验证实施措施、质量安全控制、进度资源配置和风险应对展开，但不得编造企业专属事实。"
+        if allow_auto_expand
+        else "仅补充有依据的内容；资料不足时输出【待补充：...】、复核清单或表格占位，不得空泛扩写。"
+    )
+
+    return f"""
+你是资深投标文件撰写专家。当前章节已生成一版，但低于该章节写作计划目标。请只输出“可直接追加到本章节末尾”的补写内容，不要重复已有内容，不要输出解释。
+
+补写目标：
+- 章节标题：{title}
+- 编写目标：{purpose or "需人工复核"}
+- 所属分册：{volume_name(volume_type)}（{volume_type}）
+- 章节目标字数：{target_words or "需人工复核"} 字
+- 当前估算字数：{actual_words} 字
+- 建议补写字数：约 {missing_words} 字，优先补足到目标字数的 75% 以上
+- 资料不足策略：{expand_rule}
+
+必须遵守：
+1. 补写内容必须承接当前章节，不要重新生成标题，不要重写已出现段落。
+2. 优先补充与评分项、响应要求、风险控制、实施措施、表格化承诺有关的内容。
+3. 不得为了凑页数重复同义段落、塞入无关内容或虚构证书编号、人员姓名、合同金额、具体日期。
+4. 缺少企业事实时使用“【待补充：...】”占位，并说明需要补充的材料。
+5. 正式正文不得使用 emoji、图标符号或装饰性提示符。
+
+项目信息：
+- 项目名称：{project_meta.get("project_name") or project.get("project_name") or "需人工复核"}
+- 招标编号：{project_meta.get("tender_no") or project.get("project_no") or "需人工复核"}
+- 项目摘要：{analysis.get("summary") or "需人工复核"}
+
+分册写作策略：
+{_compact_list(volume_strategy.get("focus"), limit=8)}
+
+当前命中的企业资料候选：
+{supporting_assets}
+
+响应要点：
+{_compact_list(chapter.get("response_points") or [])}
+
+关联要求：
+{_compact_list(chapter.get("mapped_requirements") or [])}
+
+关联评分项：
+{_compact_list(chapter.get("mapped_scoring_items") or [])}
+
+风险提醒：
+{_compact_list(chapter.get("mapped_risks") or [])}
+
+章节写作计划：
+- 目标字数：{writing_plan.get("target_words") or "需人工复核"} 字
+- 建议篇幅：{writing_plan.get("suggested_pages") or "需人工复核"} 页
+- 生成方式：{writing_plan.get("generation_mode") or "single_pass"}
+- 写作策略：{writing_plan.get("strategy") or "需人工复核"}
+
+当前章节已有内容节选：
+{current_excerpt or "暂无"}
+""".strip()
+
+
 def build_section_prompt(project_id: str, chapter: dict[str, Any]) -> str:
     payload = get_project_interpretation(project_id)
     project = payload.get("project") or {}
@@ -206,6 +319,7 @@ def build_section_prompt(project_id: str, chapter: dict[str, Any]) -> str:
 - 目标字数：{writing_plan.get("target_words") or "需人工复核"} 字
 - 建议篇幅：{writing_plan.get("suggested_pages") or "需人工复核"} 页
 - 生成方式：{writing_plan.get("generation_mode") or "single_pass"}
+- 资料不足策略：{"允许围绕评分点和可验证措施扩写" if _allow_auto_expand(chapter) else "稳健生成，缺失处使用待补充占位"}
 - 是否需要表格：{"是" if writing_plan.get("needs_table") else "否"}
 - 是否需要图片/流程图：{"是" if writing_plan.get("needs_image") else "否"}
 - 是否需要资质材料：{"是" if writing_plan.get("needs_qualification") else "否"}
@@ -240,6 +354,7 @@ def stream_bid_section(project_id: str, chapter: dict[str, Any]) -> Iterator[dic
     }
 
     emitted = False
+    generated_content = ""
     try:
         for chunk in stream_dashscope_api(
             [{"role": "user", "content": prompt}],
@@ -254,6 +369,7 @@ def stream_bid_section(project_id: str, chapter: dict[str, Any]) -> Iterator[dic
             },
         ):
             emitted = True
+            generated_content += chunk
             yield {
                 "type": "chunk",
                 "content": chunk,
@@ -275,6 +391,7 @@ def stream_bid_section(project_id: str, chapter: dict[str, Any]) -> Iterator[dic
         content = response["output"]["choices"][0]["message"]["content"]
         for chunk in _chunk_text(content):
             emitted = True
+            generated_content += chunk
             yield {
                 "type": "chunk",
                 "content": chunk,
@@ -285,6 +402,64 @@ def stream_bid_section(project_id: str, chapter: dict[str, Any]) -> Iterator[dic
             "type": "chunk",
             "content": "【待补充：当前章节正文生成失败，请稍后重新生成。】",
         }
+        generated_content = "【待补充：当前章节正文生成失败，请稍后重新生成。】"
+
+    if emitted and _needs_length_supplement(generated_content, chapter):
+        supplement_prompt = build_section_supplement_prompt(project_id, chapter, generated_content)
+        supplement_prefix = "\n\n"
+        generated_content += supplement_prefix
+        yield {
+            "type": "chunk",
+            "content": supplement_prefix,
+        }
+        try:
+            for chunk in stream_dashscope_api(
+                [{"role": "user", "content": supplement_prompt}],
+                usage_context={
+                    "project_id": project_id,
+                    "section_id": chapter.get("id"),
+                    "stage": "bid_section_length_supplement",
+                    "metadata": {
+                        "chapter_title": chapter.get("title"),
+                        "volume_type": section_volume_type(chapter),
+                        "target_words": _target_words(chapter),
+                        "actual_words": estimate_bid_content_words(generated_content),
+                        "allow_auto_expand": _allow_auto_expand(chapter),
+                    },
+                },
+            ):
+                generated_content += chunk
+                yield {
+                    "type": "chunk",
+                    "content": chunk,
+                }
+        except Exception:
+            try:
+                response = call_dashscope_api(
+                    [{"role": "user", "content": supplement_prompt}],
+                    json_mode=False,
+                    usage_context={
+                        "project_id": project_id,
+                        "section_id": chapter.get("id"),
+                        "stage": "bid_section_length_supplement_fallback",
+                        "metadata": {
+                            "chapter_title": chapter.get("title"),
+                            "volume_type": section_volume_type(chapter),
+                            "target_words": _target_words(chapter),
+                            "actual_words": estimate_bid_content_words(generated_content),
+                            "allow_auto_expand": _allow_auto_expand(chapter),
+                        },
+                    },
+                )
+                supplement = response["output"]["choices"][0]["message"]["content"]
+                for chunk in _chunk_text(supplement):
+                    generated_content += chunk
+                    yield {
+                        "type": "chunk",
+                        "content": chunk,
+                    }
+            except Exception:
+                logging.exception("章节篇幅补写失败，保留首轮生成内容: %s", chapter.get("id"))
 
     yield {
         "type": "done",

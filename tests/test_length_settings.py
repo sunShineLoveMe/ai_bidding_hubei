@@ -87,6 +87,8 @@ class LengthSettingsTest(unittest.TestCase):
 
         self.assertEqual(updated[0]["metadata"]["writing_plan"]["target_words"], 7000)
         self.assertEqual(updated[0]["metadata"]["writing_plan"]["length_settings_source"], "project_length_settings")
+        self.assertIn("allow_auto_expand", updated[0]["metadata"]["writing_plan"])
+        self.assertIn("allowAutoExpand", updated[0]["metadata"]["length_settings"])
 
     def test_section_prompt_includes_target_words_and_no_padding_rule(self):
         from backend.ai.section_writer import build_section_prompt
@@ -113,6 +115,40 @@ class LengthSettingsTest(unittest.TestCase):
         self.assertIn("目标字数：7000 字", prompt)
         self.assertIn("不得为了凑页数重复同义段落", prompt)
         self.assertIn("【待补充：...】", prompt)
+
+    def test_section_supplement_prompt_is_chapter_scoped(self):
+        from backend.ai.section_writer import build_section_supplement_prompt, estimate_bid_content_words
+
+        chapter = {
+            "id": "technical-1",
+            "title": "施工组织设计",
+            "level": 1,
+            "response_points": ["施工进度保障"],
+            "mapped_scoring_items": ["施工组织方案完整性"],
+            "metadata": {
+                "volume_type": "technical",
+                "writing_plan": {
+                    "target_words": 7000,
+                    "suggested_pages": "10",
+                    "allow_auto_expand": True,
+                },
+            },
+        }
+        payload = {
+            "project": {"project_name": "测试工程"},
+            "analysis": {"project_meta": {}, "summary": "测试摘要"},
+        }
+
+        with patch("backend.ai.section_writer.get_project_interpretation", return_value=payload), patch(
+            "backend.ai.section_writer.list_knowledge_assets", return_value=[]
+        ):
+            prompt = build_section_supplement_prompt("project-id", chapter, "已有正文")
+
+        self.assertIn("只输出“可直接追加到本章节末尾”的补写内容", prompt)
+        self.assertIn("章节标题：施工组织设计", prompt)
+        self.assertIn("章节目标字数：7000 字", prompt)
+        self.assertIn("允许围绕评分点", prompt)
+        self.assertGreater(estimate_bid_content_words("## 标题\n\n质量控制措施"), 0)
 
 
 if __name__ == "__main__":

@@ -163,8 +163,11 @@ def apply_length_allocations_to_sections(
             "target_words": target_words,
             "suggested_pages": str(max(1, round(target_words / WORDS_PER_PAGE[delivery_volume_type(section)]))),
             "length_settings_source": "project_length_settings",
+            "allow_auto_expand": settings["allowAutoExpand"],
             "strategy": (
-                f"{plan.get('strategy') or ''} 已按全文篇幅设置分配目标字数；如资料不足，不得通过重复、无关内容或虚构事实凑字数，应使用待补充占位和可核验证据。"
+                f"{plan.get('strategy') or ''} 已按全文篇幅设置分配目标字数；"
+                f"资料不足策略：{'允许围绕评分点和可验证措施扩写' if settings['allowAutoExpand'] else '稳健生成，缺失处使用待补充占位'}；"
+                "不得通过重复、无关内容或虚构事实凑字数。"
             ).strip(),
         }
         next_sections.append({
@@ -175,6 +178,7 @@ def apply_length_allocations_to_sections(
                 "length_settings": {
                     "mode": settings["mode"],
                     "delivery_volume_type": delivery_volume_type(section),
+                    "allowAutoExpand": settings["allowAutoExpand"],
                 },
             },
         })

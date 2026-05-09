@@ -105,6 +105,39 @@ flowchart TD
     K --> L[Word 导出/在线编辑]
 ```
 
+## 全文篇幅设置与章节生成
+
+标书工作台中的“全文生成设置”不是把总页数或总字数直接塞进一个总 prompt，而是先转换为技术标、商务标的目标字数，再按章节权重分配到每个章节的 `metadata.writing_plan.target_words`。后续“一键编写全文”和单章重写都会读取该章节自己的写作计划，因此目标篇幅是按章节生效。
+
+后端接口：
+
+```text
+POST /api/bidding/interpretations/{project_id}/length-settings
+POST /api/bidding/interpretations/{project_id}/sections/stream
+```
+
+篇幅设置保存流程：
+
+1. `backend/ai/length_settings.py` 将页数按 `technical=700 字/页`、`business=550 字/页` 转换为目标字数。
+2. 系统按章节重要性、评分项、要求条款、风险项和章节层级计算权重。
+3. 技术标章节分配技术标目标字数；商务、资格、报价、附件统一归入商务标目标，但资格、报价和附件会限制空泛扩写。
+4. 分配结果写入每个章节的 `metadata.writing_plan`，包括 `target_words`、`suggested_pages`、`length_settings_source` 和 `allow_auto_expand`。
+
+章节正文生成流程：
+
+1. `backend/ai/section_writer.py` 生成单章正文 prompt 时注入当前章节的目标字数、建议篇幅、生成方式和资料不足策略。
+2. 首轮生成结束后，后端估算当前章节正文长度；若低于章节目标字数的 75%，会针对该章节再触发一次补写 prompt。
+3. 补写 prompt 只允许输出可追加到当前章节末尾的内容，并要求优先围绕评分点、响应要求、风险控制、实施措施和可验证材料补强。
+4. 若用户选择“允许扩写”，补写可以围绕评分点和可验证措施展开；若未选择，则只能补充有依据内容，资料不足时使用 `【待补充：...】` 占位。
+5. 章节保存时会记录 `actual_words`、`target_words` 和 `length_completion_ratio`，用于后续判断是否仍低于目标。
+
+前端展示口径：
+
+- `用户目标`：用户在全文生成设置中输入的技术标 / 商务标页数或字数。
+- `章节计划`：系统实际分配到当前筛选范围内各章节的目标字数合计；由于资格、报价和附件会限制空泛扩写，该值可能小于用户目标。
+- `已生成`：当前已生成正文的实际估算篇幅。
+- 章节标签中的 `目标 xxxx 字` 来自章节写作计划；保存全文设置后，该目标会带有 `project_length_settings` 来源标记。
+
 ## 合规检查
 
 招标项目页提供第一版合规覆盖检查，用于在生成章节大纲后快速判断投标文件是否承接了关键条款。
