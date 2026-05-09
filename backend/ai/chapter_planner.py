@@ -39,6 +39,103 @@ def _contains_keyword(item: dict[str, Any], keyword: str, fields: list[str]) -> 
     return any(keyword in _text(item.get(field)) for field in fields)
 
 
+# ---------------------------------------------------------------------------
+# 企业知识库上下文抽取
+# ---------------------------------------------------------------------------
+
+def _fetch_knowledge_context(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    从企业私有知识库（文档分片 + 资产库）中抽取与本次招标相关的上下文，
+    用于指导 AI 生成更贴合企业实际能力的章节大纲。
+
+    返回结构：
+    {
+        "rag_snippets": [{"title": ..., "content": ..., "category": ...}],  # 知识库文档片段
+        "assets_summary": [{"title": ..., "category": ..., "asset_type": ..., "tags": [...]}],  # 资产摘要
+        "has_qualification_assets": bool,   # 是否有资质/证书类资产
+        "has_product_assets": bool,         # 是否有产品/设备类资产
+        "has_case_assets": bool,            # 是否有业绩/案例类资产
+        "qualification_titles": [...],      # 资质资产标题列表（用于章节命名）
+        "product_titles": [...],            # 产品资产标题列表
+    }
+    """
+    result: dict[str, Any] = {
+        "rag_snippets": [],
+        "assets_summary": [],
+        "has_qualification_assets": False,
+        "has_product_assets": False,
+        "has_case_assets": False,
+        "qualification_titles": [],
+        "product_titles": [],
+    }
+
+    try:
+        from backend.rag.retrieval import search_knowledge_base, search_knowledge_assets
+
+        analysis = payload.get("analysis") or {}
+        project_meta = analysis.get("project_meta") or {}
+        summary = analysis.get("summary") or ""
+        project_name = project_meta.get("project_name") or ""
+
+        # 用项目摘要 + 关键词构造检索 query
+        query = f"水利工程投标 {project_name} {summary}"[:300]
+
+        # 1. 检索知识库文档片段（标准话术、施工方案、政策法规等）
+        try:
+            snippets = search_knowledge_base(query, match_threshold=0.3, match_count=12)
+            for snippet in snippets:
+                meta = snippet.get("metadata") or {}
+                result["rag_snippets"].append({
+                    "title": meta.get("source_org") or meta.get("source_file") or "知识库资料",
+                    "category": meta.get("category_label") or meta.get("category") or meta.get("doc_type") or "通用",
+                    "content": str(snippet.get("content") or "")[:300],
+                })
+        except Exception:
+            logging.warning("chapter_planner: 知识库文档片段检索失败，跳过")
+
+        # 2. 检索企业资产库（资质证书、产品图、业绩证明等）
+        try:
+            assets = search_knowledge_assets(query, match_count=30)
+            for asset in assets:
+                asset_type = str(asset.get("asset_type") or "")
+                category = str(asset.get("category") or "")
+                title = str(asset.get("title") or "")
+                tags = asset.get("tags") or []
+
+                result["assets_summary"].append({
+                    "title": title,
+                    "category": category,
+                    "asset_type": asset_type,
+                    "tags": tags[:4],
+                    "applicable_sections": (asset.get("applicable_sections") or [])[:3],
+                })
+
+                if asset_type == "qualification_image" or any(
+                    kw in category + title for kw in ["资质", "证书", "营业执照", "许可", "安全生产", "人员", "社保", "业绩"]
+                ):
+                    result["has_qualification_assets"] = True
+                    if title and title not in result["qualification_titles"]:
+                        result["qualification_titles"].append(title)
+
+                if asset_type == "product_image" or any(
+                    kw in category + title for kw in ["产品", "设备", "材料", "水泵", "闸门", "水轮机", "叶片", "螺母"]
+                ):
+                    result["has_product_assets"] = True
+                    if title and title not in result["product_titles"]:
+                        result["product_titles"].append(title)
+
+                if any(kw in category + title for kw in ["业绩", "案例", "合同", "中标", "验收", "类似项目"]):
+                    result["has_case_assets"] = True
+
+        except Exception:
+            logging.warning("chapter_planner: 企业资产库检索失败，跳过")
+
+    except Exception:
+        logging.exception("chapter_planner: 知识库上下文抽取失败，将使用无知识库版本生成大纲")
+
+    return result
+
+
 def _normalize_outline_chapters(
     chapters: list[dict[str, Any]],
     *,
@@ -367,6 +464,63 @@ def _build_prompt(payload: dict[str, Any]) -> str:
     project_meta = analysis.get("project_meta") or {}
     ai_report = project_meta.get("ai_report") or {}
 
+    requirements = payload.get("requirements") or []
+    scoring_items = payload.get("scoringItems") or []
+    risks = payload.get("risks") or []
+
+    scoring_count = len(scoring_items)
+    requirement_count = len(requirements)
+    risk_count = len(risks)
+
+    scoring_by_category: dict[str, list[str]] = {}
+    for item in scoring_items:
+        cat = str(item.get("category") or "其他")
+        scoring_by_category.setdefault(cat, []).append(str(item.get("item") or "")[:60])
+
+    high_risks = [
+        item for item in risks
+        if str(item.get("risk_level") or "").lower() in {"high", "critical", "废标", "否决", "高"}
+    ]
+
+    knowledge_ctx = _fetch_knowledge_context(payload)
+
+    rag_summary_lines: list[str] = []
+    if knowledge_ctx["rag_snippets"]:
+        rag_summary_lines.append("【企业知识库文档片段（可作为章节内容依据）】")
+        for snippet in knowledge_ctx["rag_snippets"][:8]:
+            rag_summary_lines.append(
+                f"- [{snippet['category']}] {snippet['title']}：{snippet['content'][:120]}..."
+            )
+
+    asset_summary_lines: list[str] = []
+    if knowledge_ctx["assets_summary"]:
+        asset_summary_lines.append("【企业资产库（资质/产品/业绩，可作为章节内容和附件依据）】")
+        for asset in knowledge_ctx["assets_summary"][:20]:
+            tags_str = "、".join(asset["tags"]) if asset["tags"] else "无"
+            sections_str = "、".join(asset["applicable_sections"]) if asset["applicable_sections"] else "未指定"
+            asset_summary_lines.append(
+                f"- [{asset['asset_type']}] {asset['title']}（分类：{asset['category']}；标签：{tags_str}；适用章节：{sections_str}）"
+            )
+
+    asset_hints: list[str] = []
+    if knowledge_ctx["has_qualification_assets"]:
+        titles = "、".join(knowledge_ctx["qualification_titles"][:6])
+        asset_hints.append(
+            f"企业资信库中已有以下资质/证书资产，资格文件分册应为每类资产单独设置章节：{titles or '（见资产库）'}"
+        )
+    if knowledge_ctx["has_product_assets"]:
+        titles = "、".join(knowledge_ctx["product_titles"][:6])
+        asset_hints.append(
+            f"企业产品库中已有以下产品/设备资产，技术标中应为主要产品/设备设置专项技术响应章节：{titles or '（见产品库）'}"
+        )
+    if knowledge_ctx["has_case_assets"]:
+        asset_hints.append(
+            "企业资产库中有业绩/案例材料，资格文件分册应设置类似项目业绩章节，技术标中应设置类似工程经验章节。"
+        )
+
+    min_chapters_hint = max(25, scoring_count * 2, requirement_count // 3)
+    min_chapters_hint = min(min_chapters_hint, 80)
+
     context = {
         "project": {
             "project_name": project_meta.get("project_name") or project.get("project_name"),
@@ -374,79 +528,107 @@ def _build_prompt(payload: dict[str, Any]) -> str:
             "summary": analysis.get("summary"),
             "ai_core_conclusion": (ai_report.get("project_brief") or {}).get("core_conclusion"),
         },
-        "requirements": _compact_items(
-            payload.get("requirements") or [],
-            ["requirement_type", "priority", "content", "source_section", "source_page", "source_text"],
-            70,
-        ),
-        "risks": _compact_items(
-            payload.get("risks") or [],
-            ["risk_level", "risk_type", "content", "action", "source_section", "source_page", "source_text"],
-            50,
-        ),
-        "scoring_items": _compact_items(
-            payload.get("scoringItems") or [],
-            ["category", "item", "score", "requirement", "response_suggestion", "source_page", "source_text"],
-            45,
-        ),
-        "chapter_suggestions": _compact_items(
-            payload.get("chapterSuggestions") or [],
-            ["chapter_title", "priority", "reason"],
-            30,
-        ),
+        "requirements": _compact_items(requirements, ["requirement_type", "priority", "content", "source_section", "source_page", "source_text"], 70),
+        "risks": _compact_items(risks, ["risk_level", "risk_type", "content", "action", "source_section", "source_page", "source_text"], 50),
+        "scoring_items": _compact_items(scoring_items, ["category", "item", "score", "requirement", "response_suggestion", "source_page", "source_text"], 45),
+        "chapter_suggestions": _compact_items(payload.get("chapterSuggestions") or [], ["chapter_title", "priority", "reason"], 30),
         "ai_document_plan": ai_report.get("document_plan") or [],
         "ai_material_checklist": ai_report.get("material_checklist") or [],
     }
 
-    return f"""
-你是资深水利工程投标文件编制负责人。请基于招标文件结构化解读，生成“真实投标分册组成 + 各分册章节大纲”。
+    knowledge_section = ""
+    if rag_summary_lines or asset_summary_lines or asset_hints:
+        knowledge_section = (
+            "\n".join(rag_summary_lines) + "\n\n" +
+            "\n".join(asset_summary_lines) + "\n\n" +
+            "基于企业知识库的章节扩展要求：\n" +
+            ("\n".join(f"- {hint}" for hint in asset_hints) if asset_hints else "- 暂无特殊扩展要求，按招标文件结构生成。")
+        )
 
-要求：
-1. 面向后续自动生成标书正文，不要写完整正文。
-2. 先判断本项目实际需要提交哪些投标文件分册，再分别生成分册章节。
-3. 分册 type 只能使用：qualification、business、technical、price、attachment、other。
-4. 章节要覆盖资格、商务、技术、报价、格式文件、风险响应和评分响应。
-5. 每个章节必须说明编写目标、响应点、关联要求、关联评分项、风险提醒、需要准备的资料、来源页码和写作注意事项。
-6. 目录层级必须灵活处理：简单章节可以只保留一级，复杂章节可以展开到二级、三级，必要时四级；不要机械地让每章层级一致。
-7. 不要编造招标文件没有的信息；无法确认的写“需人工复核”。
-8. 输出必须是严格 JSON，不要 Markdown，不要代码块。
+    scoring_breakdown = ""
+    if scoring_by_category:
+        lines = ["评分项分类明细（每个评分项必须有对应章节响应）："]
+        for cat, items in scoring_by_category.items():
+            lines.append(f"  [{cat}]：" + "；".join(items[:5]))
+        scoring_breakdown = "\n".join(lines)
 
-输出 JSON 格式：
-{{
-  "version": "ai-volume-v1",
-  "project_name": "...",
-  "tender_no": "...",
-  "summary": "...",
-  "volumes": [
-    {{
-      "type": "technical",
-      "name": "技术标",
-      "required": true,
-      "basis": "招标文件要求提交施工组织设计和技术响应文件",
-      "chapters": [
-        {{
-          "title": "...",
-          "priority": "high/medium/low",
-          "purpose": "...",
-          "response_points": ["..."],
-          "mapped_requirements": ["..."],
-          "mapped_scoring_items": ["..."],
-          "mapped_risks": ["..."],
-          "source_pages": [1, 2],
-          "required_materials": ["..."],
-          "writing_notes": ["..."],
-          "children": []
-        }}
-      ]
-    }}
-  ],
-  "chapters": [],
-  "next_steps": ["..."]
-}}
+    high_risk_section = ""
+    if high_risks:
+        high_risk_section = "高风险/废标项（必须有专项章节响应，不得遗漏）：\n" + "\n".join(
+            f"- [{item.get('risk_level')}] {item.get('content') or ''}" for item in high_risks[:10]
+        )
 
-结构化招标信息：
-{json.dumps(context, ensure_ascii=False)}
-""".strip()
+    prompt_parts = [
+        "你是资深水利工程投标文件编制负责人。请基于招标文件结构化解读和企业私有知识库，生成\"真实投标分册组成 + 各分册章节大纲\"。",
+        "",
+        "核心要求：",
+        "1. 面向后续自动生成标书正文，不要写完整正文。",
+        "2. 先判断本项目实际需要提交哪些投标文件分册，再分别生成分册章节。",
+        "3. 分册 type 只能使用：qualification、business、technical、price、attachment、other。",
+        "4. 章节必须覆盖所有评分项、资格要求、商务要求、技术要求、报价要求、格式文件和高风险项。",
+        "5. 每个章节必须说明编写目标、响应点、关联要求、关联评分项、风险提醒、需要准备的资料、来源页码和写作注意事项。",
+        "",
+        f"章节数量规则（严格执行）：",
+        f"- 本次招标共有 {scoring_count} 个评分项、{requirement_count} 个要求条款、{risk_count} 个风险项。",
+        f"- 建议生成章节总数不少于 {min_chapters_hint} 个（含各级子章节）。",
+        "- 每个评分项必须有至少一个对应章节或子章节明确响应，不得合并到笼统章节里。",
+        "- 每个高风险/废标项必须有专项章节或子章节响应。",
+        "- 技术标中施工组织设计必须展开到三级，至少包含：总体部署、进度计划、质量控制、安全管理、环保文明施工、资源配置、关键工序专项方案等子章节。",
+        "- 资格文件分册必须为每类资质/证书/人员/业绩单独设置章节，不得合并为一个资格材料章节。",
+        "- 如果企业知识库中有产品/设备资产，技术标中必须为主要产品/设备设置专项技术参数响应章节。",
+        "- 目录层级灵活：简单章节保留一级，复杂章节展开到二级、三级，必要时四级。",
+        "- 不要编造招标文件没有的信息；无法确认的写需人工复核。",
+    ]
+
+    if knowledge_section:
+        prompt_parts += ["", "企业私有知识库上下文（必须结合以下信息生成章节）：", knowledge_section]
+    if scoring_breakdown:
+        prompt_parts += ["", scoring_breakdown]
+    if high_risk_section:
+        prompt_parts += ["", high_risk_section]
+
+    prompt_parts += [
+        "",
+        "输出必须是严格 JSON，不要 Markdown，不要代码块。",
+        "",
+        '输出 JSON 格式：',
+        '{',
+        '  "version": "ai-volume-v1",',
+        '  "project_name": "...",',
+        '  "tender_no": "...",',
+        '  "summary": "...",',
+        '  "volumes": [',
+        '    {',
+        '      "type": "technical",',
+        '      "name": "技术标",',
+        '      "required": true,',
+        '      "basis": "招标文件要求提交施工组织设计和技术响应文件",',
+        '      "chapters": [',
+        '        {',
+        '          "title": "...",',
+        '          "priority": "high/medium/low",',
+        '          "purpose": "...",',
+        '          "response_points": ["..."],',
+        '          "mapped_requirements": ["..."],',
+        '          "mapped_scoring_items": ["..."],',
+        '          "mapped_risks": ["..."],',
+        '          "source_pages": [1, 2],',
+        '          "required_materials": ["..."],',
+        '          "writing_notes": ["..."],',
+        '          "children": [{"title": "...", "priority": "high", "purpose": "...", "response_points": [], "mapped_requirements": [], "mapped_scoring_items": [], "mapped_risks": [], "source_pages": [], "required_materials": [], "writing_notes": [], "children": []}]',
+        '        }',
+        '      ]',
+        '    }',
+        '  ],',
+        '  "chapters": [],',
+        '  "next_steps": ["..."]',
+        '}',
+        "",
+        "结构化招标信息：",
+        json.dumps(context, ensure_ascii=False),
+    ]
+
+    return "\n".join(prompt_parts)
 
 
 def _generate_outline_from_ai_or_rule(payload: dict[str, Any]) -> dict[str, Any]:
@@ -549,6 +731,7 @@ def _stream_ordered_chapters(chapters: list[dict[str, Any]]) -> Iterator[dict[st
 
 
 def _refine_bid_outline_in_background(project_id: str, payload: dict[str, Any], analysis: dict[str, Any]) -> None:
+    """保留兼容：同步调用 generate_bid_outline 时的后台保存入口。"""
     try:
         outline = _generate_outline_from_ai_or_rule(payload)
         save_bid_outline(project_id, outline, analysis)
@@ -568,16 +751,14 @@ def stream_bid_outline(project_id: str) -> Iterator[dict[str, Any]]:
         "message": "AI 正在结合招标解读结果生成章节大纲。",
     }
 
+    # ── 第一阶段：规则版快速骨架（秒级，立即展示）──────────────────────────
     quick_outline = _build_rule_outline(payload)
     quick_chapters = quick_outline.get("chapters") or []
     quick_root_count = sum(1 for chapter in quick_chapters if "." not in str(chapter.get("order") or ""))
 
     yield {
         "type": "meta",
-        "outline": {
-            key: value for key, value in quick_outline.items()
-            if key != "chapters"
-        },
+        "outline": {key: value for key, value in quick_outline.items() if key != "chapters"},
         "total": len(quick_chapters),
         "rootTotal": quick_root_count,
         "phase": "quick",
@@ -624,18 +805,61 @@ def stream_bid_outline(project_id: str) -> Iterator[dict[str, Any]]:
 
     yield {
         "type": "stage",
-        "stage": "done",
-        "message": "快速章节大纲已生成，AI 将在后台继续复核并优化最终版本。",
+        "stage": "ai_refining",
+        "message": "快速大纲已就绪，AI 正在结合招标评分项和企业知识库生成精细化章节大纲，请稍候...",
     }
 
-    threading.Thread(
-        target=_refine_bid_outline_in_background,
-        args=(project_id, payload, analysis),
-        daemon=True,
-    ).start()
+    # ── 第二阶段：AI 精细化大纲（在 SSE 流内同步完成，完成后推送 refined 事件）──
+    try:
+        ai_outline = _generate_outline_from_ai_or_rule(payload)
+        ai_chapters = ai_outline.get("chapters") or []
+        ai_root_count = sum(1 for chapter in ai_chapters if "." not in str(chapter.get("order") or ""))
+
+        # 只有 AI 版章节数量明显多于规则版时才替换（避免 AI 退化）
+        if len(ai_chapters) >= len(quick_chapters):
+            save_bid_outline(project_id, ai_outline, analysis)
+            replace_bid_sections_from_outline(project_id, ai_outline)
+
+            # 推送 refined 事件，前端收到后刷新章节列表
+            yield {
+                "type": "refined",
+                "outline": {key: value for key, value in ai_outline.items() if key != "chapters"},
+                "total": len(ai_chapters),
+                "rootTotal": ai_root_count,
+            }
+
+            yield {
+                "type": "stage",
+                "stage": "refined_chapters",
+                "message": f"AI 精细化大纲已生成，共 {len(ai_chapters)} 个章节（规则版 {len(quick_chapters)} 个），正在刷新。",
+            }
+
+            for chapter in _stream_ordered_chapters(ai_chapters):
+                yielded += 1
+                yield {
+                    "type": "chapter",
+                    "index": yielded,
+                    "total": len(ai_chapters),
+                    "phase": "refined",
+                    "chapter": chapter,
+                }
+                time.sleep(0.02)
+
+            final_outline = ai_outline
+        else:
+            logging.warning(
+                "AI 版大纲章节数（%d）少于规则版（%d），保留规则版。project_id=%s",
+                len(ai_chapters), len(quick_chapters), project_id,
+            )
+            final_outline = quick_outline
+
+    except Exception:
+        logging.exception("AI 精细化章节大纲生成失败，保留规则版大纲: %s", project_id)
+        final_outline = quick_outline
 
     yield {
         "type": "done",
-        "outline": quick_outline,
-        "backgroundRefining": True,
+        "outline": final_outline,
+        "backgroundRefining": False,
     }
+
