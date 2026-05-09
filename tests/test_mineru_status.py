@@ -5,11 +5,18 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.parsing.document_parser import import_mineru_result_zip, read_parse_status, write_parse_status
+from backend.parsing.document_parser import _should_use_mineru_first, import_mineru_result_zip, read_parse_status, write_parse_status
 from backend.parsing.mineru_client import download_and_extract_zip
 
 
 class MinerUStatusRegressionTest(unittest.TestCase):
+    def test_pdf_without_saved_extension_still_uses_mineru_when_original_name_is_pdf(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_file = Path(tmpdir) / "uuid-pdf"
+            local_file.write_bytes(b"%PDF-1.7\n")
+
+            self.assertTrue(_should_use_mineru_first(str(local_file), "招标文件.pdf"))
+
     def test_manual_import_bad_zip_writes_import_failed_status(self):
         parse_id = "mineru-import-bad-zip-smoke"
         output_dir = Path("parsed_outputs") / parse_id

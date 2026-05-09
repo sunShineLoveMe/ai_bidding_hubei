@@ -12,6 +12,7 @@ export interface UploadResponse {
 export interface ParseStatusResponse {
   fileId: string;
   parseStatus?: string | null;
+  parseCompleted?: boolean;
   failureStage?: string | null;
   errorType?: string | null;
   error?: string | null;

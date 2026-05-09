@@ -817,6 +817,41 @@ def get_parse_status(file_id):
     """查询招标文件解析状态，合并 Supabase 当前状态与本地 MinerU 产物状态。"""
     try:
         local_status = read_parse_status(file_id) or {}
+        parse_status = local_status.get("parse_status")
+        source_file = local_status.get("source_file")
+        recovery_started_at = local_status.get("parse_recovery_started_at")
+        recovery_is_stale = True
+        if recovery_started_at:
+            try:
+                started_at = datetime.fromisoformat(str(recovery_started_at).replace("Z", ""))
+                recovery_is_stale = (datetime.utcnow() - started_at).total_seconds() > int(
+                    os.getenv("PARSE_RECOVERY_STALE_SECONDS", "120")
+                )
+            except Exception:
+                recovery_is_stale = True
+        if (
+            parse_status == "supabase_synced"
+            and source_file
+            and os.path.exists(str(source_file))
+            and not local_status.get("batch_id")
+            and recovery_is_stale
+        ):
+            write_parse_status(file_id, {
+                "parse_recovery_started_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                "user_message": "后台解析任务未继续推进，系统正在自动恢复解析。",
+                "retryable": True,
+            })
+            supabase_sync = {
+                "project": {"id": local_status.get("project_id")},
+                "file": {"id": local_status.get("supabase_file_id")},
+            }
+            threading.Thread(
+                target=sync_and_parse_tender_in_background,
+                args=(str(source_file), local_status.get("file_name") or Path(str(source_file)).name, file_id, supabase_sync),
+                daemon=True,
+            ).start()
+            local_status = read_parse_status(file_id) or local_status
+
         download_retry_count = int(local_status.get("download_retry_count") or 0)
         max_download_retries = int(os.getenv("MINERU_DOWNLOAD_AUTO_RETRIES", "6"))
         retry_started_at = local_status.get("download_retry_started_at")
@@ -859,14 +894,23 @@ def get_parse_status(file_id):
         except Exception:
             logging.exception("查询 Supabase bid_files 失败: %s", supabase_lookup_id)
 
+        effective_status = local_status.get('parse_status') or (supabase_file or {}).get('parse_status')
+        ingest_done = local_status.get("supabase_ingest_status") == "done"
+        has_artifacts = bool(local_status.get("artifacts"))
+        parse_completed = effective_status == "indexed" or (
+            effective_status == "mineru_done" and ingest_done and has_artifacts
+        )
+        user_message = None if parse_completed else local_status.get('user_message')
+
         return jsonify({
             'fileId': file_id,
-            'parseStatus': local_status.get('parse_status') or (supabase_file or {}).get('parse_status'),
+            'parseStatus': effective_status,
+            'parseCompleted': parse_completed,
             'failureStage': local_status.get('failure_stage'),
             'errorType': local_status.get('error_type'),
             'error': local_status.get('error') or local_status.get('reason'),
-            'userMessage': local_status.get('user_message'),
-            'retryable': bool(local_status.get('retryable')),
+            'userMessage': user_message,
+            'retryable': bool(local_status.get('retryable')) and not parse_completed,
             'downloadRetryCount': int(local_status.get('download_retry_count') or 0),
             'supabaseFile': supabase_file,
             'mineru': local_status,

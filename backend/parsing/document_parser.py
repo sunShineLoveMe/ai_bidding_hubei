@@ -152,8 +152,20 @@ def _extract_done_result(batch_data: dict[str, Any], parse_id: str) -> dict[str,
     return None
 
 
-def _should_use_mineru_first(file_path: str) -> bool:
-    if Path(file_path).suffix.lower() != ".pdf":
+def _is_pdf_input(file_path: str | Path, original_filename: str | None = None) -> bool:
+    if Path(file_path).suffix.lower() == ".pdf":
+        return True
+    if original_filename and Path(original_filename).suffix.lower() == ".pdf":
+        return True
+    try:
+        with open(file_path, "rb") as f:
+            return f.read(5) == b"%PDF-"
+    except Exception:
+        return False
+
+
+def _should_use_mineru_first(file_path: str, original_filename: str | None = None) -> bool:
+    if not _is_pdf_input(file_path, original_filename):
         return False
     return os.getenv("MINERU_PARSE_PDF_FIRST", "true").lower() not in {"false", "0", "no"}
 
@@ -263,6 +275,17 @@ def _run_mineru_parse_and_index(
 ) -> None:
     output_dir = PARSED_OUTPUT_ROOT / parse_id
     _update_supabase_status(supabase_file_id, "mineru_submitted")
+    write_parse_status(
+        parse_id,
+        {
+            "parse_status": "mineru_submitted",
+            "parser": "mineru",
+            "source_file": file_path,
+            "data_id": parse_id,
+            "file_name": original_filename,
+            "supabase_file_id": supabase_file_id,
+        },
+    )
     task = create_local_file_batch_task(
         local_file_path=file_path,
         file_name=original_filename,
@@ -271,12 +294,9 @@ def _run_mineru_parse_and_index(
     write_parse_status(
         parse_id,
         {
-            "parse_status": "mineru_submitted",
-            "parser": "mineru",
             "batch_id": task.batch_id,
             "data_id": task.data_id,
             "file_name": task.file_name,
-            "supabase_file_id": supabase_file_id,
         },
     )
 
@@ -507,7 +527,7 @@ def parse_and_index_tender_file(
     supabase_file_id: str | None = None,
 ) -> None:
     """Use MinerU first for PDFs when configured, otherwise index native text."""
-    if has_mineru_token() and _should_use_mineru_first(file_path):
+    if has_mineru_token() and _should_use_mineru_first(file_path, original_filename):
         try:
             page_count = _pdf_page_count(file_path)
             if page_count and page_count > MINERU_MAX_PDF_PAGES:

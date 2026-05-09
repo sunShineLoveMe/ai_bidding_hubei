@@ -143,7 +143,8 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
       const userHint = data.userMessage ? `${data.userMessage}。` : '';
       setDetail(`解析状态：${parseStatus}。${splitDetail}${retryDetail}${userHint}系统正在抽取文本、表格和图片信息，第 ${count} 次检查。`);
 
-      if (parseStatus === 'indexed') {
+      if (data.parseCompleted || parseStatus === 'indexed') {
+        setDetail(`解析状态：${parseStatus}。招标文件解析结果已完成落库，正在进入招标解读。`);
         return;
       }
       if ([

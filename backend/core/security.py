@@ -202,8 +202,13 @@ def validate_uploaded_file(file: FileStorage, *, kind: str) -> None:
 def safe_upload_filename(original_filename: str, fallback: str = "upload") -> str:
     from werkzeug.utils import secure_filename
 
-    safe = secure_filename(original_filename or "")
-    if safe:
+    original = original_filename or ""
+    suffix = Path(original).suffix.lower()
+    safe = secure_filename(original)
+    if safe and Path(safe).suffix:
         return safe
-    suffix = Path(original_filename or "").suffix
-    return f"{fallback}{suffix if suffix and suffix.isascii() else ''}"
+
+    stem = secure_filename(Path(original).stem) or fallback
+    if suffix and suffix.isascii():
+        return f"{stem}{suffix}"
+    return stem

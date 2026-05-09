@@ -42,6 +42,11 @@ class BackendSmokeTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("不在允许范围", response.get_json().get("error", ""))
 
+    def test_safe_upload_filename_preserves_chinese_pdf_extension(self):
+        from backend.core.security import safe_upload_filename
+
+        self.assertEqual(safe_upload_filename("招标文件.pdf", "tender"), "tender.pdf")
+
     @patch("backend.api.routes.get_bid_file", return_value=None)
     @patch("backend.api.routes.retry_mineru_result_download")
     def test_parse_status_exposes_retryable_mineru_failure(self, retry_mock, _file_mock):
@@ -75,6 +80,34 @@ class BackendSmokeTest(unittest.TestCase):
         self.assertEqual(payload["errorType"], "MinerUDownloadError")
         self.assertEqual(payload["downloadRetryCount"], 2)
         retry_mock.assert_called_once_with(file_id)
+
+    @patch("backend.api.routes.get_bid_file", return_value=None)
+    def test_parse_status_treats_mineru_done_ingest_as_completed(self, _file_mock):
+        file_id = "smoke-parse-completed"
+        status_dir = Path("parsed_outputs") / file_id
+        status_dir.mkdir(parents=True, exist_ok=True)
+        (status_dir / "mineru_status.json").write_text(
+            json.dumps(
+                {
+                    "parse_status": "mineru_done",
+                    "artifacts": {"markdown_path": "parsed_outputs/demo/full.md"},
+                    "supabase_ingest_status": "done",
+                    "user_message": "后台解析任务未继续推进，系统正在自动恢复解析。",
+                    "retryable": True,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        response = self.client.get(f"/api/bidding/parse-status/{file_id}")
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["parseStatus"], "mineru_done")
+        self.assertTrue(payload["parseCompleted"])
+        self.assertIsNone(payload["userMessage"])
+        self.assertFalse(payload["retryable"])
 
 
 class DocxExportSmokeTest(unittest.TestCase):
