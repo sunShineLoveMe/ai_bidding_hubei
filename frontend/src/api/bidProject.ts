@@ -298,3 +298,21 @@ export async function generateBidDocument(
   });
   return response.data;
 }
+
+/**
+ * 批量获取知识资产的 Supabase Storage 签名 URL。
+ * 前端拿到签名 URL 后直接请求 Supabase CDN，无需经过后端中转。
+ * 有效期默认 1 小时（3600 秒）。
+ */
+export async function getKnowledgeAssetSignedUrls(
+  assetIds: string[],
+  expiresIn = 3600,
+): Promise<Record<string, string>> {
+  if (!assetIds.length) return {};
+  const response = await apiClient.post(
+    '/api/knowledge/assets/signed-urls',
+    { assetIds, expiresIn },
+    { skipGlobalLoading: true },
+  );
+  return (response.data as { urls: Record<string, string> }).urls || {};
+}

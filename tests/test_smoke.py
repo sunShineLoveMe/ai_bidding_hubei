@@ -47,8 +47,8 @@ class BackendSmokeTest(unittest.TestCase):
 
         self.assertEqual(safe_upload_filename("招标文件.pdf", "tender"), "tender.pdf")
 
-    @patch("backend.api.routes.get_bid_file", return_value=None)
-    @patch("backend.api.routes.retry_mineru_result_download")
+    @patch("backend.api.mineru.get_bid_file", return_value=None)
+    @patch("backend.api.mineru.retry_mineru_result_download")
     def test_parse_status_exposes_retryable_mineru_failure(self, retry_mock, _file_mock):
         file_id = "smoke-parse-status"
         status_dir = Path("parsed_outputs") / file_id
@@ -81,7 +81,7 @@ class BackendSmokeTest(unittest.TestCase):
         self.assertEqual(payload["downloadRetryCount"], 2)
         retry_mock.assert_called_once_with(file_id)
 
-    @patch("backend.api.routes.get_bid_file", return_value=None)
+    @patch("backend.api.mineru.get_bid_file", return_value=None)
     def test_parse_status_treats_mineru_done_ingest_as_completed(self, _file_mock):
         file_id = "smoke-parse-completed"
         status_dir = Path("parsed_outputs") / file_id

@@ -24,7 +24,7 @@ class SectionApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("project_id", response.get_json().get("error", ""))
 
-    @patch("backend.api.routes.upsert_bid_section")
+    @patch("backend.api.sections.upsert_bid_section")
     def test_save_section_returns_saved_section(self, upsert_mock):
         project_id = "11111111-1111-1111-1111-111111111111"
         upsert_mock.return_value = {
@@ -44,7 +44,7 @@ class SectionApiTest(unittest.TestCase):
         self.assertEqual(payload["section"]["title"], "施工组织设计")
         upsert_mock.assert_called_once()
 
-    @patch("backend.api.routes.reorder_bid_sections")
+    @patch("backend.api.sections.reorder_bid_sections")
     def test_reorder_sections_returns_sorted_sections(self, reorder_mock):
         project_id = "11111111-1111-1111-1111-111111111111"
         reorder_mock.return_value = [{"id": "s1", "title": "一、投标函", "order": "1"}]

@@ -21,7 +21,8 @@ import Table from '@tiptap/extension-table';
 import TableRow from '@tiptap/extension-table-row';
 import TableCell from '@tiptap/extension-table-cell';
 import TableHeader from '@tiptap/extension-table-header';
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { getKnowledgeAssetSignedUrls } from '../../api/bidProject';
 
 interface TiptapBidEditorProps {
   content: string;
@@ -299,13 +300,54 @@ export function TiptapBidEditor({ content, onChange, placeholder }: TiptapBidEdi
     },
   });
 
+  // 签名 URL 缓存：key = asset_id，value = 签名 URL（有效期 1 小时）
+  const signedUrlCache = useRef<Record<string, string>>({});
+
+  /**
+   * 从 markdown 内容中提取所有 /api/bidding/knowledge/assets/<id>/file 格式的图片 URL，
+   * 批量换成 Supabase Storage 签名 URL，让浏览器直连 CDN，不再经过后端中转。
+   */
+  const resolveSignedUrls = useCallback(async (markdown: string): Promise<string> => {
+    const ASSET_URL_RE = /\/api\/(?:bidding\/)?knowledge\/assets\/([0-9a-f-]{36})\/file[^\s)"]*/gi;
+    const matches = [...markdown.matchAll(ASSET_URL_RE)];
+    if (!matches.length) return markdown;
+
+    // 找出尚未缓存的 asset_id
+    const uncachedIds = [...new Set(matches.map(m => m[1]))].filter(
+      id => !signedUrlCache.current[id],
+    );
+
+    if (uncachedIds.length) {
+      try {
+        const fresh = await getKnowledgeAssetSignedUrls(uncachedIds, 3600);
+        Object.assign(signedUrlCache.current, fresh);
+      } catch {
+        // 签名 URL 获取失败时降级：保留原 /api/ 路径，不影响渲染
+      }
+    }
+
+    // 替换 markdown 中的图片 URL
+    return markdown.replace(ASSET_URL_RE, (original, assetId: string) => {
+      return signedUrlCache.current[assetId] || original;
+    });
+  }, []);
+
   useEffect(() => {
     if (!editor) return;
     const incoming = content || '';
     if (incoming === lastExternalContent.current || incoming === lastEmittedContent.current) return;
     lastExternalContent.current = incoming;
-    editor.commands.setContent(markdownToHtml(incoming), false);
-  }, [content, editor]);
+
+    // 先尝试替换签名 URL，再渲染到编辑器
+    resolveSignedUrls(incoming).then(resolved => {
+      // 如果在异步期间 content 已经变化，放弃本次更新
+      if (incoming !== lastExternalContent.current) return;
+      editor.commands.setContent(markdownToHtml(resolved), false);
+    }).catch(() => {
+      // 降级：直接用原始 markdown 渲染
+      editor.commands.setContent(markdownToHtml(incoming), false);
+    });
+  }, [content, editor, resolveSignedUrls]);
 
   const applyHeading = (value: string) => {
     if (!editor) return;

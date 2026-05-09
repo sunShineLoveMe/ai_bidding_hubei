@@ -1610,7 +1610,55 @@ def download_knowledge_asset_file_variant(asset_id: str, variant: str = "origina
     return asset, data
 
 
-def _knowledge_asset_bucket() -> str:
+def get_knowledge_asset_signed_urls(asset_ids: list[str], expires_in: int = 3600) -> dict[str, str]:
+    """
+    批量为知识资产生成 Supabase Storage 签名 URL。
+
+    返回 { asset_id: signed_url } 字典。
+    签名 URL 有效期默认 1 小时（expires_in 秒），前端可直接请求，无需经过后端中转。
+    无法生成签名 URL 的资产（本地路径、无 storage_path 等）不会出现在返回字典中。
+    """
+    if not asset_ids:
+        return {}
+
+    client = get_supabase_client()
+    result: dict[str, str] = {}
+
+    # 按 bucket 分组，每组批量调用 create_signed_urls
+    from collections import defaultdict
+    bucket_groups: dict[str, list[tuple[str, str]]] = defaultdict(list)  # bucket → [(asset_id, object_path)]
+
+    for asset_id in asset_ids:
+        try:
+            asset = get_knowledge_asset_detail(asset_id)
+            if not asset:
+                continue
+            bucket = asset.get("storage_bucket")
+            object_path = asset.get("storage_path")
+            if not bucket or not object_path:
+                continue
+            bucket_groups[bucket].append((asset_id, object_path))
+        except Exception:
+            logging.exception("获取资产元数据失败，跳过签名 URL 生成: %s", asset_id)
+
+    for bucket, items in bucket_groups.items():
+        paths = [item[1] for item in items]
+        try:
+            signed = client.storage.from_(bucket).create_signed_urls(paths, expires_in)
+            # signed 是 list[{"path": ..., "signedURL": ..., "error": ...}]
+            path_to_url = {
+                entry["path"]: entry.get("signedURL") or entry.get("signed_url") or ""
+                for entry in (signed or [])
+                if not entry.get("error")
+            }
+            for asset_id, object_path in items:
+                url = path_to_url.get(object_path, "")
+                if url:
+                    result[asset_id] = url
+        except Exception:
+            logging.exception("批量生成签名 URL 失败，bucket=%s", bucket)
+
+    return result
     return os.getenv("SUPABASE_STORAGE_KNOWLEDGE_ASSET_BUCKET") or os.getenv("SUPABASE_STORAGE_KNOWLEDGE_BUCKET") or "knowledge-assets"
 
 
