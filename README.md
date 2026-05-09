@@ -79,6 +79,8 @@ flowchart LR
 
 ## 快速开始
 
+> ⚠️ **首次启动前必做**：在 Supabase 里执行 [8 个必需的 SQL 脚本](docs/deployment/supabase-setup.md#必须执行否则功能异常) 并创建 [5 个 Storage Bucket](docs/deployment/supabase-setup.md#storage-buckets)。跳过任一步都会在对应功能触发时报错。
+
 ```bash
 # 1. 安装后端依赖
 python -m venv venv && source venv/bin/activate
@@ -91,7 +93,9 @@ cd frontend && npm install && npm run build && cd ..
 cp .env.example .env
 # 编辑 .env，填写 DASHSCOPE_API_KEY、SUPABASE_URL、SUPABASE_SERVICE_ROLE_KEY
 
-# 4. 启动
+# 4. 在 Supabase SQL Editor 执行 sql/ 目录下的脚本（详见 supabase-setup.md）
+
+# 5. 启动
 python main.py
 # 访问 http://127.0.0.1:3012
 ```

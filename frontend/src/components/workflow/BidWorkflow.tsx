@@ -254,19 +254,73 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
     setDetail(`检测到未完成任务：${active.fileName}。系统将继续解析、解读和生成分册大纲。`);
 
     try {
-      updateStep(1, 'process', '正在恢复解析进度...', '正在从后台查询 MinerU/OCR 解析状态。');
-      await waitForParseIndexed(active.fileId, token);
-      if (runTokenRef.current !== token) return;
+      // 先检查项目当前状态：
+      //   1. 如果项目已被删除（project === null），直接清 localStorage 并退出
+      //   2. 如果已有 analysis/sections，跳过对应步骤
+      //   3. 否则按未完成处理
+      let projectExists = false;
+      let hasInterpretation = false;
+      let hasOutline = false;
+      let probeSucceeded = false;
+
+      try {
+        const { getInterpretation } = await import('../../api/bidProject');
+        const interp = await getInterpretation(active.projectId);
+        probeSucceeded = true;
+        projectExists = !!(interp?.project);
+        hasInterpretation = !!(interp?.analysis);
+        hasOutline = !!(interp?.sections && interp.sections.length > 0);
+      } catch {
+        // 查询失败（网络抖动/服务异常），按未完成处理但仍尝试恢复
+        probeSucceeded = false;
+      }
+
+      // 项目已被删除：不再恢复流程，清除 localStorage，重置 UI
+      if (probeSucceeded && !projectExists) {
+        clearActiveWorkflow();
+        setStatuses(initialStatuses());
+        setCurrent(0);
+        setProjectId(null);
+        setSummary('请选择招标文件。上传后系统会自动完成解析、招标解读和分册大纲生成。');
+        setDetail('检测到之前的未完成任务对应的项目已被删除，已清除本地恢复标记。');
+        setBusy(false);
+        return;
+      }
+
+      // 项目已完全完成：直接显示完成状态
+      if (hasInterpretation && hasOutline) {
+        finishStep(1);
+        finishStep(2);
+        finishStep(3);
+        updateStep(4, 'finish', '检测到已完成的标书项目，可直接进入编制。', '点击右侧「进入标书编制」继续完善内容并导出 Word。');
+        clearActiveWorkflow();
+        onTaskChanged?.();
+        setBusy(false);
+        return;
+      }
+
+      // 按需补跑未完成的步骤
+      const parseCompleted = hasInterpretation;  // 有解读说明解析也已完成
+
+      if (!parseCompleted) {
+        updateStep(1, 'process', '正在恢复解析进度...', '正在从后台查询 MinerU/OCR 解析状态。');
+        await waitForParseIndexed(active.fileId, token);
+        if (runTokenRef.current !== token) return;
+      }
       finishStep(1);
 
-      updateStep(2, 'process', '正在生成招标解读...', '解析已完成，继续提取项目概况、资格要求、评分标准和风险项。');
-      await generateAIInterpretation(active.projectId);
-      if (runTokenRef.current !== token) return;
+      if (!hasInterpretation) {
+        updateStep(2, 'process', '正在生成招标解读...', '解析已完成，继续提取项目概况、资格要求、评分标准和风险项。');
+        await generateAIInterpretation(active.projectId);
+        if (runTokenRef.current !== token) return;
+      }
       finishStep(2);
 
-      updateStep(3, 'process', '正在生成分册大纲...', '正在结合招标解读和知识库规划技术标、商务标、资格文件和报价文件。');
-      await generateBidOutline(active.projectId);
-      if (runTokenRef.current !== token) return;
+      if (!hasOutline) {
+        updateStep(3, 'process', '正在生成分册大纲...', '正在结合招标解读和知识库规划技术标、商务标、资格文件和报价文件。');
+        await generateBidOutline(active.projectId);
+        if (runTokenRef.current !== token) return;
+      }
       finishStep(3);
 
       updateStep(4, 'finish', '分册大纲已生成，可以进入标书编制。', '后续可继续按分册编辑章节正文并导出 Word。');
@@ -275,11 +329,22 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
       message.success('已恢复并完成招标解读和分册大纲生成');
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      setCurrent(activeStepRef.current);
-      setStatuses(prev => prev.map((item, index) => (index === activeStepRef.current ? 'error' : item)));
-      setSummary('恢复流程失败');
-      setDetail(reason);
-      message.error(reason);
+      // 如果是"项目不存在"或"分析数据不存在"类错误，说明 localStorage 数据已失效
+      const isStaleError = /不存在|not found|尚无结构化解读/.test(reason);
+      if (isStaleError) {
+        clearActiveWorkflow();
+        setStatuses(initialStatuses());
+        setCurrent(0);
+        setProjectId(null);
+        setSummary('请选择招标文件。上传后系统会自动完成解析、招标解读和分册大纲生成。');
+        setDetail('之前的未完成任务已失效（项目可能已被删除），已清除本地恢复标记。');
+      } else {
+        setCurrent(activeStepRef.current);
+        setStatuses(prev => prev.map((item, index) => (index === activeStepRef.current ? 'error' : item)));
+        setSummary('恢复流程失败');
+        setDetail(reason);
+        message.error(reason);
+      }
     } finally {
       if (runTokenRef.current === token) {
         setBusy(false);

@@ -2,6 +2,23 @@
 
 > 安全配置详见 [security.md](./security.md)，Supabase 初始化详见 [supabase-setup.md](./supabase-setup.md)
 
+## 前置检查清单
+
+在跑起来之前务必完成这 3 件事，否则首次启动必定报错：
+
+1. **准备好 Supabase 项目**（自建或 supabase.com 托管都可以），拿到 `SUPABASE_URL` 和 `SUPABASE_SERVICE_ROLE_KEY`。
+2. **执行必需的 SQL 脚本**（共 8 个），详见 [supabase-setup.md](./supabase-setup.md#必须执行否则功能异常)。跳过任何一个都会在对应功能触发时报错。
+3. **创建 5 个 Storage Buckets**，详见 [supabase-setup.md](./supabase-setup.md#storage-buckets)。
+
+常见症状速查：
+
+| 现象 | 原因 | 解决 |
+| --- | --- | --- |
+| 日志反复打印 `Could not find the table 'public.app_users'` | 未执行 `20260429_app_users_and_onlyoffice_documents.sql` | 执行该 SQL 并 Reload schema |
+| 章节大纲保存 500 | 未执行 `20260426_create_bid_sections.sql` | 执行该 SQL |
+| 用量成本中心为空 | 未执行 `20260507_create_ai_usage_tracking.sql` | 执行该 SQL |
+| 上传招标文件 500，日志提示 Bucket 不存在 | Storage bucket 未创建 | 按 [supabase-setup.md](./supabase-setup.md#storage-buckets) 创建 |
+
 ## 快速开始
 
 ### 1. 安装后端依赖
