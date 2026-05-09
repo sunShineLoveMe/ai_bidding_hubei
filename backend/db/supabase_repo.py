@@ -742,10 +742,15 @@ def _normalize_section_parent_id(client, project_id: str, parent_id: Any) -> str
 
 def _section_payload(project_id: str, section: dict[str, Any], index: int) -> dict[str, Any]:
     section = ensure_section_volume(section)
+    # order_index 必须是整数。旧代码直接用 `section.get("order") or index + 1` 会把
+    # 字符串形如 "1.2"、"3.1" 直接塞进 Supabase 的 integer 列，导致插入失败或被静默
+    # 截断，最终造成大量章节 order_index 重复、Word 导出顺序错乱。
+    raw_order_index = section.get("order_index") or section.get("order") or (index + 1)
+    normalized_order_index = _as_order_index(raw_order_index, fallback=index + 1)
     return {
         "project_id": project_id,
         "parent_id": section.get("parent_id") if _is_valid_uuid(section.get("parent_id")) else None,
-        "order_index": section.get("order_index") or section.get("order") or index + 1,
+        "order_index": normalized_order_index,
         "level": section.get("level") or 1,
         "title": section.get("title") or "未命名章节",
         "status": section.get("status") or "draft",
@@ -842,7 +847,11 @@ def replace_bid_sections_from_outline(project_id: str, outline: dict[str, Any]) 
             parent_order = section_order.rsplit(".", 1)[0]
             parent_id = order_to_id.get(parent_order)
 
+        # 强制用 enumerate 序号作为 order_index，确保同一项目内全局唯一递增。
+        # 这样即使上层传入的 order_index 出现重复或字符串（如 "1.2"），数据库里
+        # 的章节顺序依然稳定，不会出现 Word 导出目录错乱的问题。
         payload = _section_payload(project_id, {**section, "parent_id": parent_id}, index)
+        payload["order_index"] = index + 1
         response = client.table("bid_sections").insert(payload).execute()
         if not response.data:
             raise RuntimeError("Supabase bid_sections insert returned no data")
@@ -854,12 +863,15 @@ def replace_bid_sections_from_outline(project_id: str, outline: dict[str, Any]) 
 
 
 def list_bid_sections(project_id: str) -> list[dict[str, Any]]:
+    # 稳定排序：order_index 为主，id 为辅（防止老数据 order_index 重复时 Supabase
+    # 返回顺序随机导致 Word 导出目录错乱）。
     response = (
         get_supabase_client()
         .table("bid_sections")
         .select("*")
         .eq("project_id", project_id)
         .order("order_index")
+        .order("id")
         .execute()
     )
     return response.data or []

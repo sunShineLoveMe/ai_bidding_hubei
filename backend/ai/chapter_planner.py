@@ -212,8 +212,15 @@ def _build_volume(
 
 
 def _outline_chapters_from_volumes(volumes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """扁平化 volumes → chapters 列表。
+
+    关键约束：扁平化顺序必须是"按 volumes 依次、每个 volume 内按 order_index"
+    —— 即资格文件全部章节在前，商务文件紧接其后，再是技术标……不能按每个 volume
+    的局部 order_index 合并排序，否则会出现各 volume 第 1 章交叉排列的 bug。
+    """
     chapters: list[dict[str, Any]] = []
     root_offset = 0
+    global_order_index = 0
     for volume in volumes:
         volume_type = normalize_volume_type(volume.get("type"))
         volume_title = _text(volume.get("name")) or volume_name(volume_type)
@@ -232,14 +239,18 @@ def _outline_chapters_from_volumes(volumes: list[dict[str, Any]]) -> list[dict[s
             old_root = str(root.get("order") or root_index)
             root_map[old_root] = str(root_offset + root_index)
 
+        # 保持 volume 内部 order_index 递增的原始顺序（一级章节后紧跟其子章节）
         for chapter in local_chapters:
             old_order = str(chapter.get("order") or "")
             old_root, _, suffix = old_order.partition(".")
             new_root = root_map.get(old_root, str(root_offset + len(root_map) + 1))
             chapter["order"] = f"{new_root}.{suffix}" if suffix else new_root
+            # 重新分配全局唯一递增的 order_index
+            global_order_index += 1
+            chapter["order_index"] = global_order_index
             chapters.append(chapter)
         root_offset += len(local_roots)
-    return sorted(chapters, key=lambda item: int(item.get("order_index") or 0))
+    return chapters
 
 
 def _normalize_outline_structure(outline: dict[str, Any]) -> dict[str, Any]:
