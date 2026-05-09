@@ -731,11 +731,29 @@ def _stream_ordered_chapters(chapters: list[dict[str, Any]]) -> Iterator[dict[st
 
 
 def _refine_bid_outline_in_background(project_id: str, payload: dict[str, Any], analysis: dict[str, Any]) -> None:
-    """保留兼容：同步调用 generate_bid_outline 时的后台保存入口。"""
+    """
+    后台线程：调用 AI 生成精细化大纲，完成后写回 Supabase。
+    前端通过 reloadProject() 轮询最新章节来感知更新。
+    """
     try:
-        outline = _generate_outline_from_ai_or_rule(payload)
-        save_bid_outline(project_id, outline, analysis)
-        replace_bid_sections_from_outline(project_id, outline)
+        quick_chapters_count = len(
+            (analysis.get("project_meta") or {}).get("bid_outline", {}).get("chapters") or []
+        )
+        ai_outline = _generate_outline_from_ai_or_rule(payload)
+        ai_chapters = ai_outline.get("chapters") or []
+        # 只有 AI 版章节数量不少于规则版时才替换，防止 AI 退化
+        if len(ai_chapters) >= max(quick_chapters_count, 1):
+            save_bid_outline(project_id, ai_outline, analysis)
+            replace_bid_sections_from_outline(project_id, ai_outline)
+            logging.info(
+                "后台 AI 精细化大纲完成，章节数 %d（规则版 %d）: %s",
+                len(ai_chapters), quick_chapters_count, project_id,
+            )
+        else:
+            logging.warning(
+                "后台 AI 大纲章节数（%d）少于规则版（%d），保留规则版: %s",
+                len(ai_chapters), quick_chapters_count, project_id,
+            )
     except Exception:
         logging.exception("后台 AI 复核标书章节大纲失败: %s", project_id)
 
@@ -805,61 +823,28 @@ def stream_bid_outline(project_id: str) -> Iterator[dict[str, Any]]:
 
     yield {
         "type": "stage",
-        "stage": "ai_refining",
-        "message": "快速大纲已就绪，AI 正在结合招标评分项和企业知识库生成精细化章节大纲，请稍候...",
+        "stage": "done",
+        "message": "快速章节大纲已生成，AI 将在后台结合招标评分项和企业知识库继续优化，完成后自动刷新。",
     }
 
-    # ── 第二阶段：AI 精细化大纲（在 SSE 流内同步完成，完成后推送 refined 事件）──
-    try:
-        ai_outline = _generate_outline_from_ai_or_rule(payload)
-        ai_chapters = ai_outline.get("chapters") or []
-        ai_root_count = sum(1 for chapter in ai_chapters if "." not in str(chapter.get("order") or ""))
-
-        # 只有 AI 版章节数量明显多于规则版时才替换（避免 AI 退化）
-        if len(ai_chapters) >= len(quick_chapters):
-            save_bid_outline(project_id, ai_outline, analysis)
-            replace_bid_sections_from_outline(project_id, ai_outline)
-
-            # 推送 refined 事件，前端收到后刷新章节列表
-            yield {
-                "type": "refined",
-                "outline": {key: value for key, value in ai_outline.items() if key != "chapters"},
-                "total": len(ai_chapters),
-                "rootTotal": ai_root_count,
-            }
-
-            yield {
-                "type": "stage",
-                "stage": "refined_chapters",
-                "message": f"AI 精细化大纲已生成，共 {len(ai_chapters)} 个章节（规则版 {len(quick_chapters)} 个），正在刷新。",
-            }
-
-            for chapter in _stream_ordered_chapters(ai_chapters):
-                yielded += 1
-                yield {
-                    "type": "chapter",
-                    "index": yielded,
-                    "total": len(ai_chapters),
-                    "phase": "refined",
-                    "chapter": chapter,
-                }
-                time.sleep(0.02)
-
-            final_outline = ai_outline
-        else:
-            logging.warning(
-                "AI 版大纲章节数（%d）少于规则版（%d），保留规则版。project_id=%s",
-                len(ai_chapters), len(quick_chapters), project_id,
-            )
-            final_outline = quick_outline
-
-    except Exception:
-        logging.exception("AI 精细化章节大纲生成失败，保留规则版大纲: %s", project_id)
-        final_outline = quick_outline
+    # ── 第二阶段：AI 精细化大纲（后台线程，不阻塞 SSE 连接）──────────────
+    # 把规则版章节数写入 analysis 供后台线程判断是否需要替换
+    analysis_with_quick = {
+        **analysis,
+        "project_meta": {
+            **(analysis.get("project_meta") or {}),
+            "bid_outline": quick_outline,
+        },
+    }
+    threading.Thread(
+        target=_refine_bid_outline_in_background,
+        args=(project_id, payload, analysis_with_quick),
+        daemon=True,
+    ).start()
 
     yield {
         "type": "done",
-        "outline": final_outline,
-        "backgroundRefining": False,
+        "outline": quick_outline,
+        "backgroundRefining": True,
     }
 

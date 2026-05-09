@@ -37,6 +37,10 @@ def rerank_documents(
     if not indexed_documents:
         return rows
 
+    # DashScope Rerank 要求至少 2 条文档，否则返回 400
+    if len(indexed_documents) < 2:
+        return rows[:top_n]
+
     top_n = int(top_n or get_setting("rerank_top_n", 6) or 6)
     payload = {
         "model": get_setting("rerank_model", "qwen3-rerank"),
