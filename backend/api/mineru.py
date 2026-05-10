@@ -118,9 +118,7 @@ def get_parse_status(file_id):
         effective_status = local_status.get('parse_status') or (supabase_file or {}).get('parse_status')
         ingest_done = local_status.get("supabase_ingest_status") == "done"
         has_artifacts = bool(local_status.get("artifacts"))
-        parse_completed = effective_status == "indexed" or (
-            effective_status == "mineru_done" and ingest_done and has_artifacts
-        )
+        parse_completed = effective_status == "indexed" or (ingest_done and has_artifacts)
         user_message = None if parse_completed else local_status.get('user_message')
 
         return jsonify({

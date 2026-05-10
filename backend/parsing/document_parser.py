@@ -66,6 +66,11 @@ def _failure_payload(status: str, error: Exception | str, *, stage: str, retryab
     }
 
 
+def _has_completed_mineru_ingest(parse_id: str) -> bool:
+    status = read_parse_status(parse_id) or {}
+    return bool(status.get("artifacts")) and status.get("supabase_ingest_status") == "done"
+
+
 def _status_file(file_id: str) -> Path:
     return PARSED_OUTPUT_ROOT / file_id / "mineru_status.json"
 
@@ -548,6 +553,17 @@ def parse_and_index_tender_file(
             return
         except MinerUDownloadError as e:
             logging.exception("MinerU 结果 zip 下载失败，保留解析任务等待重试: %s", file_path)
+            if _has_completed_mineru_ingest(parse_id):
+                _update_supabase_status(supabase_file_id, "mineru_done")
+                write_parse_status(
+                    parse_id,
+                    {
+                        "parse_status": "mineru_done",
+                        "retryable": False,
+                        "user_message": None,
+                    },
+                )
+                return
             _update_supabase_status(supabase_file_id, "mineru_download_failed")
             write_parse_status(
                 parse_id,
@@ -647,6 +663,17 @@ def parse_and_index_tender_file(
         write_parse_status(parse_id, _failure_payload("ocr_required", e, stage="config", retryable=True, supabase_file_id=supabase_file_id))
     except MinerUDownloadError as e:
         logging.exception("MinerU 结果 zip 下载失败，等待重试: %s", file_path)
+        if _has_completed_mineru_ingest(parse_id):
+            _update_supabase_status(supabase_file_id, "mineru_done")
+            write_parse_status(
+                parse_id,
+                {
+                    "parse_status": "mineru_done",
+                    "retryable": False,
+                    "user_message": None,
+                },
+            )
+            return
         _update_supabase_status(supabase_file_id, "mineru_download_failed")
         write_parse_status(parse_id, _failure_payload("mineru_download_failed", e, stage="download", retryable=True, supabase_file_id=supabase_file_id))
     except Exception as e:

@@ -202,6 +202,7 @@ def _download_with_curl(zip_url: str, tmp_zip_path: Path, timeout: int, verify_s
     errors: list[str] = []
     resolve_attempts: list[str | None] = [None, *resolve_ips]
     for resolve_ip in resolve_attempts:
+        mode = f"resolve={resolve_ip}" if resolve_ip else "system-dns"
         resume_from = tmp_zip_path.stat().st_size if resume_enabled and tmp_zip_path.exists() else 0
         if tmp_zip_path.exists() and not resume_enabled:
             tmp_zip_path.unlink()
@@ -234,8 +235,12 @@ def _download_with_curl(zip_url: str, tmp_zip_path: Path, timeout: int, verify_s
 
         result = subprocess.run(command, check=False, capture_output=True, text=True)
         if result.returncode == 0:
-            return
-        mode = f"resolve={resolve_ip}" if resolve_ip else "system-dns"
+            if tmp_zip_path.exists() and tmp_zip_path.stat().st_size > 0:
+                return
+            errors.append(
+                f"{mode}: code=0, stderr={result.stderr.strip()}, but output file was not created or is empty"
+            )
+            continue
         errors.append(f"{mode}: code={result.returncode}, stderr={result.stderr.strip()}")
 
     raise MinerUDownloadError("curl fallback failed: " + " | ".join(errors))
@@ -367,6 +372,8 @@ def download_and_extract_zip(zip_url: str, output_dir: str | Path, timeout: int 
                 raise
             download_info["used_curl_fallback"] = True
             _download_with_curl(zip_url, tmp_zip_path, timeout, verify_ssl)
+        if not tmp_zip_path.exists():
+            raise MinerUDownloadError("MinerU result zip download did not create a temporary file")
         if tmp_zip_path.stat().st_size == 0:
             raise MinerUDownloadError("MinerU result zip download returned empty file")
         download_info["zip_size"] = tmp_zip_path.stat().st_size

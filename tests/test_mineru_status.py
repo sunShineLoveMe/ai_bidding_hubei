@@ -3,7 +3,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from backend.parsing.document_parser import _should_use_mineru_first, import_mineru_result_zip, read_parse_status, write_parse_status
 from backend.parsing.mineru_client import download_and_extract_zip
@@ -71,6 +71,18 @@ class MinerUStatusRegressionTest(unittest.TestCase):
             self.assertEqual(captured_headers.get("Range"), "bytes=7-")
             self.assertTrue(zip_path.exists())
             self.assertEqual(zip_path.read_bytes(), b"partial-end")
+
+    @patch("backend.parsing.mineru_client.subprocess.run")
+    @patch("backend.parsing.mineru_client._host_uses_fake_ip", return_value=True)
+    @patch("backend.parsing.mineru_client._resolve_download_host", return_value=[])
+    def test_curl_success_without_output_file_reports_download_error(self, _resolve_mock, _fake_ip_mock, run_mock):
+        run_mock.return_value = Mock(returncode=0, stderr="")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(Exception) as ctx:
+                download_and_extract_zip("https://example.com/mineru.zip", tmpdir, timeout=1)
+
+        self.assertIn("output file was not created or is empty", str(ctx.exception))
 
     def test_extract_valid_zip_artifacts(self):
         with tempfile.TemporaryDirectory() as tmpdir:

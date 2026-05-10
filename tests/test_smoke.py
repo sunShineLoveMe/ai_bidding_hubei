@@ -109,6 +109,34 @@ class BackendSmokeTest(unittest.TestCase):
         self.assertIsNone(payload["userMessage"])
         self.assertFalse(payload["retryable"])
 
+    @patch("backend.api.mineru.get_bid_file", return_value=None)
+    def test_parse_status_treats_ingested_artifacts_as_completed_even_if_status_failed(self, _file_mock):
+        file_id = "smoke-parse-completed-after-download-error"
+        status_dir = Path("parsed_outputs") / file_id
+        status_dir.mkdir(parents=True, exist_ok=True)
+        (status_dir / "mineru_status.json").write_text(
+            json.dumps(
+                {
+                    "parse_status": "mineru_download_failed",
+                    "artifacts": {"markdown_path": "parsed_outputs/demo/full.md"},
+                    "supabase_ingest_status": "done",
+                    "user_message": "MinerU 已完成解析，但结果 zip 下载失败。",
+                    "retryable": True,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        response = self.client.get(f"/api/bidding/parse-status/{file_id}")
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["parseStatus"], "mineru_download_failed")
+        self.assertTrue(payload["parseCompleted"])
+        self.assertIsNone(payload["userMessage"])
+        self.assertFalse(payload["retryable"])
+
 
 class DocxExportSmokeTest(unittest.TestCase):
     def test_missing_markdown_image_does_not_break_docx_export(self):
