@@ -7,6 +7,7 @@ from backend.core.bid_volumes import asset_applicable_volumes, asset_matches_vol
 from backend.ai.bid_writing_plan import ensure_chapter_writing_plan
 from backend.db.supabase_repo import get_project_interpretation, list_knowledge_assets
 from backend.ai.qwen_client import call_dashscope_api, stream_dashscope_api
+from backend.core.config import get_stage_model
 
 
 def _text(value: Any) -> str:
@@ -358,6 +359,7 @@ def stream_bid_section(project_id: str, chapter: dict[str, Any]) -> Iterator[dic
     try:
         for chunk in stream_dashscope_api(
             [{"role": "user", "content": prompt}],
+            model=get_stage_model("section_writing"),
             usage_context={
                 "project_id": project_id,
                 "section_id": chapter.get("id"),
@@ -377,6 +379,7 @@ def stream_bid_section(project_id: str, chapter: dict[str, Any]) -> Iterator[dic
     except Exception:
         response = call_dashscope_api(
             [{"role": "user", "content": prompt}],
+            model=get_stage_model("section_writing"),
             json_mode=False,
             usage_context={
                 "project_id": project_id,
@@ -415,6 +418,7 @@ def stream_bid_section(project_id: str, chapter: dict[str, Any]) -> Iterator[dic
         try:
             for chunk in stream_dashscope_api(
                 [{"role": "user", "content": supplement_prompt}],
+                model=get_stage_model("section_supplement"),
                 usage_context={
                     "project_id": project_id,
                     "section_id": chapter.get("id"),
@@ -437,6 +441,7 @@ def stream_bid_section(project_id: str, chapter: dict[str, Any]) -> Iterator[dic
             try:
                 response = call_dashscope_api(
                     [{"role": "user", "content": supplement_prompt}],
+                    model=get_stage_model("section_supplement"),
                     json_mode=False,
                     usage_context={
                         "project_id": project_id,

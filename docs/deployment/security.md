@@ -7,7 +7,7 @@
 - CORS 不再默认开放所有来源，后端读取 `APP_CORS_ORIGINS` 作为白名单；生产环境禁止配置为 `*`。
 - `APP_LOCAL_ONLY=true` 时只允许本机或内网地址访问，适合单机试用和内网部署。
 - `APP_AUTH_ENABLED=true` 时接口要求 `X-App-Auth-Token` 或 `Authorization: Bearer <token>`，生产环境应配置足够长度的 `APP_AUTH_TOKEN`。
-- `APP_ENV=production` 或 `REQUIRE_STRICT_CONFIG=true` 时会启动严格配置校验，缺少 DashScope、Supabase service role、OnlyOffice JWT 或使用弱占位值会直接拒绝启动。
+- `APP_ENV=production` 或 `REQUIRE_STRICT_CONFIG=true` 时会启动严格配置校验，缺少 DeepSeek/DashScope、Supabase service role、OnlyOffice JWT 或使用弱占位值会直接拒绝启动。
 - 500 错误默认返回通用提示，详细异常只写入后端日志；开发调试需要临时查看详细错误时，可在非生产环境设置 `APP_EXPOSE_DEBUG_ERRORS=true`。
 - 上传入口已增加扩展名和 MIME 校验，允许类型可通过 `ALLOWED_TENDER_EXTENSIONS`、`ALLOWED_KNOWLEDGE_EXTENSIONS`、`ALLOWED_ASSET_EXTENSIONS` 调整。
 
@@ -41,6 +41,12 @@
 | `DOCX_TOTAL_ASSET_IMAGE_LIMIT` | 可选 | `36` | 自动从资信库/产品库插入标书的图片资产总上限 | 避免图文并茂导出图片过多导致 Word 过大或排版失控 |
 | `DOCX_ALLOW_REMOTE_IMAGES` | 可选 | `false` | 是否允许 DOCX 导出下载外部 HTTP/HTTPS 图片 | 默认关闭；开启后仍会拦截 localhost、内网、回环和非公网地址 |
 | `ONLYOFFICE_JWT_SECRET` | 使用 OnlyOffice 时必填 | 至少 24 位随机字符串 | OnlyOffice 文档编辑鉴权密钥 | 未配置时无法生成 OnlyOffice 编辑配置 |
+| `AI_PROVIDER` | 必填 | `deepseek` | 文本生成供应商；标书写作默认使用 DeepSeek | 填错后会走错误的模型调用协议 |
+| `DEEPSEEK_API_KEY` | DeepSeek 写作必填 | 客户 DeepSeek API Key | 标书解读、大纲、正文和知识库问答的文本生成鉴权 | 缺失时写作模型调用直接失败 |
+| `DEEPSEEK_BASE_URL` | DeepSeek 写作必填 | `https://api.deepseek.com` | OpenAI-compatible Base URL | 填错会导致连接失败或 404 |
+| `DEEPSEEK_MODEL` | DeepSeek 写作必填 | `deepseek-v4-flash` | 标书写作模型 | 填错会出现模型不存在或无权限 |
+| `DEEPSEEK_KNOWLEDGE_MODEL` | DeepSeek 写作必填 | `deepseek-v4-flash` | 知识库问答文本模型 | 填错会影响知识库助手回答 |
+| `DASHSCOPE_API_KEY` | 必填 | 客户 DashScope API Key | 当前知识库向量化和 Rerank 默认仍依赖 DashScope | 缺失时知识库入库、检索增强或重排失败 |
 | `DASHSCOPE_REQUEST_TIMEOUT_SECONDS` | 必填 | `120` | 普通文本模型请求超时时间 | 过短会导致长章节生成中断，过长会拉长失败等待 |
 | `DASHSCOPE_STREAM_CONNECT_TIMEOUT_SECONDS` | 必填 | `15` | 流式生成连接建立超时 | 网络慢时可适当调大 |
 | `DASHSCOPE_STREAM_READ_TIMEOUT_SECONDS` | 必填 | `180` | 流式生成读取超时 | 长章节生成或客户网络不稳定时可调大 |
@@ -81,6 +87,12 @@ ALLOWED_TENDER_EXTENSIONS=pdf,doc,docx,txt,md
 ALLOWED_KNOWLEDGE_EXTENSIONS=pdf,doc,docx,txt,md,xls,xlsx,csv,png,jpg,jpeg,webp
 ALLOWED_ASSET_EXTENSIONS=png,jpg,jpeg,webp,pdf,doc,docx
 ONLYOFFICE_JWT_SECRET=replace_with_random_32_chars_or_longer
+AI_PROVIDER=deepseek
+DEEPSEEK_API_KEY=your_deepseek_api_key
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_KNOWLEDGE_MODEL=deepseek-v4-flash
+DASHSCOPE_API_KEY=your_dashscope_api_key
 DASHSCOPE_MAX_RETRIES=2
 DASHSCOPE_RETRY_BASE_DELAY_SECONDS=1.5
 DASHSCOPE_RETRY_MAX_DELAY_SECONDS=12

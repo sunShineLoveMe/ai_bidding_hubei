@@ -137,6 +137,37 @@ class BackendSmokeTest(unittest.TestCase):
         self.assertIsNone(payload["userMessage"])
         self.assertFalse(payload["retryable"])
 
+    @patch("backend.api.mineru.threading.Thread")
+    @patch("backend.api.mineru.get_bid_file", return_value=None)
+    def test_parse_status_binds_project_and_triggers_ingest_for_orphan_artifacts(self, _file_mock, thread_mock):
+        file_id = "smoke-parse-orphan-artifacts"
+        project_id = "11111111-1111-4111-8111-111111111111"
+        status_dir = Path("parsed_outputs") / file_id
+        status_dir.mkdir(parents=True, exist_ok=True)
+        (status_dir / "mineru_status.json").write_text(
+            json.dumps(
+                {
+                    "parse_status": "mineru_done",
+                    "artifacts": {"markdown_path": "parsed_outputs/demo/full.md"},
+                    "supabase_ingest_status": "skipped",
+                    "supabase_ingest_reason": "project_id is missing",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        response = self.client.get(f"/api/bidding/parse-status/{file_id}?projectId={project_id}")
+        payload = response.get_json()
+        status = json.loads((status_dir / "mineru_status.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(status["project_id"], project_id)
+        self.assertEqual(payload["parseStatus"], "mineru_done")
+        self.assertFalse(payload["parseCompleted"])
+        self.assertEqual(status["supabase_ingest_status"], "running")
+        thread_mock.assert_called()
+
 
 class DocxExportSmokeTest(unittest.TestCase):
     def test_missing_markdown_image_does_not_break_docx_export(self):

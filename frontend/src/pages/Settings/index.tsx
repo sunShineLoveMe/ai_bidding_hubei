@@ -8,7 +8,14 @@ import { ModuleHeader } from '../../components/common/ModuleHeader';
 interface RuntimeSettings {
   ai_provider: string;
   text_model: string;
+  interpretation_model: string;
+  outline_model: string;
+  compliance_model: string;
+  section_writing_model: string;
+  section_supplement_model: string;
   knowledge_model: string;
+  knowledge_followup_model: string;
+  deepseek_base_url: string;
   embedding_model: string;
   embedding_dimensions: number;
   rerank_enabled: boolean;
@@ -43,6 +50,15 @@ export function SettingsPage(): JSX.Element {
   const [defaults, setDefaults] = useState<RuntimeSettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
+  const aiProvider = Form.useWatch('ai_provider', form) || 'deepseek';
+  const interpretationModel = Form.useWatch('interpretation_model', form) || '-';
+  const outlineModel = Form.useWatch('outline_model', form) || '-';
+  const complianceModel = Form.useWatch('compliance_model', form) || '-';
+  const sectionWritingModel = Form.useWatch('section_writing_model', form) || '-';
+  const sectionSupplementModel = Form.useWatch('section_supplement_model', form) || '-';
+  const knowledgeModel = Form.useWatch('knowledge_model', form) || '-';
+  const modelServiceLabel = aiProvider === 'deepseek' ? 'DeepSeek' : aiProvider === 'dashscope' ? 'Qwen' : '私有化';
+  const modelServiceDesc = aiProvider === 'deepseek' ? 'OpenAI Compatible' : aiProvider === 'dashscope' ? 'DashScope API' : '内网模型';
 
   const fetchSettings = async () => {
     try {
@@ -96,7 +112,7 @@ export function SettingsPage(): JSX.Element {
       />
       <MetricCards
         items={[
-          { title: '模型服务', value: 'Qwen', desc: 'DashScope API', icon: Bot, colorClass: 'bg-blue-50 text-blue-600' },
+          { title: '模型服务', value: modelServiceLabel, desc: modelServiceDesc, icon: Bot, colorClass: 'bg-blue-50 text-blue-600' },
           { title: '向量库', value: 'PGVector', desc: 'Supabase 持久化', icon: Database, colorClass: 'bg-emerald-50 text-emerald-600' },
           { title: '文档服务', value: 'Office', desc: 'OnlyOffice 预留', icon: FileText, colorClass: 'bg-violet-50 text-violet-600' },
           { title: '部署模式', value: '单机', desc: '内网部署', icon: HardDrive, colorClass: 'bg-orange-50 text-orange-500' },
@@ -114,14 +130,70 @@ export function SettingsPage(): JSX.Element {
                 <div className="settings-grid">
                   <Form form={form} layout="vertical" size="middle" className="compact-form" disabled={loading}>
                     <Form.Item label="AI 提供方" name="ai_provider">
-                      <Select options={[{ label: '阿里云百炼 DashScope', value: 'dashscope' }, { label: '内网私有化模型', value: 'private' }]} />
+                      <Select
+                        options={[
+                          { label: 'DeepSeek 官方 API（标书写作推荐）', value: 'deepseek' },
+                          { label: '阿里云百炼 DashScope / Qwen', value: 'dashscope' },
+                          { label: '内网私有化模型', value: 'private' },
+                        ]}
+                        onChange={(value) => {
+                          if (value === 'deepseek') {
+                            form.setFieldsValue({
+                              text_model: 'deepseek-v4-flash',
+                              interpretation_model: 'deepseek-v4-pro',
+                              outline_model: 'deepseek-v4-pro',
+                              compliance_model: 'deepseek-v4-pro',
+                              section_writing_model: 'deepseek-v4-flash',
+                              section_supplement_model: 'deepseek-v4-flash',
+                              knowledge_model: 'deepseek-v4-flash',
+                              knowledge_followup_model: 'deepseek-v4-flash',
+                              deepseek_base_url: 'https://api.deepseek.com',
+                            });
+                          }
+                          if (value === 'dashscope') {
+                            form.setFieldsValue({
+                              text_model: 'qwen-turbo-latest',
+                              interpretation_model: 'qwen-max',
+                              outline_model: 'qwen-max',
+                              compliance_model: 'qwen-max',
+                              section_writing_model: 'qwen-turbo-latest',
+                              section_supplement_model: 'qwen-turbo-latest',
+                              knowledge_model: 'qwen-long',
+                              knowledge_followup_model: 'qwen-turbo-latest',
+                            });
+                          }
+                        }}
+                      />
                     </Form.Item>
-                    <Form.Item label="文本生成模型" name="text_model" rules={[{ required: true, message: '请输入文本生成模型' }]}>
-                      <Input placeholder="qwen-turbo-latest" />
+                    <Form.Item label="默认文本模型（兜底）" name="text_model" rules={[{ required: true, message: '请输入默认文本模型' }]}>
+                      <Input placeholder={aiProvider === 'deepseek' ? 'deepseek-v4-flash' : 'qwen-turbo-latest'} />
+                    </Form.Item>
+                    <Form.Item label="招标解读模型" name="interpretation_model" rules={[{ required: true, message: '请输入招标解读模型' }]}>
+                      <Input placeholder={aiProvider === 'deepseek' ? 'deepseek-v4-pro' : 'qwen-max'} />
+                    </Form.Item>
+                    <Form.Item label="分册大纲模型" name="outline_model" rules={[{ required: true, message: '请输入分册大纲模型' }]}>
+                      <Input placeholder={aiProvider === 'deepseek' ? 'deepseek-v4-pro' : 'qwen-max'} />
+                    </Form.Item>
+                    <Form.Item label="语义合规复核模型" name="compliance_model" rules={[{ required: true, message: '请输入语义合规复核模型' }]}>
+                      <Input placeholder={aiProvider === 'deepseek' ? 'deepseek-v4-pro' : 'qwen-max'} />
+                    </Form.Item>
+                    <Form.Item label="章节正文写作模型" name="section_writing_model" rules={[{ required: true, message: '请输入章节正文写作模型' }]}>
+                      <Input placeholder={aiProvider === 'deepseek' ? 'deepseek-v4-flash' : 'qwen-turbo-latest'} />
+                    </Form.Item>
+                    <Form.Item label="章节扩写/补写模型" name="section_supplement_model" rules={[{ required: true, message: '请输入章节扩写/补写模型' }]}>
+                      <Input placeholder={aiProvider === 'deepseek' ? 'deepseek-v4-flash' : 'qwen-turbo-latest'} />
                     </Form.Item>
                     <Form.Item label="知识库问答模型" name="knowledge_model" rules={[{ required: true, message: '请输入知识库问答模型' }]}>
-                      <Input placeholder="qwen-long" />
+                      <Input placeholder={aiProvider === 'deepseek' ? 'deepseek-v4-flash' : 'qwen-long'} />
                     </Form.Item>
+                    <Form.Item label="知识库追问建议模型" name="knowledge_followup_model" rules={[{ required: true, message: '请输入知识库追问建议模型' }]}>
+                      <Input placeholder={aiProvider === 'deepseek' ? 'deepseek-v4-flash' : 'qwen-turbo-latest'} />
+                    </Form.Item>
+                    {aiProvider === 'deepseek' && (
+                      <Form.Item label="DeepSeek Base URL" name="deepseek_base_url" rules={[{ required: true, message: '请输入 DeepSeek Base URL' }]}>
+                        <Input placeholder="https://api.deepseek.com" />
+                      </Form.Item>
+                    )}
                     <Form.Item label="Embedding 模型" name="embedding_model" rules={[{ required: true, message: '请选择 Embedding 模型' }]}>
                       <Select
                         options={[
@@ -160,8 +232,28 @@ export function SettingsPage(): JSX.Element {
                   </Form>
                   <div className="settings-note">
                     <KeyRound size={22} />
-                    <strong>敏感配置说明</strong>
-                    <p>API Key 不在前端保存。生产环境请继续通过 `.env` 配置 `DASHSCOPE_API_KEY`，由 Flask 后端统一读取。</p>
+                    <strong>阶段模型分工</strong>
+                    <p>招标解读、分册大纲和语义合规复核属于结构判断和推理任务，建议使用 Pro；正文写作、章节补写和知识库问答调用频率高，建议使用 Flash 控制成本和响应速度。</p>
+                    <div className="flex flex-wrap gap-2">
+                      <Tag color="red">招标解读：{interpretationModel}</Tag>
+                      <Tag color="red">分册大纲：{outlineModel}</Tag>
+                      <Tag color="red">语义复核：{complianceModel}</Tag>
+                      <Tag color="blue">正文写作：{sectionWritingModel}</Tag>
+                      <Tag color="blue">章节补写：{sectionSupplementModel}</Tag>
+                      <Tag color="green">知识问答：{knowledgeModel}</Tag>
+                    </div>
+                    <strong className="mt-4 block">敏感配置说明</strong>
+                    <p>API Key 不在前端保存。标书写作使用 DeepSeek 时，请在 `.env` 配置 `DEEPSEEK_API_KEY`；知识库向量和 Rerank 默认仍使用 DashScope，请保留 `DASHSCOPE_API_KEY`。</p>
+                    <Tag color="geekblue">DEEPSEEK_API_KEY</Tag>
+                    <Tag color="geekblue">DEEPSEEK_BASE_URL</Tag>
+                    <Tag color="geekblue">DEEPSEEK_MODEL</Tag>
+                    <Tag color="geekblue">DEEPSEEK_INTERPRETATION_MODEL</Tag>
+                    <Tag color="geekblue">DEEPSEEK_OUTLINE_MODEL</Tag>
+                    <Tag color="geekblue">DEEPSEEK_COMPLIANCE_MODEL</Tag>
+                    <Tag color="geekblue">DEEPSEEK_SECTION_WRITING_MODEL</Tag>
+                    <Tag color="geekblue">DEEPSEEK_SECTION_SUPPLEMENT_MODEL</Tag>
+                    <Tag color="geekblue">DEEPSEEK_KNOWLEDGE_MODEL</Tag>
+                    <Tag color="geekblue">DEEPSEEK_KNOWLEDGE_FOLLOWUP_MODEL</Tag>
                     <Tag color="blue">DASHSCOPE_API_KEY</Tag>
                     <Tag color="purple">DASHSCOPE_MODEL</Tag>
                     <Tag color="cyan">DASHSCOPE_KNOWLEDGE_MODEL</Tag>

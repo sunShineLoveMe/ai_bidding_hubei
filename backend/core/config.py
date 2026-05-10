@@ -7,9 +7,16 @@ CONFIG_DIR = Path("config")
 CONFIG_FILE = CONFIG_DIR / "runtime_settings.json"
 
 DEFAULT_SETTINGS: dict[str, Any] = {
-    "ai_provider": "dashscope",
-    "text_model": "qwen-turbo-latest",
-    "knowledge_model": "qwen-long",
+    "ai_provider": "deepseek",
+    "text_model": "deepseek-v4-flash",
+    "interpretation_model": "deepseek-v4-pro",
+    "outline_model": "deepseek-v4-pro",
+    "compliance_model": "deepseek-v4-pro",
+    "section_writing_model": "deepseek-v4-flash",
+    "section_supplement_model": "deepseek-v4-flash",
+    "knowledge_model": "deepseek-v4-flash",
+    "knowledge_followup_model": "deepseek-v4-flash",
+    "deepseek_base_url": "https://api.deepseek.com",
     "embedding_model": "text-embedding-v4",
     "embedding_dimensions": 1024,
     "rerank_enabled": True,
@@ -46,7 +53,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 ENV_MAPPING = {
     "ai_provider": "AI_PROVIDER",
     "text_model": "DASHSCOPE_MODEL",
+    "interpretation_model": "INTERPRETATION_MODEL",
+    "outline_model": "OUTLINE_MODEL",
+    "compliance_model": "COMPLIANCE_MODEL",
+    "section_writing_model": "SECTION_WRITING_MODEL",
+    "section_supplement_model": "SECTION_SUPPLEMENT_MODEL",
     "knowledge_model": "DASHSCOPE_KNOWLEDGE_MODEL",
+    "knowledge_followup_model": "KNOWLEDGE_FOLLOWUP_MODEL",
+    "deepseek_base_url": "DEEPSEEK_BASE_URL",
     "embedding_model": "DASHSCOPE_EMBEDDING_MODEL",
     "embedding_dimensions": "DASHSCOPE_EMBEDDING_DIMENSIONS",
     "rerank_enabled": "DASHSCOPE_RERANK_ENABLED",
@@ -125,6 +139,35 @@ def load_runtime_settings() -> dict[str, Any]:
         if env_value not in {None, ""}:
             settings[key] = env_value
 
+    provider = str(settings.get("ai_provider") or "").lower()
+    if provider == "deepseek":
+        deepseek_model = os.getenv("DEEPSEEK_MODEL")
+        deepseek_knowledge_model = os.getenv("DEEPSEEK_KNOWLEDGE_MODEL") or deepseek_model
+        stage_envs = {
+            "interpretation_model": "DEEPSEEK_INTERPRETATION_MODEL",
+            "outline_model": "DEEPSEEK_OUTLINE_MODEL",
+            "compliance_model": "DEEPSEEK_COMPLIANCE_MODEL",
+            "section_writing_model": "DEEPSEEK_SECTION_WRITING_MODEL",
+            "section_supplement_model": "DEEPSEEK_SECTION_SUPPLEMENT_MODEL",
+            "knowledge_followup_model": "DEEPSEEK_KNOWLEDGE_FOLLOWUP_MODEL",
+        }
+        if deepseek_model:
+            settings["text_model"] = deepseek_model
+        else:
+            settings["text_model"] = DEFAULT_SETTINGS["text_model"]
+        if deepseek_knowledge_model:
+            settings["knowledge_model"] = deepseek_knowledge_model
+        else:
+            settings["knowledge_model"] = DEFAULT_SETTINGS["knowledge_model"]
+        for key, env_key in stage_envs.items():
+            env_value = os.getenv(env_key)
+            if env_value not in {None, ""}:
+                settings[key] = env_value
+            elif not settings.get(key):
+                settings[key] = DEFAULT_SETTINGS[key]
+        if os.getenv("DEEPSEEK_BASE_URL"):
+            settings["deepseek_base_url"] = os.getenv("DEEPSEEK_BASE_URL")
+
     # Runtime UI settings intentionally override non-sensitive env defaults so
     # changes from the settings page take effect without editing .env.
     if CONFIG_FILE.exists():
@@ -149,6 +192,21 @@ def save_runtime_settings(payload: dict[str, Any]) -> dict[str, Any]:
 
 def get_setting(key: str, default: Any = None) -> Any:
     return load_runtime_settings().get(key, default)
+
+
+def get_stage_model(stage: str, default: str | None = None) -> str:
+    settings = load_runtime_settings()
+    key_by_stage = {
+        "interpretation": "interpretation_model",
+        "outline": "outline_model",
+        "compliance": "compliance_model",
+        "section_writing": "section_writing_model",
+        "section_supplement": "section_supplement_model",
+        "knowledge": "knowledge_model",
+        "knowledge_followup": "knowledge_followup_model",
+    }
+    key = key_by_stage.get(stage, "text_model")
+    return str(settings.get(key) or default or settings.get("text_model") or DEFAULT_SETTINGS["text_model"])
 
 
 def get_enterprise_profile() -> dict[str, str]:

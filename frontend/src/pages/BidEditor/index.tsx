@@ -1331,12 +1331,20 @@ export function BidEditorPage(): JSX.Element {
     return 'default';
   }
 
+  function visibleBatchTask(chapter: ChapterDraft): BatchTask | undefined {
+    if (isChapterGenerated(chapter)) {
+      return undefined;
+    }
+    return batchTasks[chapter.id];
+  }
+
   function chapterStatusClass(chapter: ChapterDraft): string {
+    if (isChapterGenerated(chapter)) return 'done';
     const task = batchTasks[chapter.id];
-    if (task?.status === 'running') return 'running';
     if (chapter.status === 'generating') return 'running';
+    if (task?.status === 'running') return 'running';
     if (isChapterFailed(chapter)) return 'failed';
-    if (task?.status === 'done' || isChapterGenerated(chapter)) return 'done';
+    if (task?.status === 'done') return 'done';
     if (task?.status === 'stopped') return 'pending';
     return 'pending';
   }
@@ -1358,6 +1366,33 @@ export function BidEditorPage(): JSX.Element {
 
   function needsBatchWriting(chapter: ChapterDraft): boolean {
     return !isChapterGenerated(chapter) || isChapterUnderTarget(chapter);
+  }
+
+  function downloadOutlineMarkdown(): void {
+    const source = visibleChapters.length ? visibleChapters : scopedChapters;
+    if (!source.length) {
+      message.warning('当前没有可下载的目录');
+      return;
+    }
+    const title = `${volumeLabel(activeVolume)}目录`;
+    const lines = [
+      `# ${title}`,
+      '',
+      ...source.map(chapter => {
+        const level = Math.max(1, Math.min(chapter.level || 1, 6));
+        return `${'#'.repeat(level + 1)} ${chapterDisplayTitle(chapter)}`;
+      }),
+      '',
+    ];
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${title}.md`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
   }
 
   function chapterIndent(level?: number): number {
@@ -2427,11 +2462,7 @@ export function BidEditorPage(): JSX.Element {
                 <BookOpen size={18} />
                 <strong>标书目录</strong>
               </div>
-              <Space size={10} wrap>
-                <label className="outline-check">
-                  <input type="checkbox" />
-                  <span>批量操作</span>
-                </label>
+              <Space size={10} wrap className="outline-toolbar-actions">
                 <label className="outline-switch">
                   <input
                     type="checkbox"
@@ -2455,7 +2486,7 @@ export function BidEditorPage(): JSX.Element {
                 >
                   重置生成状态
                 </Button>
-                <Button size="small" icon={<Download size={14} />}>下载目录</Button>
+                <Button size="small" icon={<Download size={14} />} onClick={downloadOutlineMarkdown}>下载目录</Button>
               </Space>
             </div>
 
@@ -2463,7 +2494,7 @@ export function BidEditorPage(): JSX.Element {
               {visibleChapters.map(chapter => {
                 const wordMeta = chapterWordMeta(chapter);
                 const plan = chapterWritingPlan(chapter);
-                const task = batchTasks[chapter.id];
+                const task = visibleBatchTask(chapter);
                 const active = chapter.id === selectedChapter?.id;
                 return (
                   <div
@@ -2696,7 +2727,10 @@ export function BidEditorPage(): JSX.Element {
                   <span className="chapter-toggle" onClick={event => { event.stopPropagation(); toggleChapter(chapter.id); }}>
                     {chapter.expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                   </span>
-                  <Tooltip title={batchTasks[chapter.id]?.status ? batchStatusLabel(batchTasks[chapter.id].status) : isChapterGenerated(chapter) ? '已完成' : '未完成'}>
+                  <Tooltip title={(() => {
+                    const task = visibleBatchTask(chapter);
+                    return task?.status ? batchStatusLabel(task.status) : isChapterGenerated(chapter) ? '已完成' : '未完成';
+                  })()}>
                     <span className={`chapter-status ${chapterStatusClass(chapter)}`} />
                   </Tooltip>
                   <span className="chapter-title">{chapterDisplayTitle(chapter)}</span>

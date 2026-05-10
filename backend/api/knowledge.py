@@ -26,7 +26,7 @@ from flask import Response, current_app, jsonify, request, stream_with_context
 from backend.api._shared import bp, knowledge_bp
 from backend.ai.qwen_client import call_dashscope_api
 from backend.core.bid_volumes import asset_applicable_volumes
-from backend.core.config import get_setting
+from backend.core.config import get_stage_model
 from backend.core.llm_json_utils import strip_llm_json
 from backend.core.security import UploadValidationError, safe_upload_filename, validate_uploaded_file
 from backend.db.supabase_repo import (
@@ -324,8 +324,12 @@ JSON 格式：
                 {"role": "system", "content": "你只输出合法 JSON。"},
                 {"role": "user", "content": prompt},
             ],
-            model=get_setting("knowledge_followup_model", get_setting("text_model", "qwen-turbo-latest")),
+            model=get_stage_model("knowledge_followup"),
             json_mode=True,
+            usage_context={
+                "stage": "knowledge_followup_generation",
+                "operation_type": "text_generation",
+            },
         )
         content = (
             response.get("output", {})

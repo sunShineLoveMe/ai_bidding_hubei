@@ -71,7 +71,7 @@ flowchart LR
     LLM --> API
 ```
 
-**技术栈**：Flask · React 18 · TypeScript · Ant Design 5 · Tiptap · Supabase (PostgreSQL + pgvector + Storage) · DashScope/Qwen · MinerU
+**技术栈**：Flask · React 18 · TypeScript · Ant Design 5 · Tiptap · Supabase (PostgreSQL + pgvector + Storage) · DeepSeek / DashScope · MinerU
 
 → [完整架构说明](docs/architecture/overview.md)
 
@@ -79,7 +79,7 @@ flowchart LR
 
 ## 快速开始
 
-> ⚠️ **首次启动前必做**：在 Supabase 里执行 [8 个必需的 SQL 脚本](docs/deployment/supabase-setup.md#必须执行否则功能异常) 并创建 [5 个 Storage Bucket](docs/deployment/supabase-setup.md#storage-buckets)。跳过任一步都会在对应功能触发时报错。
+> ⚠️ **首次启动前必做**：在 Supabase 里执行 [9 个必需的 SQL 脚本](docs/deployment/supabase-setup.md#必须执行否则功能异常) 并创建 [5 个 Storage Bucket](docs/deployment/supabase-setup.md#storage-buckets)。跳过任一步都会在对应功能触发时报错。
 
 ```bash
 # 1. 安装后端依赖
@@ -91,9 +91,12 @@ cd frontend && npm install && npm run build && cd ..
 
 # 3. 配置环境变量
 cp .env.example .env
-# 编辑 .env，填写 DASHSCOPE_API_KEY、SUPABASE_URL、SUPABASE_SERVICE_ROLE_KEY
+# 编辑 .env，填写 DEEPSEEK_API_KEY、DASHSCOPE_API_KEY、SUPABASE_URL、SUPABASE_SERVICE_ROLE_KEY
 
 # 4. 在 Supabase SQL Editor 执行 sql/ 目录下的脚本（详见 supabase-setup.md）
+# 已执行老库需补充执行：
+#   sql/20260510_seed_deepseek_v4_flash_pricing.sql
+#   sql/20260510_seed_deepseek_v4_pro_pricing.sql
 
 # 5. 启动
 python main.py
@@ -101,6 +104,27 @@ python main.py
 ```
 
 → [完整部署文档](docs/deployment/quickstart.md) · [安全配置](docs/deployment/security.md) · [Supabase 初始化](docs/deployment/supabase-setup.md)
+
+### DeepSeek 写作模型
+
+标书系统按业务阶段使用 DeepSeek 模型，通过 OpenAI-compatible 协议访问 `https://api.deepseek.com/chat/completions`。招标解读、分册大纲和 LLM 语义合规复核默认使用 `deepseek-v4-pro`，用于结构判断、风险识别和复杂推理；章节正文、章节补写、知识库问答和追问建议默认使用 `deepseek-v4-flash`，用于降低批量生成成本和提升响应速度。知识库向量化和 Rerank 默认仍使用 DashScope，因此本地和生产环境需要同时配置：
+
+```env
+AI_PROVIDER=deepseek
+DEEPSEEK_API_KEY=your_deepseek_api_key
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_INTERPRETATION_MODEL=deepseek-v4-pro
+DEEPSEEK_OUTLINE_MODEL=deepseek-v4-pro
+DEEPSEEK_COMPLIANCE_MODEL=deepseek-v4-pro
+DEEPSEEK_SECTION_WRITING_MODEL=deepseek-v4-flash
+DEEPSEEK_SECTION_SUPPLEMENT_MODEL=deepseek-v4-flash
+DEEPSEEK_KNOWLEDGE_MODEL=deepseek-v4-flash
+DEEPSEEK_KNOWLEDGE_FOLLOWUP_MODEL=deepseek-v4-flash
+DASHSCOPE_API_KEY=your_dashscope_api_key
+```
+
+系统设置 - 模型配置中会展示每个业务模块当前使用的模型；用量与成本中心会按 `provider`、`model`、`stage` 记录历史调用。DeepSeek V4 Flash 成本种子脚本按客户提供的价格口径写入：输入缓存命中 0.02 元 / 百万 tokens、输入缓存未命中 1 元 / 百万 tokens、输出 2 元 / 百万 tokens；DeepSeek V4 Pro 按输入缓存命中 0.025 元 / 百万 tokens、输入缓存未命中 3 元 / 百万 tokens、输出 6 元 / 百万 tokens 写入。当前系统按缓存未命中输入价保守估算，最终仍以 DeepSeek 账单为准。
 
 ---
 

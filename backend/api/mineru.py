@@ -33,11 +33,31 @@ from backend.parsing.document_parser import (
 from backend.api.projects import _find_local_parse_status_for_supabase_file, _sync_and_parse_tender_in_background
 
 
+def _uuid_or_none(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return str(uuid.UUID(value))
+    except ValueError:
+        return None
+
+
 @bp.route('/parse-status/<file_id>', methods=['GET'])
 def get_parse_status(file_id):
     """查询招标文件解析状态，合并 Supabase 当前状态与本地 MinerU 产物状态。"""
     try:
         local_status = read_parse_status(file_id) or {}
+        hinted_project_id = _uuid_or_none(request.args.get("projectId"))
+        hinted_supabase_file_id = _uuid_or_none(request.args.get("supabaseFileId"))
+        bind_payload = {}
+        if hinted_project_id and not local_status.get("project_id"):
+            bind_payload["project_id"] = hinted_project_id
+        if hinted_supabase_file_id and not local_status.get("supabase_file_id"):
+            bind_payload["supabase_file_id"] = hinted_supabase_file_id
+        if bind_payload:
+            write_parse_status(file_id, bind_payload)
+            local_status = read_parse_status(file_id) or local_status
+
         parse_status = local_status.get("parse_status")
         source_file = local_status.get("source_file")
         recovery_started_at = local_status.get("parse_recovery_started_at")
@@ -102,6 +122,26 @@ def get_parse_status(file_id):
                 "retryable": True,
             })
             threading.Thread(target=retry_mineru_result_download, args=(file_id,), daemon=True).start()
+            local_status = read_parse_status(file_id) or local_status
+
+        artifacts = local_status.get("artifacts")
+        ingest_status = local_status.get("supabase_ingest_status")
+        if (
+            artifacts
+            and local_status.get("project_id")
+            and ingest_status in {None, "skipped", "failed"}
+        ):
+            write_parse_status(file_id, {
+                "supabase_ingest_status": "running",
+                "supabase_ingest_reason": None,
+                "user_message": "解析结果已下载，正在补充写入项目解读数据。",
+                "retryable": True,
+            })
+            threading.Thread(
+                target=ingest_mineru_artifacts_to_supabase,
+                args=(file_id, artifacts),
+                daemon=True,
+            ).start()
             local_status = read_parse_status(file_id) or local_status
 
         supabase_file = None
@@ -178,6 +218,15 @@ def ingest_mineru_artifacts(file_id):
         artifacts = local_status.get("artifacts")
         if not artifacts:
             return jsonify({'error': '当前任务尚无 MinerU 解析产物，请等待 mineru_done。'}), 400
+        project_id = _uuid_or_none((request.get_json(silent=True) or {}).get("projectId") or request.form.get("projectId"))
+        supabase_file_id = _uuid_or_none((request.get_json(silent=True) or {}).get("supabaseFileId") or request.form.get("supabaseFileId"))
+        bind_payload = {}
+        if project_id and not local_status.get("project_id"):
+            bind_payload["project_id"] = project_id
+        if supabase_file_id and not local_status.get("supabase_file_id"):
+            bind_payload["supabase_file_id"] = supabase_file_id
+        if bind_payload:
+            write_parse_status(file_id, bind_payload)
 
         threading.Thread(target=ingest_mineru_artifacts_to_supabase, args=(file_id, artifacts), daemon=True).start()
         return jsonify({

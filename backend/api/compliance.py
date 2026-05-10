@@ -21,7 +21,7 @@ from backend.ai.compliance_checker import build_compliance_report
 from backend.ai.qwen_client import call_dashscope_api
 from backend.ai.semantic_compliance import build_semantic_compliance_report
 from backend.core.bid_volumes import section_volume_type, volume_name
-from backend.core.config import build_enterprise_context
+from backend.core.config import build_enterprise_context, get_stage_model
 from backend.export.md_to_word import clean_formal_bid_text
 
 
@@ -115,6 +115,7 @@ def generate_compliance_supplement(project_id):
     try:
         response = call_dashscope_api(
             [{"role": "user", "content": prompt}],
+            model=get_stage_model("compliance"),
             json_mode=False,
             usage_context={
                 "project_id": project_id,

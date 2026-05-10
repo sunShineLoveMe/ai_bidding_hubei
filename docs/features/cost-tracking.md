@@ -33,6 +33,8 @@ GET /api/bidding/settings/ai-usage?days=30&projectId=<project_id>
 
 | 调用类型 | 统计来源 | 成本口径 |
 | --- | --- | --- |
+| DeepSeek 文本生成 | OpenAI-compatible 返回的 `usage.prompt_tokens`、`usage.completion_tokens`、`usage.total_tokens` | `deepseek-v4-flash` 按人民币单价估算，当前按输入缓存未命中价保守计算 |
+| DeepSeek 流式生成 | 优先读取 stream `usage`；缺失时按输入输出文本长度估算 | 估算记录会标记 `usage_estimated=true` |
 | DashScope 文本生成 | 原生返回的 `usage.input_tokens`、`usage.output_tokens`、`usage.total_tokens` | 按 `ai_model_prices` 中的输入 / 输出人民币单价估算 |
 | DashScope 流式生成 | 优先读取流式 payload 中的 `usage`；缺失时按输入输出文本长度估算 | 估算记录会标记 `usage_estimated=true` |
 | OpenAI-compatible Embedding | `usage.prompt_tokens`、`usage.total_tokens` | 按 Embedding 模型人民币单价估算 |
@@ -49,6 +51,8 @@ GET /api/bidding/settings/ai-usage?days=30&projectId=<project_id>
 -- sql/20260507_create_ai_usage_tracking.sql
 -- 若此前已执行过 USD 口径种子价，再执行：
 -- sql/20260507_update_ai_usage_pricing_cny.sql
+-- 若需要 DeepSeek V4 Flash 写作成本统计，再执行：
+-- sql/20260510_seed_deepseek_v4_flash_pricing.sql
 ```
 
 该脚本会创建：
@@ -62,7 +66,7 @@ GET /api/bidding/settings/ai-usage?days=30&projectId=<project_id>
 | `ai_usage_daily_summary` | 按日期汇总全局用量 |
 | `get_ai_usage_project_cost(project_id)` | 项目级成本查询 RPC |
 
-当前默认种子价格覆盖 `qwen-turbo-latest`、`qwen-long-latest`、`text-embedding-v4`、`qwen3-rerank` 和 `mineru-ocr`。如果模型厂商价格发生变化，应优先更新 `ai_model_prices`，历史日志中的 `total_cost` 不会自动重算。
+当前默认种子价格覆盖 `deepseek-v4-flash`、`qwen-turbo-latest`、`qwen-long-latest`、`text-embedding-v4`、`qwen3-rerank` 和 `mineru-ocr`。DeepSeek V4 Flash 价格按客户提供口径记录：输入缓存命中 0.02 元 / 百万 tokens、输入缓存未命中 1 元 / 百万 tokens、输出 2 元 / 百万 tokens；当前成本计算按缓存未命中输入价保守估算。如果模型厂商价格发生变化，应优先更新 `ai_model_prices`，历史日志中的 `total_cost` 不会自动重算。
 
 ### 多模型兼容
 

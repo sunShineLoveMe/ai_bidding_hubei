@@ -117,6 +117,100 @@ def apply_image_paragraph_format(paragraph):
     fmt.space_before = Pt(6)
     fmt.space_after = Pt(6)
 
+
+def _markdown_heading_lines(md_content: str) -> tuple[int | None, list[dict]]:
+    title_line_index: int | None = None
+    entries: list[dict] = []
+    for index, raw_line in enumerate(md_content.split("\n")):
+        line = raw_line.strip()
+        match = re.match(r"^(#{1,6})\s+(.+?)\s*#*\s*$", line)
+        if not match:
+            continue
+
+        level = len(match.group(1))
+        text = clean_formal_bid_text(re.sub(r"\*\*(.*?)\*\*", r"\1", match.group(2))).strip()
+        if not text:
+            continue
+        if title_line_index is None and level == 1:
+            title_line_index = index
+            continue
+
+        bookmark_index = len(entries) + 1
+        entries.append({
+            "line_index": index,
+            "level": level,
+            "text": text,
+            "anchor": f"bid_heading_{bookmark_index}",
+            "bookmark_id": bookmark_index,
+        })
+    return title_line_index, entries
+
+
+def _add_bookmark(paragraph, name: str, bookmark_id: int) -> None:
+    bookmark_start = OxmlElement("w:bookmarkStart")
+    bookmark_start.set(qn("w:id"), str(bookmark_id))
+    bookmark_start.set(qn("w:name"), name)
+    paragraph._p.insert(0, bookmark_start)
+
+    bookmark_end = OxmlElement("w:bookmarkEnd")
+    bookmark_end.set(qn("w:id"), str(bookmark_id))
+    paragraph._p.append(bookmark_end)
+
+
+def _add_internal_hyperlink(paragraph, text: str, anchor: str) -> None:
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("w:anchor"), anchor)
+
+    run_element = OxmlElement("w:r")
+    rpr = OxmlElement("w:rPr")
+    color = OxmlElement("w:color")
+    color.set(qn("w:val"), "1F4E79")
+    underline = OxmlElement("w:u")
+    underline.set(qn("w:val"), "single")
+    rpr.append(color)
+    rpr.append(underline)
+    _set_rpr_language(rpr)
+    run_element.append(rpr)
+
+    text_element = OxmlElement("w:t")
+    text_element.text = text
+    run_element.append(text_element)
+    hyperlink.append(run_element)
+    paragraph._p.append(hyperlink)
+
+
+def _add_toc_page(doc, project_name: str, heading_entries: list[dict]) -> None:
+    title = doc.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.paragraph_format.first_line_indent = Pt(0)
+    title.paragraph_format.space_after = Pt(16)
+    title_run = title.add_run(project_name)
+    apply_run_font(title_run, east_asia="黑体", size=20, bold=True)
+
+    toc_title = doc.add_paragraph()
+    toc_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    toc_title.paragraph_format.first_line_indent = Pt(0)
+    toc_title.paragraph_format.space_after = Pt(14)
+    toc_run = toc_title.add_run("目录")
+    apply_run_font(toc_run, east_asia="黑体", size=16, bold=True)
+
+    if not heading_entries:
+        empty = doc.add_paragraph()
+        empty.paragraph_format.first_line_indent = Pt(0)
+        empty_run = empty.add_run("暂无章节目录，请先生成章节大纲。")
+        apply_run_font(empty_run, east_asia="仿宋", size=12)
+    for entry in heading_entries:
+        paragraph = doc.add_paragraph()
+        paragraph.paragraph_format.first_line_indent = Pt(0)
+        paragraph.paragraph_format.left_indent = Pt(max(0, entry["level"] - 1) * 18)
+        paragraph.paragraph_format.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+        paragraph.paragraph_format.line_spacing = Pt(22)
+        paragraph.paragraph_format.space_after = Pt(2)
+        _add_internal_hyperlink(paragraph, entry["text"], entry["anchor"])
+
+    doc.add_page_break()
+
+
 def convert_mermaid_to_image(mermaid_code):
     """将 Mermaid 代码转换为图片"""
     # 创建临时文件
@@ -604,6 +698,9 @@ def convert_md_to_word(md_file, return_report: bool = False):
     title_match = re.search(r'^\s*#\s+(.+?)\s*$', md_content, re.MULTILINE)
     project_name = clean_formal_bid_text(title_match.group(1).strip()) if title_match else Path(md_file).stem
     set_document_format(doc, project_name)
+    title_line_index, heading_entries = _markdown_heading_lines(md_content)
+    heading_entry_by_line = {entry["line_index"]: entry for entry in heading_entries}
+    _add_toc_page(doc, project_name, heading_entries)
     
     # 处理Markdown内容
     lines = md_content.split('\n')
@@ -660,29 +757,33 @@ def convert_md_to_word(md_file, return_report: bool = False):
         
         # 处理标题
         if line.startswith('#'):
+            if title_line_index is not None and i == title_line_index:
+                i += 1
+                continue
             level = len(re.match(r'^#+', line).group())
             # 移除标题中的加粗标记
             text = clean_formal_bid_text(re.sub(r'\*\*(.*?)\*\*', r'\1', line.lstrip('#').strip()))
             if should_start_heading_on_new_page(level, text, heading_count):
                 doc.add_page_break()
+            word_heading_level = min(level, 4)
+            p = doc.add_heading(text, level=word_heading_level)
             if level == 1:
-                # 一级标题作为文档标题
-                p = doc.add_heading(text, level=0)
-                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p.alignment = WD_ALIGN_PARAGRAPH.LEFT
                 for run in p.runs:
-                    apply_run_font(run, east_asia='黑体', size=22, bold=True)
+                    apply_run_font(run, east_asia='黑体', size=18, bold=True)
+            elif level == 2:
+                p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                for run in p.runs:
+                    apply_run_font(run, east_asia='黑体', size=16, bold=True)
+            elif level == 3:
+                for run in p.runs:
+                    apply_run_font(run, east_asia='黑体', size=15, bold=True)
             else:
-                # 其他级别的标题
-                p = doc.add_heading(text, level=min(level - 1, 4))
-                if level == 2:
-                    p.alignment = WD_ALIGN_PARAGRAPH.LEFT
                 for run in p.runs:
-                    if level == 2:
-                        apply_run_font(run, east_asia='黑体', size=16, bold=True)
-                    elif level == 3:
-                        apply_run_font(run, east_asia='黑体', size=15, bold=True)
-                    else:
-                        apply_run_font(run, east_asia='黑体', size=12, bold=True)
+                    apply_run_font(run, east_asia='黑体', size=12, bold=True)
+            if i in heading_entry_by_line:
+                entry = heading_entry_by_line[i]
+                _add_bookmark(p, entry["anchor"], int(entry["bookmark_id"]))
             heading_count += 1
         
         # 处理列表

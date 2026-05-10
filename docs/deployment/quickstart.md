@@ -7,7 +7,7 @@
 在跑起来之前务必完成这 3 件事，否则首次启动必定报错：
 
 1. **准备好 Supabase 项目**（自建或 supabase.com 托管都可以），拿到 `SUPABASE_URL` 和 `SUPABASE_SERVICE_ROLE_KEY`。
-2. **执行必需的 SQL 脚本**（共 8 个），详见 [supabase-setup.md](./supabase-setup.md#必须执行否则功能异常)。跳过任何一个都会在对应功能触发时报错。
+2. **执行必需的 SQL 脚本**（共 9 个），详见 [supabase-setup.md](./supabase-setup.md#必须执行否则功能异常)。跳过任何一个都会在对应功能触发时报错。
 3. **创建 5 个 Storage Buckets**，详见 [supabase-setup.md](./supabase-setup.md#storage-buckets)。
 
 常见症状速查：
@@ -106,7 +106,11 @@ ALLOWED_KNOWLEDGE_EXTENSIONS=pdf,doc,docx,txt,md,xls,xlsx,csv,png,jpg,jpeg,webp
 ALLOWED_ASSET_EXTENSIONS=png,jpg,jpeg,webp,pdf,doc,docx
 
 # LLM / Embedding / Rerank
-AI_PROVIDER=dashscope
+AI_PROVIDER=deepseek
+DEEPSEEK_API_KEY=your_deepseek_api_key
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_KNOWLEDGE_MODEL=deepseek-v4-flash
 DASHSCOPE_API_KEY=your_dashscope_api_key
 DASHSCOPE_MODEL=qwen-turbo-latest
 DASHSCOPE_KNOWLEDGE_MODEL=qwen-long
@@ -170,7 +174,7 @@ BACKEND_URL_FOR_DOCKER=host.docker.internal:3012
 
 模型、Embedding、超时时间、OnlyOffice 地址、存储目录和企业画像等非敏感配置也可以在「系统设置」页面调整。页面保存后会写入本地 `config/runtime_settings.json`，后端在下一次模型请求时读取该配置；该文件已加入 `.gitignore`，开源时只保留 `config/runtime_settings.example.json`。API Key、Supabase service role 等敏感项仍必须通过 `.env` 配置，不会保存在前端。
 
-DashScope/Qwen 调用已增加基础重试与退避策略：普通文本生成和流式生成默认最多重试 2 次，遇到 `429,500,502,503,504`、连接异常或超时会按指数退避等待后重试；流式接口如果已经向前端输出了部分正文，则不会自动重试，避免重复拼接正文。相关参数可通过 `DASHSCOPE_MAX_RETRIES`、`DASHSCOPE_RETRY_BASE_DELAY_SECONDS`、`DASHSCOPE_RETRY_MAX_DELAY_SECONDS`、`DASHSCOPE_RETRY_STATUS_CODES` 和各类 timeout 配置调整。重试次数、是否最终成功、是否属于可重试错误会写入 AI 用量日志的 `metadata`，便于后续在「用量与成本」中审计单次标书生成的稳定性。
+DeepSeek 写作模型通过 OpenAI-compatible 协议调用 `https://api.deepseek.com/chat/completions`，默认模型为 `deepseek-v4-flash`。知识库向量化和 Rerank 默认仍使用 DashScope，因此切换写作模型时不要删除 `DASHSCOPE_API_KEY`。DeepSeek/DashScope 文本调用共用基础重试与退避策略：普通文本生成和流式生成默认最多重试 2 次，遇到 `429,500,502,503,504`、连接异常或超时会按指数退避等待后重试；流式接口如果已经向前端输出了部分正文，则不会自动重试，避免重复拼接正文。相关参数可通过 `DASHSCOPE_MAX_RETRIES`、`DASHSCOPE_RETRY_BASE_DELAY_SECONDS`、`DASHSCOPE_RETRY_MAX_DELAY_SECONDS`、`DASHSCOPE_RETRY_STATUS_CODES` 和各类 timeout 配置调整。重试次数、是否最终成功、是否属于可重试错误会写入 AI 用量日志的 `metadata`，便于后续在「用量与成本」中审计单次标书生成的稳定性。
 
 ### 4. 启动后端
 

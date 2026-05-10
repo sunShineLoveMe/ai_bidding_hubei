@@ -209,8 +209,10 @@ textarea {
   grid-column: 1;
   display: grid;
   min-height: 0;
+  min-width: 0;
   grid-template-rows: 58px minmax(0, 1fr) 62px;
   background: #f7f9fc;
+  overflow: hidden;
 }
 
 .outline-topbar {
@@ -288,7 +290,6 @@ textarea {
   color: #2f6df6;
 }
 
-.outline-check,
 .outline-switch {
   display: inline-flex;
   align-items: center;
@@ -296,6 +297,23 @@ textarea {
   color: #475569;
   font-size: 13px;
   font-weight: 800;
+}
+
+.outline-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.outline-toolbar-actions .ant-space-item {
+  display: inline-flex;
+  align-items: center;
+}
+
+.outline-toolbar-actions .ant-btn {
+  display: inline-flex;
+  align-items: center;
 }
 
 .outline-switch input {
@@ -352,10 +370,11 @@ textarea {
 
 .outline-row {
   display: grid;
-  grid-template-columns: 24px minmax(280px, 1fr) 132px minmax(260px, 420px) minmax(240px, auto);
+  grid-template-columns: 24px minmax(180px, 1fr) 132px minmax(220px, 0.9fr) 224px;
   align-items: center;
   gap: 10px;
   min-height: 44px;
+  min-width: 0;
   border-radius: 0;
   color: #1f2937;
 }
@@ -471,7 +490,10 @@ textarea {
   justify-self: end;
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  justify-content: flex-end;
+  gap: 6px;
+  width: 224px;
+  min-width: 0;
   opacity: 0;
   transition: 0.16s ease;
 }
@@ -482,6 +504,9 @@ textarea {
 }
 
 .outline-row-actions .ant-btn {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
   font-weight: 850;
   padding-inline: 4px;
 }
@@ -816,6 +841,44 @@ textarea {
   grid-column: 2;
 }
 
+.outline-mode-shell .outline-panel {
+  min-width: 0;
+  margin: 16px 18px;
+  display: grid;
+  grid-template-rows: 54px minmax(0, 1fr);
+  gap: 0;
+  overflow: hidden;
+}
+
+.outline-mode-shell .outline-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 18px;
+  border-radius: 14px;
+  padding: 12px 18px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.outline-mode-shell .outline-summary span {
+  flex: 0 0 auto;
+}
+
+.outline-mode-shell .outline-panel-header {
+  min-width: 0;
+}
+
+.outline-mode-shell .outline-toolbar-actions {
+  flex: 0 1 auto;
+  max-width: min(760px, 70%);
+}
+
+.outline-mode-shell .outline-toolbar-actions .ant-space-item {
+  min-width: 0;
+}
+
 .quality-sidebar-collapsed {
   display: flex;
   min-width: 0;
@@ -910,6 +973,29 @@ textarea {
 
   .outline-mode-shell.quality-collapsed {
     grid-template-columns: minmax(0, 1fr) 54px;
+  }
+
+  .outline-row {
+    grid-template-columns: 24px minmax(150px, 1fr) 120px minmax(180px, 0.8fr) 184px;
+    gap: 8px;
+  }
+
+  .outline-row-actions {
+    width: 184px;
+    gap: 4px;
+  }
+
+  .outline-row-actions .ant-btn {
+    padding-inline: 2px;
+  }
+
+  .outline-mode-shell:not(.quality-collapsed) .outline-row-actions .ant-btn > span {
+    display: none;
+  }
+
+  .outline-task-progress {
+    width: 104px;
+    min-width: 104px;
   }
 }
 

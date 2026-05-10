@@ -216,6 +216,39 @@ def _section_display_title(section: dict) -> str:
     return f"{prefix}{title}"
 
 
+def _strip_existing_section_number(title: str) -> str:
+    value = clean_formal_bid_text(title or "未命名章节").strip()
+    value = re.sub(r"^\s*\d+(?:\.\d+)*[\.、]?\s*", "", value)
+    value = re.sub(r"^\s*[一二三四五六七八九十百]+[、.．]\s*", "", value)
+    value = re.sub(r"^\s*第[一二三四五六七八九十百]+[章节篇部分][、:：.\s]*", "", value)
+    return value.strip() or clean_formal_bid_text(title or "未命名章节").strip() or "未命名章节"
+
+
+def _numbered_export_sections(sections: list[dict]) -> list[dict]:
+    raw_levels = [max(1, min(int(section.get("level") or 1), 6)) for section in sections]
+    base_level = min(raw_levels) if raw_levels else 1
+    counters: list[int] = []
+    numbered: list[dict] = []
+    for section, raw_level in zip(sections, raw_levels):
+        level = raw_level - base_level + 1 if base_level > 1 else raw_level
+        level = max(1, min(level, 6))
+        while len(counters) < level:
+            counters.append(0)
+        counters = counters[:level]
+        counters[level - 1] += 1
+        number = ".".join(str(value) for value in counters)
+        clean_title = _strip_existing_section_number(section.get("title") or "未命名章节")
+        title_prefix = f"{number}. " if "." not in number else f"{number} "
+        numbered.append({
+            **section,
+            "_export_original_level": raw_level,
+            "level": level,
+            "_export_order": number,
+            "_export_title": f"{title_prefix}{clean_title}",
+        })
+    return numbered
+
+
 def _strip_duplicate_section_heading(content: str, section: dict) -> str:
     lines = (content or "").strip().splitlines()
     if not lines:
@@ -227,9 +260,49 @@ def _strip_duplicate_section_heading(content: str, section: dict) -> str:
     order = section.get("order")
     clean_heading = _clean_section_title(heading_text, order)
     clean_title = _clean_section_title(section.get("title") or "未命名章节", order)
-    if clean_heading == clean_title or heading_text == _section_display_title(section):
+    if (
+        clean_heading == clean_title
+        or _strip_existing_section_number(clean_heading) == _strip_existing_section_number(clean_title)
+        or heading_text == _section_display_title(section)
+    ):
         return "\n".join(lines[1:]).strip()
     return content.strip()
+
+
+def _demote_body_markdown_headings(content: str) -> str:
+    """Keep DOCX navigation tied to bid_sections, not headings emitted inside body text."""
+    lines = (content or "").splitlines()
+    if not lines:
+        return ""
+
+    output: list[str] = []
+    in_fence = False
+    for index, raw_line in enumerate(lines):
+        stripped = raw_line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            output.append(raw_line)
+            continue
+        if in_fence:
+            output.append(raw_line)
+            continue
+
+        heading_match = re.match(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", raw_line)
+        if heading_match:
+            title = clean_formal_bid_text(re.sub(r"\*\*(.*?)\*\*", r"\1", heading_match.group(1))).strip()
+            if title:
+                output.append(f"【{title}】")
+            continue
+
+        next_line = lines[index + 1].strip() if index + 1 < len(lines) else ""
+        if stripped and re.match(r"^(=+|-+)$", next_line):
+            output.append(f"【{clean_formal_bid_text(stripped)}】")
+            continue
+        if re.match(r"^(=+|-+)$", stripped) and output and output[-1].startswith("【"):
+            continue
+        output.append(raw_line)
+
+    return "\n".join(output).strip()
 
 
 def _asset_text(asset: dict) -> str:
@@ -604,9 +677,11 @@ def build_project_bid_markdown(
     markdown_path = output_dir / f"{file_stem}.md"
     chunks: list[str] = [f"# {document_title}\n\n"]
     used_asset_ids: set[str] = set()
-    for section in sections:
-        title = _section_display_title(section)
-        content = _strip_duplicate_section_heading(section.get("content") or "", section)
+    for section in _numbered_export_sections(sections):
+        title = section.get("_export_title") or _section_display_title(section)
+        content = _demote_body_markdown_headings(
+            _strip_duplicate_section_heading(section.get("content") or "", section)
+        )
         chunks.append(_section_markdown_heading(int(section.get("level") or 1), title))
         if content:
             chunks.append(f"{content}\n\n" if content.endswith("\n") else f"{content}\n\n")

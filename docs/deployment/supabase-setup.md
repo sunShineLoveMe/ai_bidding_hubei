@@ -20,6 +20,7 @@
 | 6 | `sql/20260508_create_bid_export_tasks.sql` | DOCX 导出没有任务化，长文档导出可能 HTTP 超时 |
 | 7 | `sql/20260508_supabase_idempotency_indexes.sql` | 知识库文档/资产可能产生重复记录；**执行前若有重复数据需先清理** |
 | 8 | `sql/20260508_add_asset_applicable_volumes.sql` | RAG 无法按分册（技术标/商务标/资格/报价/附件）硬过滤资产 |
+| 9 | `sql/20260510_seed_deepseek_v4_flash_pricing.sql` | DeepSeek V4 Flash 用量能记录 Token，但无法按人民币价格估算成本 |
 
 ---
 
@@ -42,7 +43,7 @@ Supabase 有一层 PostgREST schema 缓存，新建的表/列不会立刻对前�
 
 ## 验证是否全部执行成功
 
-在 Supabase SQL Editor 执行下面这段，应该返回 **12 行**（每张表一行）：
+在 Supabase SQL Editor 执行下面这段，应该返回 **17 行**（每张表一行）：
 
 ```sql
 select table_name

@@ -9,6 +9,7 @@ from backend.db.supabase_repo import get_project_interpretation, get_supabase_cl
 from backend.core.llm_json_utils import strip_llm_json
 from backend.ai.qwen_client import call_dashscope_api
 from backend.ai.bid_writing_plan import build_chapter_writing_plan
+from backend.core.config import get_stage_model
 from backend.core.bid_volumes import (
     VOLUME_ORDER,
     ensure_section_volume,
@@ -649,6 +650,7 @@ def _generate_outline_from_ai_or_rule(payload: dict[str, Any]) -> dict[str, Any]
         project = payload.get("project") or {}
         response = call_dashscope_api(
             [{"role": "user", "content": prompt}],
+            model=get_stage_model("outline"),
             json_mode=True,
             usage_context={
                 "project_id": project.get("id"),
@@ -858,4 +860,3 @@ def stream_bid_outline(project_id: str) -> Iterator[dict[str, Any]]:
         "outline": quick_outline,
         "backgroundRefining": True,
     }
-

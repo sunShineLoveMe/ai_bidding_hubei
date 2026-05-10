@@ -15,8 +15,14 @@ export async function uploadTenderFile(file: File, userId: string | number): Pro
   return response.data;
 }
 
-export async function getParseStatus(fileId: string): Promise<ParseStatusResponse> {
-  const response = await apiClient.get(`/api/bidding/parse-status/${fileId}`, { skipGlobalLoading: true });
+export async function getParseStatus(fileId: string, options?: { projectId?: string | null; supabaseFileId?: string | null }): Promise<ParseStatusResponse> {
+  const response = await apiClient.get(`/api/bidding/parse-status/${fileId}`, {
+    params: {
+      projectId: options?.projectId || undefined,
+      supabaseFileId: options?.supabaseFileId || undefined,
+    },
+    skipGlobalLoading: true,
+  });
   return response.data;
 }
 
@@ -87,6 +93,59 @@ export async function generateBidOutline(projectId: string): Promise<unknown> {
     skipGlobalLoading: true,
   });
   return response.data;
+}
+
+export async function generateBidOutlineStream(projectId: string, onMessage?: (message: string) => void): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const source = new EventSource(`/api/bidding/interpretations/${projectId}/bid-outline/stream`);
+    let settled = false;
+
+    const closeAndReject = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      source.close();
+      reject(error);
+    };
+
+    source.addEventListener('start', event => {
+      const payload = JSON.parse((event as MessageEvent).data) as { message?: string };
+      if (payload.message) onMessage?.(payload.message);
+    });
+    source.addEventListener('meta', event => {
+      const payload = JSON.parse((event as MessageEvent).data) as { total?: number; phase?: string };
+      onMessage?.(payload.phase === 'quick'
+        ? `已生成快速目录骨架，预计 ${payload.total || 0} 个章节，正在保存分册大纲。`
+        : `AI 正在生成分册大纲，预计 ${payload.total || 0} 个章节。`);
+    });
+    source.addEventListener('stage', event => {
+      const payload = JSON.parse((event as MessageEvent).data) as { message?: string };
+      if (payload.message) onMessage?.(payload.message);
+    });
+    source.addEventListener('chapter', event => {
+      const payload = JSON.parse((event as MessageEvent).data) as { index?: number; total?: number; chapter?: { title?: string } };
+      onMessage?.(`正在生成章节 ${payload.index || 0} / ${payload.total || 0}：${payload.chapter?.title || '未命名章节'}`);
+    });
+    source.addEventListener('done', event => {
+      if (settled) return;
+      settled = true;
+      source.close();
+      resolve(JSON.parse((event as MessageEvent).data));
+    });
+    source.addEventListener('error', event => {
+      const raw = (event as MessageEvent).data;
+      if (raw) {
+        try {
+          const payload = JSON.parse(raw) as { error?: string };
+          closeAndReject(new Error(payload.error || '分册大纲流式生成失败'));
+          return;
+        } catch {
+          closeAndReject(new Error('分册大纲流式生成失败'));
+          return;
+        }
+      }
+      closeAndReject(new Error('分册大纲流式连接中断，请稍后重试。'));
+    });
+  });
 }
 
 export async function getBidSections(projectId: string): Promise<BidSection[]> {

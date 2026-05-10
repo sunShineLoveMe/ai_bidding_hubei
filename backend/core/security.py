@@ -41,6 +41,7 @@ PLACEHOLDER_VALUES = {
     "",
     "change_me",
     "replace_me",
+    "your_deepseek_api_key",
     "your_dashscope_api_key",
     "your_supabase_anon_key",
     "your_supabase_service_role_key",
@@ -83,7 +84,16 @@ def validate_startup_security() -> None:
         return
 
     missing = []
-    for key in ("DASHSCOPE_API_KEY", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"):
+    provider = os.getenv("AI_PROVIDER", "deepseek").strip().lower()
+    required_keys = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"]
+    if provider == "deepseek":
+        required_keys.append("DEEPSEEK_API_KEY")
+    else:
+        required_keys.append("DASHSCOPE_API_KEY")
+    # 当前知识库向量化和 Rerank 默认仍依赖 DashScope。
+    required_keys.append("DASHSCOPE_API_KEY")
+
+    for key in required_keys:
         value = os.getenv(key, "").strip()
         if value in PLACEHOLDER_VALUES:
             missing.append(key)
@@ -128,7 +138,7 @@ def enforce_request_guard() -> tuple[object, int] | None:
 
 def sanitize_exception_message(message: str) -> str:
     text = str(message or "")
-    for key in ("DASHSCOPE_API_KEY", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_ANON_KEY", "MINERU_API_TOKEN", "ONLYOFFICE_JWT_SECRET"):
+    for key in ("DASHSCOPE_API_KEY", "DEEPSEEK_API_KEY", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_ANON_KEY", "MINERU_API_TOKEN", "ONLYOFFICE_JWT_SECRET"):
         value = os.getenv(key)
         if value:
             text = text.replace(value, "***")

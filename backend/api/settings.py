@@ -26,6 +26,7 @@ def get_runtime_settings():
         "defaults": DEFAULT_SETTINGS,
         "sensitive": {
             "dashscope_api_key_configured": bool(os.getenv("DASHSCOPE_API_KEY")),
+            "deepseek_api_key_configured": bool(os.getenv("DEEPSEEK_API_KEY")),
             "supabase_url_configured": bool(os.getenv("SUPABASE_URL")),
             "supabase_service_role_configured": bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY")),
         }

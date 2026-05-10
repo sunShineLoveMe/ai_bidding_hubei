@@ -5,7 +5,7 @@ import { CheckCircle2, FileSearch, FileUp, RotateCcw, SquarePen } from 'lucide-r
 import { useNavigate } from 'react-router-dom';
 import {
   generateAIInterpretation,
-  generateBidOutline,
+  generateBidOutlineStream,
   getParseStatus,
   identifyUser,
   uploadTenderFile,
@@ -20,6 +20,7 @@ interface ActiveWorkflow {
   fileName: string;
   fileId: string;
   projectId: string;
+  supabaseFileId?: string | null;
   startedAt: number;
 }
 
@@ -130,10 +131,10 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
     setStatuses(prev => prev.map((item, itemIndex) => (itemIndex === index ? 'finish' : item)));
   }
 
-  async function waitForParseIndexed(fileId: string, token: number): Promise<void> {
+  async function waitForParseIndexed(fileId: string, token: number, options?: { projectId?: string | null; supabaseFileId?: string | null }): Promise<void> {
     for (let count = 1; count <= 90; count += 1) {
       if (runTokenRef.current !== token) return;
-      const data = await getParseStatus(fileId);
+      const data = await getParseStatus(fileId, options);
       const parseStatus = data.parseStatus || 'pending';
       const mineru = (data.mineru || {}) as Record<string, unknown>;
       const splitDetail = mineru.split && mineru.part_count
@@ -204,13 +205,17 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
           fileName: selectedFile.name,
           fileId: uploadResult.fileId,
           projectId: uploadResult.projectId,
+          supabaseFileId: uploadResult.supabaseFileId,
           startedAt: Date.now(),
         });
       }
 
       updateStep(1, 'process', '正在解析招标文件...', '系统正在识别正文、表格、图片和扫描页，完成后会自动进入招标解读。');
       if (uploadResult.fileId) {
-        await waitForParseIndexed(uploadResult.fileId, token);
+        await waitForParseIndexed(uploadResult.fileId, token, {
+          projectId: uploadResult.projectId,
+          supabaseFileId: uploadResult.supabaseFileId,
+        });
       }
       if (runTokenRef.current !== token) return;
       finishStep(1);
@@ -221,7 +226,9 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
       finishStep(2);
 
       updateStep(3, 'process', '正在生成分册大纲...', '正在结合招标解读、企业知识库、资信库和产品库规划技术标、商务标、资格文件和报价文件。');
-      await generateBidOutline(uploadResult.projectId);
+      await generateBidOutlineStream(uploadResult.projectId, text => {
+        if (runTokenRef.current === token) setDetail(text);
+      });
       if (runTokenRef.current !== token) return;
       finishStep(3);
 
@@ -304,7 +311,10 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
 
       if (!parseCompleted) {
         updateStep(1, 'process', '正在恢复解析进度...', '正在从后台查询 MinerU/OCR 解析状态。');
-        await waitForParseIndexed(active.fileId, token);
+        await waitForParseIndexed(active.fileId, token, {
+          projectId: active.projectId,
+          supabaseFileId: active.supabaseFileId,
+        });
         if (runTokenRef.current !== token) return;
       }
       finishStep(1);
@@ -318,7 +328,9 @@ export function BidWorkflow({ onReady, onTaskChanged }: BidWorkflowProps): JSX.E
 
       if (!hasOutline) {
         updateStep(3, 'process', '正在生成分册大纲...', '正在结合招标解读和知识库规划技术标、商务标、资格文件和报价文件。');
-        await generateBidOutline(active.projectId);
+        await generateBidOutlineStream(active.projectId, text => {
+          if (runTokenRef.current === token) setDetail(text);
+        });
         if (runTokenRef.current !== token) return;
       }
       finishStep(3);

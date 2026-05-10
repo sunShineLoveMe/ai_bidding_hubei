@@ -4,6 +4,7 @@ from typing import Any
 
 from backend.ai.compliance_checker import build_compliance_report
 from backend.ai.qwen_client import call_dashscope_api
+from backend.core.config import get_stage_model
 from backend.core.llm_json_utils import strip_llm_json
 from backend.core.bid_volumes import volume_name
 from backend.db.supabase_repo import get_project_interpretation
@@ -128,6 +129,7 @@ def _build_prompt(row: dict[str, Any], section: dict[str, Any] | None) -> str:
 def _call_llm_review(project_id: str, row: dict[str, Any], section: dict[str, Any] | None) -> dict[str, Any]:
     response = call_dashscope_api(
         [{"role": "user", "content": _build_prompt(row, section)}],
+        model=get_stage_model("compliance"),
         json_mode=True,
         usage_context={
             "project_id": project_id,

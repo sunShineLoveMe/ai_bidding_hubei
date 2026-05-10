@@ -7,7 +7,7 @@ from openai import OpenAI
 from backend.db.supabase_client import get_supabase_client
 from backend.rag.vector_store import init_ali_client, get_embeddings
 from backend.ai.qwen_client import stream_dashscope_api
-from backend.core.config import get_setting
+from backend.core.config import get_stage_model
 from backend.ai.rerank_client import rerank_documents
 from backend.core.bid_volumes import asset_applicable_volumes, asset_matches_volume, normalize_volume_type
 
@@ -178,20 +178,27 @@ def generate_knowledge_answer(
     """
     组装包含图片链接的 Prompt，让大模型基于知识库生成最终回答
     """
-    ali_client = init_ali_client()
-    
     prompt, images = build_knowledge_prompt(query, contexts, assets)
 
-    response = ali_client.chat.completions.create(
-        model=get_setting("knowledge_model", "qwen-long"),
-        messages=[
+    from backend.ai.qwen_client import call_dashscope_api
+
+    response = call_dashscope_api(
+        [
             {"role": "system", "content": "你是一个严谨的 RAG 知识库问答助手。"},
             {"role": "user", "content": prompt}
         ],
-        temperature=0.1
+        model=get_stage_model("knowledge"),
+        json_mode=False,
+        usage_context={
+            "stage": "knowledge_answer",
+            "operation_type": "text_generation",
+            "metadata": {
+                "contexts_count": len(contexts),
+                "assets_count": len(assets or []),
+            },
+        },
     )
-    
-    answer = response.choices[0].message.content
+    answer = response.get("output", {}).get("choices", [{}])[0].get("message", {}).get("content") or ""
     
     return {
         "answer": answer,
@@ -296,7 +303,15 @@ def stream_knowledge_answer(
                 {"role": "system", "content": "你是一个严谨的 RAG 知识库问答助手。"},
                 {"role": "user", "content": prompt},
             ],
-            model=get_setting("knowledge_model", "qwen-long"),
+            model=get_stage_model("knowledge"),
+            usage_context={
+                "stage": "knowledge_answer_stream",
+                "operation_type": "text_generation",
+                "metadata": {
+                    "contexts_count": len(contexts),
+                    "assets_count": len(assets or []),
+                },
+            },
         ):
             emitted = True
             yield {
