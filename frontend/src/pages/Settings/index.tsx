@@ -9,6 +9,7 @@ interface RuntimeSettings {
   ai_provider: string;
   text_model: string;
   interpretation_model: string;
+  interpretation_segment_model: string;
   outline_model: string;
   compliance_model: string;
   section_writing_model: string;
@@ -22,6 +23,9 @@ interface RuntimeSettings {
   rerank_model: string;
   rerank_top_n: number;
   request_timeout_seconds: number;
+  reasoning_request_timeout_seconds: number;
+  interpretation_segment_max_chars: number;
+  interpretation_segment_max_groups: number;
   stream_connect_timeout_seconds: number;
   stream_read_timeout_seconds: number;
   upload_dir: string;
@@ -52,6 +56,7 @@ export function SettingsPage(): JSX.Element {
   const [loading, setLoading] = useState(false);
   const aiProvider = Form.useWatch('ai_provider', form) || 'deepseek';
   const interpretationModel = Form.useWatch('interpretation_model', form) || '-';
+  const interpretationSegmentModel = Form.useWatch('interpretation_segment_model', form) || '-';
   const outlineModel = Form.useWatch('outline_model', form) || '-';
   const complianceModel = Form.useWatch('compliance_model', form) || '-';
   const sectionWritingModel = Form.useWatch('section_writing_model', form) || '-';
@@ -141,6 +146,7 @@ export function SettingsPage(): JSX.Element {
                             form.setFieldsValue({
                               text_model: 'deepseek-v4-flash',
                               interpretation_model: 'deepseek-v4-pro',
+                              interpretation_segment_model: 'deepseek-v4-flash',
                               outline_model: 'deepseek-v4-pro',
                               compliance_model: 'deepseek-v4-pro',
                               section_writing_model: 'deepseek-v4-flash',
@@ -154,6 +160,7 @@ export function SettingsPage(): JSX.Element {
                             form.setFieldsValue({
                               text_model: 'qwen-turbo-latest',
                               interpretation_model: 'qwen-max',
+                              interpretation_segment_model: 'qwen-turbo-latest',
                               outline_model: 'qwen-max',
                               compliance_model: 'qwen-max',
                               section_writing_model: 'qwen-turbo-latest',
@@ -170,6 +177,9 @@ export function SettingsPage(): JSX.Element {
                     </Form.Item>
                     <Form.Item label="招标解读模型" name="interpretation_model" rules={[{ required: true, message: '请输入招标解读模型' }]}>
                       <Input placeholder={aiProvider === 'deepseek' ? 'deepseek-v4-pro' : 'qwen-max'} />
+                    </Form.Item>
+                    <Form.Item label="大文件分段解读模型" name="interpretation_segment_model" rules={[{ required: true, message: '请输入大文件分段解读模型' }]}>
+                      <Input placeholder={aiProvider === 'deepseek' ? 'deepseek-v4-flash' : 'qwen-turbo-latest'} />
                     </Form.Item>
                     <Form.Item label="分册大纲模型" name="outline_model" rules={[{ required: true, message: '请输入分册大纲模型' }]}>
                       <Input placeholder={aiProvider === 'deepseek' ? 'deepseek-v4-pro' : 'qwen-max'} />
@@ -223,6 +233,15 @@ export function SettingsPage(): JSX.Element {
                     <Form.Item label="请求超时时间" name="request_timeout_seconds">
                       <InputNumber className="w-full" min={10} max={600} addonAfter="秒" />
                     </Form.Item>
+                    <Form.Item label="解读/大纲/复核超时" name="reasoning_request_timeout_seconds">
+                      <InputNumber className="w-full" min={60} max={900} addonAfter="秒" />
+                    </Form.Item>
+                    <Form.Item label="分段解读单段上限" name="interpretation_segment_max_chars">
+                      <InputNumber className="w-full" min={8000} max={80000} step={1000} addonAfter="字" />
+                    </Form.Item>
+                    <Form.Item label="分段解读最大段数" name="interpretation_segment_max_groups">
+                      <InputNumber className="w-full" min={4} max={80} addonAfter="段" />
+                    </Form.Item>
                     <Form.Item label="流式连接超时" name="stream_connect_timeout_seconds">
                       <InputNumber className="w-full" min={5} max={120} addonAfter="秒" />
                     </Form.Item>
@@ -233,9 +252,10 @@ export function SettingsPage(): JSX.Element {
                   <div className="settings-note">
                     <KeyRound size={22} />
                     <strong>阶段模型分工</strong>
-                    <p>招标解读、分册大纲和语义合规复核属于结构判断和推理任务，建议使用 Pro；正文写作、章节补写和知识库问答调用频率高，建议使用 Flash 控制成本和响应速度。</p>
+                    <p>招标解读最终融合、分册大纲和语义合规复核属于结构判断和推理任务，建议使用 Pro；大文件分段抽取、正文写作、章节补写和知识库问答调用频率高，建议使用 Flash 控制成本和响应速度。</p>
                     <div className="flex flex-wrap gap-2">
-                      <Tag color="red">招标解读：{interpretationModel}</Tag>
+                      <Tag color="red">解读融合：{interpretationModel}</Tag>
+                      <Tag color="blue">分段解读：{interpretationSegmentModel}</Tag>
                       <Tag color="red">分册大纲：{outlineModel}</Tag>
                       <Tag color="red">语义复核：{complianceModel}</Tag>
                       <Tag color="blue">正文写作：{sectionWritingModel}</Tag>

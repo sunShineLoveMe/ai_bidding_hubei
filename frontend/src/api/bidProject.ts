@@ -84,6 +84,7 @@ export async function generateComplianceSupplement(
 export async function generateAIInterpretation(projectId: string): Promise<unknown> {
   const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/ai-report`, undefined, {
     skipGlobalLoading: true,
+    timeout: 360000,
   });
   return response.data;
 }
@@ -91,6 +92,7 @@ export async function generateAIInterpretation(projectId: string): Promise<unkno
 export async function generateBidOutline(projectId: string): Promise<unknown> {
   const response = await apiClient.post(`/api/bidding/interpretations/${projectId}/bid-outline`, undefined, {
     skipGlobalLoading: true,
+    timeout: 360000,
   });
   return response.data;
 }

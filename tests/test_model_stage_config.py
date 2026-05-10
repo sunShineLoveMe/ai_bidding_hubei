@@ -16,6 +16,7 @@ class ModelStageConfigTest(unittest.TestCase):
 
                 self.assertEqual(settings["ai_provider"], "deepseek")
                 self.assertEqual(get_stage_model("interpretation"), "deepseek-v4-pro")
+                self.assertEqual(get_stage_model("interpretation_segment"), "deepseek-v4-flash")
                 self.assertEqual(get_stage_model("outline"), "deepseek-v4-pro")
                 self.assertEqual(get_stage_model("compliance"), "deepseek-v4-pro")
                 self.assertEqual(get_stage_model("section_writing"), "deepseek-v4-flash")
@@ -28,12 +29,14 @@ class ModelStageConfigTest(unittest.TestCase):
         env = {
             "AI_PROVIDER": "deepseek",
             "DEEPSEEK_INTERPRETATION_MODEL": "deepseek-v4-pro",
+            "DEEPSEEK_INTERPRETATION_SEGMENT_MODEL": "deepseek-v4-flash",
             "DEEPSEEK_SECTION_WRITING_MODEL": "deepseek-v4-flash",
         }
         with tempfile.TemporaryDirectory() as tmpdir:
             config_file = Path(tmpdir) / "runtime_settings.json"
             with patch("backend.core.config.CONFIG_FILE", config_file), patch.dict(os.environ, env, clear=True):
                 self.assertEqual(get_stage_model("interpretation"), "deepseek-v4-pro")
+                self.assertEqual(get_stage_model("interpretation_segment"), "deepseek-v4-flash")
                 self.assertEqual(get_stage_model("section_writing"), "deepseek-v4-flash")
 
 

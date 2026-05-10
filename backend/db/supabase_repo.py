@@ -1524,6 +1524,20 @@ def get_project_interpretation(project_id: str) -> dict[str, Any]:
         "sections": sections,
     }
 
+
+def list_project_document_chunks(project_id: str, limit: int = 1000) -> list[dict[str, Any]]:
+    response = (
+        get_supabase_client()
+        .table("document_chunks")
+        .select("*")
+        .eq("project_id", project_id)
+        .order("chunk_index")
+        .limit(limit)
+        .execute()
+    )
+    return response.data or []
+
+
 def list_knowledge_documents() -> list[dict[str, Any]]:
     client = get_supabase_client()
     response = client.table("knowledge_documents").select("*").order("created_at", desc=True).execute()

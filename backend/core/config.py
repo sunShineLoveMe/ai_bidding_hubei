@@ -10,6 +10,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "ai_provider": "deepseek",
     "text_model": "deepseek-v4-flash",
     "interpretation_model": "deepseek-v4-pro",
+    "interpretation_segment_model": "deepseek-v4-flash",
     "outline_model": "deepseek-v4-pro",
     "compliance_model": "deepseek-v4-pro",
     "section_writing_model": "deepseek-v4-flash",
@@ -23,6 +24,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "rerank_model": "qwen3-rerank",
     "rerank_top_n": 6,
     "request_timeout_seconds": 120,
+    "reasoning_request_timeout_seconds": 300,
+    "interpretation_segment_max_chars": 24000,
+    "interpretation_segment_max_groups": 24,
     "stream_connect_timeout_seconds": 15,
     "stream_read_timeout_seconds": 180,
     "max_retries": 2,
@@ -54,6 +58,7 @@ ENV_MAPPING = {
     "ai_provider": "AI_PROVIDER",
     "text_model": "DASHSCOPE_MODEL",
     "interpretation_model": "INTERPRETATION_MODEL",
+    "interpretation_segment_model": "INTERPRETATION_SEGMENT_MODEL",
     "outline_model": "OUTLINE_MODEL",
     "compliance_model": "COMPLIANCE_MODEL",
     "section_writing_model": "SECTION_WRITING_MODEL",
@@ -67,6 +72,9 @@ ENV_MAPPING = {
     "rerank_model": "DASHSCOPE_RERANK_MODEL",
     "rerank_top_n": "DASHSCOPE_RERANK_TOP_N",
     "request_timeout_seconds": "DASHSCOPE_REQUEST_TIMEOUT_SECONDS",
+    "reasoning_request_timeout_seconds": "REASONING_REQUEST_TIMEOUT_SECONDS",
+    "interpretation_segment_max_chars": "INTERPRETATION_SEGMENT_MAX_CHARS",
+    "interpretation_segment_max_groups": "INTERPRETATION_SEGMENT_MAX_GROUPS",
     "stream_connect_timeout_seconds": "DASHSCOPE_STREAM_CONNECT_TIMEOUT_SECONDS",
     "stream_read_timeout_seconds": "DASHSCOPE_STREAM_READ_TIMEOUT_SECONDS",
     "max_retries": "DASHSCOPE_MAX_RETRIES",
@@ -92,6 +100,9 @@ ENV_MAPPING = {
 
 INT_KEYS = {
     "request_timeout_seconds",
+    "reasoning_request_timeout_seconds",
+    "interpretation_segment_max_chars",
+    "interpretation_segment_max_groups",
     "stream_connect_timeout_seconds",
     "stream_read_timeout_seconds",
     "embedding_dimensions",
@@ -145,6 +156,7 @@ def load_runtime_settings() -> dict[str, Any]:
         deepseek_knowledge_model = os.getenv("DEEPSEEK_KNOWLEDGE_MODEL") or deepseek_model
         stage_envs = {
             "interpretation_model": "DEEPSEEK_INTERPRETATION_MODEL",
+            "interpretation_segment_model": "DEEPSEEK_INTERPRETATION_SEGMENT_MODEL",
             "outline_model": "DEEPSEEK_OUTLINE_MODEL",
             "compliance_model": "DEEPSEEK_COMPLIANCE_MODEL",
             "section_writing_model": "DEEPSEEK_SECTION_WRITING_MODEL",
@@ -198,6 +210,7 @@ def get_stage_model(stage: str, default: str | None = None) -> str:
     settings = load_runtime_settings()
     key_by_stage = {
         "interpretation": "interpretation_model",
+        "interpretation_segment": "interpretation_segment_model",
         "outline": "outline_model",
         "compliance": "compliance_model",
         "section_writing": "section_writing_model",

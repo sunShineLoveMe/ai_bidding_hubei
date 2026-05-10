@@ -63,6 +63,21 @@ def _dashscope_timeout():
     return int(get_setting("request_timeout_seconds", 120))
 
 
+def _llm_request_timeout(context: dict | None = None, model: str | None = None) -> int:
+    stage = str((context or {}).get("stage") or "")
+    model_name = str(model or "")
+    reasoning_stages = {
+        "ai_interpretation_report",
+        "ai_interpretation_merge",
+        "bid_outline_generation",
+        "semantic_compliance_review",
+        "compliance_supplement",
+    }
+    if stage in reasoning_stages or model_name.endswith("-pro"):
+        return int(get_setting("reasoning_request_timeout_seconds", 300))
+    return _dashscope_timeout()
+
+
 def _stream_timeout():
     return (
         int(get_setting("stream_connect_timeout_seconds", 15)),
@@ -129,7 +144,7 @@ def _raise_for_llm_status(response, provider_label: str):
         return
 
     message = f"{provider_label} API 调用失败，状态码: {response.status_code}"
-    logging.warning(message)
+    logging.warning("%s，响应片段: %s", message, response.text[:600])
     if response.status_code in _retry_status_codes():
         raise LLMRetryableError(
             message,
@@ -242,10 +257,29 @@ def _call_deepseek_api(messages, model=None, json_mode=True, usage_context=None)
 
     for attempt in range(1, attempts + 1):
         try:
-            response = requests.post(url, headers=headers, json=data, timeout=_dashscope_timeout())
+            stage = context.get("stage") or ("json_generation" if json_mode else "text_generation")
+            timeout_seconds = _llm_request_timeout(context, resolved_model)
+            logging.info(
+                "DeepSeek 调用开始: stage=%s model=%s json_mode=%s attempt=%s/%s timeout=%ss",
+                stage,
+                resolved_model,
+                json_mode,
+                attempt,
+                attempts,
+                timeout_seconds,
+            )
+            response = requests.post(url, headers=headers, json=data, timeout=timeout_seconds)
             _raise_for_llm_status(response, "DeepSeek")
             raw_payload = response.json()
             payload = _openai_to_dashscope_payload(raw_payload, resolved_model)
+            latency_ms = int((time.time() - started_at) * 1000)
+            logging.info(
+                "DeepSeek 调用完成: stage=%s model=%s status=%s latency_ms=%s",
+                stage,
+                payload.get("model") or resolved_model,
+                response.status_code,
+                latency_ms,
+            )
             record_ai_usage_log(
                 provider="deepseek",
                 region="global",
@@ -260,7 +294,7 @@ def _call_deepseek_api(messages, model=None, json_mode=True, usage_context=None)
                 batch_id=context.get("batch_id"),
                 request_id=payload.get("request_id"),
                 status_code=response.status_code,
-                latency_ms=int((time.time() - started_at) * 1000),
+                latency_ms=latency_ms,
                 raw_usage=payload.get("usage") or {},
                 input_text=_messages_text(messages),
                 output_text=_response_content(payload),
@@ -277,6 +311,13 @@ def _call_deepseek_api(messages, model=None, json_mode=True, usage_context=None)
             if retryable and attempt < attempts:
                 _log_retry(exc, attempt, attempts)
                 continue
+            logging.exception(
+                "DeepSeek 调用失败: stage=%s model=%s attempt=%s/%s",
+                context.get("stage") or ("json_generation" if json_mode else "text_generation"),
+                resolved_model,
+                attempt,
+                attempts,
+            )
 
             record_ai_usage_log(
                 provider="deepseek",

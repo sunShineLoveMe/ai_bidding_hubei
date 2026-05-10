@@ -115,16 +115,20 @@ DEEPSEEK_API_KEY=your_deepseek_api_key
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-flash
 DEEPSEEK_INTERPRETATION_MODEL=deepseek-v4-pro
+DEEPSEEK_INTERPRETATION_SEGMENT_MODEL=deepseek-v4-flash
 DEEPSEEK_OUTLINE_MODEL=deepseek-v4-pro
 DEEPSEEK_COMPLIANCE_MODEL=deepseek-v4-pro
 DEEPSEEK_SECTION_WRITING_MODEL=deepseek-v4-flash
 DEEPSEEK_SECTION_SUPPLEMENT_MODEL=deepseek-v4-flash
 DEEPSEEK_KNOWLEDGE_MODEL=deepseek-v4-flash
 DEEPSEEK_KNOWLEDGE_FOLLOWUP_MODEL=deepseek-v4-flash
+REASONING_REQUEST_TIMEOUT_SECONDS=300
+INTERPRETATION_SEGMENT_MAX_CHARS=24000
+INTERPRETATION_SEGMENT_MAX_GROUPS=24
 DASHSCOPE_API_KEY=your_dashscope_api_key
 ```
 
-系统设置 - 模型配置中会展示每个业务模块当前使用的模型；用量与成本中心会按 `provider`、`model`、`stage` 记录历史调用。DeepSeek V4 Flash 成本种子脚本按客户提供的价格口径写入：输入缓存命中 0.02 元 / 百万 tokens、输入缓存未命中 1 元 / 百万 tokens、输出 2 元 / 百万 tokens；DeepSeek V4 Pro 按输入缓存命中 0.025 元 / 百万 tokens、输入缓存未命中 3 元 / 百万 tokens、输出 6 元 / 百万 tokens 写入。当前系统按缓存未命中输入价保守估算，最终仍以 DeepSeek 账单为准。
+系统设置 - 模型配置中会展示每个业务模块当前使用的模型；解读、大纲和语义复核等 Pro 推理阶段默认允许 300 秒服务端超时，前端对应请求允许 360 秒，避免大文件解读时前端先报 `timeout of 120000ms exceeded`。招标文件正文分片数量较多或正文超过约 8 万字时，系统会自动启用“大文件分段解读”：先用 `DEEPSEEK_INTERPRETATION_SEGMENT_MODEL` 对文档分段抽取资格、评分、风险和材料要点，再用 `DEEPSEEK_INTERPRETATION_MODEL` 做最终融合去重；分段大小和最大段数由 `INTERPRETATION_SEGMENT_MAX_CHARS`、`INTERPRETATION_SEGMENT_MAX_GROUPS` 控制。用量与成本中心会按 `provider`、`model`、`stage` 记录历史调用。DeepSeek V4 Flash 成本种子脚本按客户提供的价格口径写入：输入缓存命中 0.02 元 / 百万 tokens、输入缓存未命中 1 元 / 百万 tokens、输出 2 元 / 百万 tokens；DeepSeek V4 Pro 按输入缓存命中 0.025 元 / 百万 tokens、输入缓存未命中 3 元 / 百万 tokens、输出 6 元 / 百万 tokens 写入。当前系统按缓存未命中输入价保守估算，最终仍以 DeepSeek 账单为准。
 
 ---
 
