@@ -1,10 +1,12 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from docx import Document
+from flask import Flask
 
-from backend.api.routes import _demote_body_markdown_headings, _numbered_export_sections, _strip_duplicate_section_heading
+from backend.api.routes import build_project_bid_markdown, _demote_body_markdown_headings, _numbered_export_sections, _strip_duplicate_section_heading
 from backend.export.md_to_word import convert_md_to_word
 
 
@@ -101,7 +103,69 @@ class DocxExportRegressionTest(unittest.TestCase):
         self.assertEqual(numbered[2]["_export_title"], "3. 项目经理资格")
         self.assertEqual(numbered[3]["_export_title"], "3.1 项目经理简历表")
 
-    def test_docx_first_page_is_clickable_toc_and_title_is_not_outline_heading(self):
+    def test_export_section_numbering_collapses_skipped_levels(self):
+        sections = [
+            {"id": "a", "level": 1, "title": "投标人不得存在情形的声明"},
+            {"id": "b", "level": 3, "title": "质量控制措施"},
+            {"id": "c", "level": 3, "title": "环保与文明施工措施"},
+        ]
+
+        numbered = _numbered_export_sections(sections)
+
+        self.assertEqual(numbered[0]["_export_title"], "1. 投标人不得存在情形的声明")
+        self.assertEqual(numbered[1]["_export_title"], "1.1 质量控制措施")
+        self.assertEqual(numbered[2]["_export_title"], "1.2 环保与文明施工措施")
+
+    def test_bid_markdown_export_prefers_editor_snapshot_over_stale_database_sections(self):
+        project_id = "11111111-1111-1111-1111-111111111111"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = Flask(__name__)
+            app.config["GENERATED_FOLDER"] = tmpdir
+            snapshot = [
+                {
+                    "id": "local-1",
+                    "order_index": 1,
+                    "level": 1,
+                    "title": "投标函及格式文件",
+                    "content": "在线工作台正文一。",
+                },
+                {
+                    "id": "local-2",
+                    "order_index": 2,
+                    "level": 2,
+                    "title": "投标函及投标函附录",
+                    "content": "在线工作台正文二。",
+                },
+            ]
+            stale_sections = [
+                {
+                    "id": "db-1",
+                    "order_index": 1,
+                    "level": 1,
+                    "title": "资格审查资料封面及目录",
+                    "content": "",
+                }
+            ]
+
+            with (
+                app.app_context(),
+                patch("backend.api.routes.get_project_interpretation", return_value={
+                    "project": {"id": project_id, "project_name": "测试项目"},
+                    "analysis": {"project_meta": {"project_name": "测试投标文件"}},
+                }),
+                patch("backend.api.routes.list_bid_sections", return_value=stale_sections),
+            ):
+                markdown_path, _, _ = build_project_bid_markdown(project_id, sections_snapshot=snapshot)
+
+            markdown = markdown_path.read_text(encoding="utf-8")
+            self.assertIn("# 1. 投标函及格式文件", markdown)
+            self.assertIn("## 1.1 投标函及投标函附录", markdown)
+            self.assertIn("在线工作台正文一。", markdown)
+            self.assertIn("在线工作台正文二。", markdown)
+            self.assertNotIn("资格审查资料封面及目录", markdown)
+            self.assertNotIn("待补充章节正文", markdown)
+
+    def test_docx_first_page_is_formal_toc_and_title_is_not_outline_heading(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             markdown_path = Path(tmpdir) / "toc.md"
             markdown_path.write_text(
@@ -135,6 +199,11 @@ class DocxExportRegressionTest(unittest.TestCase):
             ]
             hyperlinks = document._element.xpath(".//w:hyperlink")
             bookmarks = document._element.xpath(".//w:bookmarkStart")
+            field_codes = [
+                node.text or ""
+                for node in document._element.xpath(".//w:instrText")
+            ]
+            document_xml = document._element.xml
 
             self.assertEqual(non_empty_paragraphs[0], "招标文件")
             self.assertEqual(non_empty_paragraphs[1], "目录")
@@ -143,8 +212,23 @@ class DocxExportRegressionTest(unittest.TestCase):
             self.assertNotIn("招标文件", headings)
             self.assertIn("1. 企业营业执照", headings)
             self.assertIn("2. 安全生产许可证", headings)
-            self.assertGreaterEqual(len(hyperlinks), 3)
+            self.assertEqual(len(hyperlinks), 0)
             self.assertGreaterEqual(len(bookmarks), 3)
+            self.assertTrue(any("PAGEREF bid_heading_1" in code for code in field_codes))
+            self.assertIn('w:leader="dot"', document_xml)
+
+    def test_docx_requests_field_update_on_open_for_toc_page_numbers(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            markdown_path = Path(tmpdir) / "toc-fields.md"
+            markdown_path.write_text(
+                "# 招标文件\n\n# 1. 企业营业执照\n\n正文内容。",
+                encoding="utf-8",
+            )
+
+            output_path = convert_md_to_word(markdown_path)
+            document = Document(str(output_path))
+
+            self.assertTrue(document.settings.element.xpath(".//w:updateFields[@w:val='true']"))
 
     def test_formal_docx_cleans_generation_notes_emoji_and_preserves_table(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -1676,10 +1676,18 @@ export function BidEditorPage(): JSX.Element {
     setDownloadGenerating(sectionId ? 'section' : 'full');
     setExportTask(null);
     try {
+      const sectionsSnapshot = chapters.map((chapter, index) => ({
+        ...chapter,
+        order_index: index + 1,
+        level: chapter.level || 1,
+        parent_id: chapter.parent_id || null,
+        content: chapter.content || '',
+      }));
       const result = await generateBidDocxDownload(data.project.id, {
         sectionId,
         withImages: !sectionId && withImages,
         volumeType: !sectionId && activeVolume !== 'all' ? activeVolume : undefined,
+        sectionsSnapshot,
       });
       setExportTask(result.task);
       message.info(sectionId ? '本章 DOCX 导出任务已创建' : `${activeVolume === 'all' ? '全文' : volumeLabel(activeVolume)} DOCX 导出任务已创建`);

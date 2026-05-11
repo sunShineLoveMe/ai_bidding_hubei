@@ -229,8 +229,18 @@ def _numbered_export_sections(sections: list[dict]) -> list[dict]:
     base_level = min(raw_levels) if raw_levels else 1
     counters: list[int] = []
     numbered: list[dict] = []
+    raw_level_map: dict[int, int] = {}
     for section, raw_level in zip(sections, raw_levels):
-        level = raw_level - base_level + 1 if base_level > 1 else raw_level
+        if raw_level in raw_level_map:
+            level = raw_level_map[raw_level]
+        else:
+            level = raw_level - base_level + 1 if base_level > 1 else raw_level
+            level = max(1, min(level, 6))
+            # 真实大纲偶尔会出现从一级直接跳到三级的脏层级。
+            # Word 目录不能出现 18.0.1 这类编号，导出时压平成紧邻的下一层。
+            if counters and level > len(counters) + 1:
+                level = len(counters) + 1
+            raw_level_map[raw_level] = level
         level = max(1, min(level, 6))
         while len(counters) < level:
             counters.append(0)
@@ -608,15 +618,48 @@ def _section_with_descendants(sections: list[dict], section_id: str) -> list[dic
     return [section for section in sections if section.get("id") in selected_ids]
 
 
+def _snapshot_export_sections(sections_snapshot: list[dict] | None) -> list[dict] | None:
+    if not isinstance(sections_snapshot, list):
+        return None
+    sections: list[dict] = []
+    for index, section in enumerate(sections_snapshot):
+        if not isinstance(section, dict):
+            continue
+        title = clean_formal_bid_text(str(section.get("title") or "")).strip()
+        if not title:
+            continue
+        try:
+            level = max(1, min(int(section.get("level") or 1), 6))
+        except (TypeError, ValueError):
+            level = 1
+        try:
+            order_index = int(section.get("order_index") or index + 1)
+        except (TypeError, ValueError):
+            order_index = index + 1
+        metadata = section.get("metadata") if isinstance(section.get("metadata"), dict) else {}
+        sections.append({
+            **section,
+            "title": title,
+            "content": str(section.get("content") or ""),
+            "level": level,
+            "order_index": order_index,
+            "metadata": metadata,
+        })
+    if not sections:
+        return None
+    return sorted(sections, key=lambda item: (int(item.get("order_index") or 0), str(item.get("id") or "")))
+
+
 def build_project_bid_markdown(
     project_id: str,
     focus_section_id: str | None = None,
     with_images: bool = False,
     volume_type: str | None = None,
+    sections_snapshot: list[dict] | None = None,
 ) -> tuple[Path, str, dict]:
     payload = get_project_interpretation(project_id)
     project = payload.get("project") or {}
-    sections = list_bid_sections(project_id)
+    sections = _snapshot_export_sections(sections_snapshot) or list_bid_sections(project_id)
     if not sections:
         raise RuntimeError("当前项目暂无章节内容，请先生成章节大纲或正文。")
 

@@ -39,6 +39,7 @@
 | `ALLOWED_ASSET_EXTENSIONS` | 必填 | `png,jpg,jpeg,webp,pdf,doc,docx` | 控制资信库/产品库资产允许上传的后缀 | 不在列表内会被拒绝上传 |
 | `DOCX_MAX_IMAGES` | 可选 | `24` | Word 转换阶段整份文档允许插入的 Markdown 图片上限 | 超出后跳过并记录导出任务图片报告 |
 | `DOCX_TOTAL_ASSET_IMAGE_LIMIT` | 可选 | `36` | 自动从资信库/产品库插入标书的图片资产总上限 | 避免图文并茂导出图片过多导致 Word 过大或排版失控 |
+| `DOCX_TOC_MAX_LEVEL` | 可选 | `4` | Word 正式目录最多展示到第几级标题 | 只影响目录页展示层级，不改变正文标题层级 |
 | `DOCX_ALLOW_REMOTE_IMAGES` | 可选 | `false` | 是否允许 DOCX 导出下载外部 HTTP/HTTPS 图片 | 默认关闭；开启后仍会拦截 localhost、内网、回环和非公网地址 |
 | `ONLYOFFICE_JWT_SECRET` | 使用 OnlyOffice 时必填 | 至少 24 位随机字符串 | OnlyOffice 文档编辑鉴权密钥 | 未配置时无法生成 OnlyOffice 编辑配置 |
 | `AI_PROVIDER` | 必填 | `deepseek` | 文本生成供应商；标书写作默认使用 DeepSeek | 填错后会走错误的模型调用协议 |

@@ -58,6 +58,7 @@ FORMAL_VOLUME_HEADING_RE = re.compile(
     r"(?:技术|商务|资格|报价|附件|投标|响应|投标资格|资格审查)"
     r".{0,16}(?:文件|分册|响应|资料|清单)$"
 )
+DOCX_TOC_MAX_LEVEL = int(os.getenv("DOCX_TOC_MAX_LEVEL", "4"))
 
 
 def clean_formal_bid_text(text):
@@ -179,6 +180,72 @@ def _add_internal_hyperlink(paragraph, text: str, anchor: str) -> None:
     paragraph._p.append(hyperlink)
 
 
+def _page_text_width_twips(doc) -> int:
+    section = doc.sections[0]
+    return max(7200, int((section.page_width - section.left_margin - section.right_margin) / 635))
+
+
+def _set_paragraph_right_dot_leader_tab(paragraph, *, position_twips: int) -> None:
+    ppr = paragraph._p.get_or_add_pPr()
+    tabs = ppr.find(qn("w:tabs"))
+    if tabs is None:
+        tabs = OxmlElement("w:tabs")
+        ppr.append(tabs)
+    tab = OxmlElement("w:tab")
+    tab.set(qn("w:val"), "right")
+    tab.set(qn("w:leader"), "dot")
+    tab.set(qn("w:pos"), str(position_twips))
+    tabs.append(tab)
+
+
+def _add_pageref_field(paragraph, bookmark_name: str, *, placeholder: str = "1") -> None:
+    """Add a Word PAGEREF field. Word/LibreOffice refreshes it into the real page number."""
+    begin = paragraph.add_run()
+    fld_begin = OxmlElement("w:fldChar")
+    fld_begin.set(qn("w:fldCharType"), "begin")
+    begin._r.append(fld_begin)
+
+    instr = paragraph.add_run()
+    instr_text = OxmlElement("w:instrText")
+    instr_text.set(qn("xml:space"), "preserve")
+    instr_text.text = f" PAGEREF {bookmark_name} \\h "
+    instr._r.append(instr_text)
+
+    separate = paragraph.add_run()
+    fld_separate = OxmlElement("w:fldChar")
+    fld_separate.set(qn("w:fldCharType"), "separate")
+    separate._r.append(fld_separate)
+
+    result = paragraph.add_run(placeholder)
+    apply_run_font(result, east_asia="宋体", size=12)
+
+    end = paragraph.add_run()
+    fld_end = OxmlElement("w:fldChar")
+    fld_end.set(qn("w:fldCharType"), "end")
+    end._r.append(fld_end)
+
+
+def _toc_entry_text(entry: dict) -> str:
+    return clean_formal_bid_text(entry.get("text") or "").strip()
+
+
+def _add_formal_toc_entry(doc, entry: dict, *, tab_position_twips: int) -> None:
+    level = max(1, min(int(entry.get("level") or 1), DOCX_TOC_MAX_LEVEL))
+    paragraph = doc.add_paragraph()
+    fmt = paragraph.paragraph_format
+    fmt.first_line_indent = Pt(0)
+    fmt.left_indent = Pt((level - 1) * 18)
+    fmt.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+    fmt.line_spacing = Pt(22)
+    fmt.space_after = Pt(2)
+    _set_paragraph_right_dot_leader_tab(paragraph, position_twips=tab_position_twips)
+
+    text_run = paragraph.add_run(_toc_entry_text(entry))
+    apply_run_font(text_run, east_asia="宋体", size=12, bold=(level == 1))
+    paragraph.add_run("\t")
+    _add_pageref_field(paragraph, str(entry.get("anchor") or ""), placeholder="1")
+
+
 def _add_toc_page(doc, project_name: str, heading_entries: list[dict]) -> None:
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -194,19 +261,18 @@ def _add_toc_page(doc, project_name: str, heading_entries: list[dict]) -> None:
     toc_run = toc_title.add_run("目录")
     apply_run_font(toc_run, east_asia="黑体", size=16, bold=True)
 
-    if not heading_entries:
+    formal_entries = [
+        entry for entry in heading_entries
+        if 1 <= int(entry.get("level") or 1) <= DOCX_TOC_MAX_LEVEL and _toc_entry_text(entry)
+    ]
+    if not formal_entries:
         empty = doc.add_paragraph()
         empty.paragraph_format.first_line_indent = Pt(0)
         empty_run = empty.add_run("暂无章节目录，请先生成章节大纲。")
         apply_run_font(empty_run, east_asia="仿宋", size=12)
-    for entry in heading_entries:
-        paragraph = doc.add_paragraph()
-        paragraph.paragraph_format.first_line_indent = Pt(0)
-        paragraph.paragraph_format.left_indent = Pt(max(0, entry["level"] - 1) * 18)
-        paragraph.paragraph_format.line_spacing_rule = WD_LINE_SPACING.EXACTLY
-        paragraph.paragraph_format.line_spacing = Pt(22)
-        paragraph.paragraph_format.space_after = Pt(2)
-        _add_internal_hyperlink(paragraph, entry["text"], entry["anchor"])
+    tab_position_twips = _page_text_width_twips(doc)
+    for entry in formal_entries:
+        _add_formal_toc_entry(doc, entry, tab_position_twips=tab_position_twips)
 
     doc.add_page_break()
 
@@ -587,6 +653,14 @@ def set_document_language(doc):
     theme_lang.set(qn('w:val'), 'zh-CN')
     theme_lang.set(qn('w:eastAsia'), 'zh-CN')
     theme_lang.set(qn('w:bidi'), 'zh-CN')
+
+    # 目录页码、页脚页码和总页数字段依赖 Word/LibreOffice 的版面引擎刷新。
+    # 打开文档时要求办公软件更新域，避免目录页码停留在占位值。
+    update_fields = settings.find(qn('w:updateFields'))
+    if update_fields is None:
+        update_fields = OxmlElement('w:updateFields')
+        settings.append(update_fields)
+    update_fields.set(qn('w:val'), 'true')
 
 def set_document_format(doc, project_name):
     """设置文档格式"""

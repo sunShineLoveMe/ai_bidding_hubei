@@ -37,6 +37,9 @@ def download_bid_docx(project_id):
         section_id = request_payload.get("sectionId")
         with_images = bool(request_payload.get("withImages"))
         volume_type = request_payload.get("volumeType")
+        sections_snapshot = request_payload.get("sectionsSnapshot")
+        if not isinstance(sections_snapshot, list):
+            sections_snapshot = None
         if volume_type not in {"technical", "business", "qualification", "price", "attachment", "other"}:
             volume_type = None
         if section_id:
@@ -56,7 +59,7 @@ def download_bid_docx(project_id):
         app = current_app._get_current_object()
         thread = threading.Thread(
             target=_run_bid_docx_export_task,
-            args=(app, project_id, task["id"], section_id, with_images, volume_type),
+            args=(app, project_id, task["id"], section_id, with_images, volume_type, sections_snapshot),
             daemon=True,
         )
         thread.start()
@@ -75,7 +78,15 @@ def download_bid_docx(project_id):
         return jsonify({'error': f'创建 DOCX 导出任务失败: {str(e)}'}), 500
 
 
-def _run_bid_docx_export_task(app, project_id: str, task_id: str, section_id: str | None, with_images: bool, volume_type: str | None) -> None:
+def _run_bid_docx_export_task(
+    app,
+    project_id: str,
+    task_id: str,
+    section_id: str | None,
+    with_images: bool,
+    volume_type: str | None,
+    sections_snapshot: list[dict] | None = None,
+) -> None:
     with app.app_context():
         try:
             update_bid_export_task(project_id, task_id, {
@@ -89,6 +100,7 @@ def _run_bid_docx_export_task(app, project_id: str, task_id: str, section_id: st
                 section_id,
                 with_images=with_images,
                 volume_type=None if section_id else volume_type,
+                sections_snapshot=sections_snapshot,
             )
             update_bid_export_task(project_id, task_id, {
                 "progress": 55,
@@ -102,6 +114,8 @@ def _run_bid_docx_export_task(app, project_id: str, task_id: str, section_id: st
             export_metadata = {
                 "requested_from": "bid_editor",
                 "with_images": bool(with_images),
+                "used_editor_snapshot": bool(sections_snapshot),
+                "snapshot_section_count": len(sections_snapshot or []),
                 "image_selection": image_selection_report,
                 "image_conversion": image_conversion_report,
             }

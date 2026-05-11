@@ -42,6 +42,11 @@ pgvector 向量检索 + DashScope Rerank 重排 + 关键词兜底，支持图片
 
 → [详细说明](docs/features/cost-tracking.md)
 
+### 7. 正式 DOCX 标书导出
+下载 Word 时优先使用在线工作台当前章节快照，避免数据库旧章节导致目录和正文不一致。导出目录采用正式 Word 目录样式，包含层级缩进、点线前导符、右侧页码域和打开时自动刷新字段设置。
+
+→ [详细说明](docs/features/docx-export.md)
+
 ---
 
 ## 系统架构
@@ -145,6 +150,7 @@ DASHSCOPE_API_KEY=your_dashscope_api_key
 | 功能 | [RAG 知识库](docs/features/rag-knowledge-base.md) | 检索链路、分片策略、种子库 |
 | 功能 | [分册设计](docs/features/volume-design.md) | 分册类型、正文生成策略 |
 | 功能 | [成本统计](docs/features/cost-tracking.md) | Token 用量、多模型兼容 |
+| 功能 | [DOCX 导出](docs/features/docx-export.md) | 正式目录、页码域、章节快照、Word 标题层级 |
 | 部署 | [快速开始](docs/deployment/quickstart.md) | 安装、配置、启动 |
 | 部署 | [安全配置](docs/deployment/security.md) | CORS、认证、生产部署 |
 | 部署 | [Supabase 初始化](docs/deployment/supabase-setup.md) | SQL 脚本、补充表 |
