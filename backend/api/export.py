@@ -20,7 +20,7 @@ from flask import current_app, jsonify, request
 
 from backend.api._shared import bp
 from backend.db.supabase_repo import create_bid_export_task, get_bid_export_task, update_bid_export_task
-from backend.export.md_to_word import convert_md_to_word
+from backend.export.md_to_word import convert_md_to_word, refresh_docx_fields_with_soffice
 from backend.api.routes import build_project_bid_markdown, _output_url_for_path
 
 
@@ -111,6 +111,11 @@ def _run_bid_docx_export_task(
             if not generated_docx_path or not Path(generated_docx_path).exists():
                 raise RuntimeError("DOCX 生成失败，未找到输出文件。")
             generated_docx_path = Path(generated_docx_path)
+            update_bid_export_task(project_id, task_id, {
+                "progress": 75,
+                "message": "正在刷新 Word 目录页码和页脚页码。",
+            })
+            generated_docx_path, field_refresh_report = refresh_docx_fields_with_soffice(generated_docx_path)
             export_metadata = {
                 "requested_from": "bid_editor",
                 "with_images": bool(with_images),
@@ -118,11 +123,12 @@ def _run_bid_docx_export_task(
                 "snapshot_section_count": len(sections_snapshot or []),
                 "image_selection": image_selection_report,
                 "image_conversion": image_conversion_report,
+                "field_refresh": field_refresh_report,
             }
             update_bid_export_task(project_id, task_id, {
                 "status": "completed",
                 "progress": 100,
-                "message": "DOCX 已生成。",
+                "message": "DOCX 已生成，目录页码已刷新。" if field_refresh_report.get("status") == "refreshed" else "DOCX 已生成，目录页码将在 Word 打开时刷新。",
                 "project_name": project_name,
                 "file_name": generated_docx_path.name,
                 "file_path": str(generated_docx_path),

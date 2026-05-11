@@ -2534,12 +2534,14 @@ export function BidEditorPage(): JSX.Element {
                       </div>
                     </Tooltip>
                     <div className="outline-plan-tags">
-                      {task ? (
-                        <div className="outline-task-progress">
-                          <Tag color={batchStatusColor(task.status)}>{batchStatusLabel(task.status)}</Tag>
-                          <Progress percent={task.percent} size="small" showInfo={false} status={task.status === 'failed' ? 'exception' : undefined} />
-                        </div>
-                      ) : null}
+                      <div className="outline-task-progress">
+                        {task ? (
+                          <>
+                            <Tag color={batchStatusColor(task.status)}>{batchStatusLabel(task.status)}</Tag>
+                            <Progress percent={task.percent} size="small" showInfo={false} status={task.status === 'failed' ? 'exception' : undefined} />
+                          </>
+                        ) : null}
+                      </div>
                       <Tag color={plan.importance === 'high' ? 'red' : plan.importance === 'low' ? 'default' : 'blue'}>{chapterImportanceLabel(plan)}</Tag>
                       <Tag color="geekblue">建议 {plan.suggested_pages || '1-2'} 页</Tag>
                       {plan.needs_table ? <Tag color="cyan">需表格</Tag> : null}

@@ -157,6 +157,11 @@ SQLITE_DB_PATH=bidding.db
 BACKUP_DIR=backups/
 WORD_TEMPLATE_PATH=templates/default_bid_template.docx
 
+# DOCX 导出页码刷新，可选但生产建议配置
+DOCX_REFRESH_FIELDS=true
+SOFFICE_BIN=/opt/homebrew/bin/soffice
+DOCX_REFRESH_TIMEOUT_SECONDS=180
+
 # 企业画像，可选；也可在系统设置页面维护
 ENTERPRISE_NAME=某水利工程建设企业
 ENTERPRISE_REGION=华中地区
@@ -175,6 +180,53 @@ BACKEND_URL_FOR_DOCKER=host.docker.internal:3012
 模型、Embedding、超时时间、OnlyOffice 地址、存储目录和企业画像等非敏感配置也可以在「系统设置」页面调整。页面保存后会写入本地 `config/runtime_settings.json`，后端在下一次模型请求时读取该配置；该文件已加入 `.gitignore`，开源时只保留 `config/runtime_settings.example.json`。API Key、Supabase service role 等敏感项仍必须通过 `.env` 配置，不会保存在前端。
 
 DeepSeek 写作模型通过 OpenAI-compatible 协议调用 `https://api.deepseek.com/chat/completions`，默认模型为 `deepseek-v4-flash`。知识库向量化和 Rerank 默认仍使用 DashScope，因此切换写作模型时不要删除 `DASHSCOPE_API_KEY`。DeepSeek/DashScope 文本调用共用基础重试与退避策略：普通文本生成和流式生成默认最多重试 2 次，遇到 `429,500,502,503,504`、连接异常或超时会按指数退避等待后重试；流式接口如果已经向前端输出了部分正文，则不会自动重试，避免重复拼接正文。相关参数可通过 `DASHSCOPE_MAX_RETRIES`、`DASHSCOPE_RETRY_BASE_DELAY_SECONDS`、`DASHSCOPE_RETRY_MAX_DELAY_SECONDS`、`DASHSCOPE_RETRY_STATUS_CODES` 和各类 timeout 配置调整。重试次数、是否最终成功、是否属于可重试错误会写入 AI 用量日志的 `metadata`，便于后续在「用量与成本」中审计单次标书生成的稳定性。
+
+### 3.1 安装 LibreOffice 用于 DOCX 目录页码刷新
+
+系统下载标书时最终仍返回 `.docx`。由于 `python-docx` 无法计算真实页码，后端会在生成 DOCX 后调用 LibreOffice headless 重新保存一次 DOCX，用来刷新目录页码、页脚页码和总页数。
+
+Mac M1/M2：
+
+```bash
+brew install --cask libreoffice
+which soffice
+```
+
+常见路径：
+
+```text
+/opt/homebrew/bin/soffice
+```
+
+Linux 服务器：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y libreoffice
+which soffice
+```
+
+常见路径：
+
+```text
+/usr/bin/soffice
+```
+
+`.env` 推荐配置：
+
+```ini
+DOCX_REFRESH_FIELDS=true
+SOFFICE_BIN=/opt/homebrew/bin/soffice
+DOCX_REFRESH_TIMEOUT_SECONDS=180
+```
+
+验证命令：
+
+```bash
+soffice --version
+```
+
+如果 `SOFFICE_BIN` 未配置，后端会优先从 PATH 查找 `soffice`，再兜底检查 `/Applications/LibreOffice.app/Contents/MacOS/soffice`。如果服务器没有安装 LibreOffice，导出不会失败，但目录页码可能需要用户打开 Word 后手动刷新。
 
 ### 4. 启动后端
 

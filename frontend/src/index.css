@@ -275,6 +275,7 @@ textarea {
   gap: 18px;
   border-bottom: 1px solid #eef2f7;
   padding: 0 22px;
+  overflow: visible;
 }
 
 .outline-panel-title {
@@ -303,6 +304,7 @@ textarea {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: nowrap;
   min-width: 0;
 }
 
@@ -314,6 +316,7 @@ textarea {
 .outline-toolbar-actions .ant-btn {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
 }
 
 .outline-switch input {
@@ -872,7 +875,7 @@ textarea {
 
 .outline-mode-shell .outline-toolbar-actions {
   flex: 0 1 auto;
-  max-width: min(760px, 70%);
+  max-width: none;
 }
 
 .outline-mode-shell .outline-toolbar-actions .ant-space-item {

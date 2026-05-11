@@ -25,7 +25,7 @@ from flask import current_app, jsonify, request
 
 from backend.api._shared import bp
 from backend.db.supabase_repo import get_onlyoffice_document
-from backend.export.md_to_word import convert_md_to_word
+from backend.export.md_to_word import convert_md_to_word, refresh_docx_fields_with_soffice
 from backend.api.routes import (
     _onlyoffice_jwt_secret,
     get_backend_public_base_url,
@@ -63,6 +63,7 @@ def generate_onlyoffice_config(project_id):
             raise RuntimeError("DOCX 生成失败，未找到输出文件。")
 
         generated_docx_path = Path(generated_docx_path)
+        generated_docx_path, _ = refresh_docx_fields_with_soffice(generated_docx_path)
         gen_folder = Path(current_app.config.get('GENERATED_FOLDER', 'outputs'))
         gen_folder.mkdir(parents=True, exist_ok=True)
 

@@ -27,7 +27,7 @@ from backend.api._shared import bp, temp_analysis_store, _temp_store_lock
 from backend.ai.qwen_client import call_dashscope_api, generate_bid_section
 from backend.core.config import build_enterprise_context
 from backend.core.llm_json_utils import strip_llm_json
-from backend.export.md_to_word import convert_md_to_word
+from backend.export.md_to_word import convert_md_to_word, refresh_docx_fields_with_soffice
 from backend.rag.vector_store import query_chroma
 from backend.api.routes import (
     get_db,
@@ -304,6 +304,7 @@ def generate_bid_document():
                 return jsonify({'error': '已生成 Markdown，但 docx 未找到'}), 500
 
             generated_docx_path = Path(generated_docx_path)
+            generated_docx_path, _ = refresh_docx_fields_with_soffice(generated_docx_path)
 
             # 继续到下面的步骤（复制到 GENERATED_FOLDER、构造 editorConfig 等）
         else:
@@ -359,6 +360,7 @@ def generate_bid_document():
                 return jsonify({'error': '生成的 docx 文件不存在'}), 500
 
             generated_docx_path = Path(generated_docx_path)
+            generated_docx_path, _ = refresh_docx_fields_with_soffice(generated_docx_path)
 
         # === 下面开始：把生成的 docx 放到 GENERATED_FOLDER 并构造 OnlyOffice editorConfig（内联实现） ===
         

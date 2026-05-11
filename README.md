@@ -43,7 +43,7 @@ pgvector 向量检索 + DashScope Rerank 重排 + 关键词兜底，支持图片
 → [详细说明](docs/features/cost-tracking.md)
 
 ### 7. 正式 DOCX 标书导出
-下载 Word 时优先使用在线工作台当前章节快照，避免数据库旧章节导致目录和正文不一致。导出目录采用正式 Word 目录样式，包含层级缩进、点线前导符、右侧页码域和打开时自动刷新字段设置。
+下载 Word 时优先使用在线工作台当前章节快照，避免数据库旧章节导致目录和正文不一致。导出目录采用正式 Word 目录样式，包含层级缩进、点线前导符和右侧页码。后端支持在导出最后一步调用 LibreOffice headless 重新保存 DOCX，自动刷新目录页码、页脚页码和总页数，用户下载的仍然是 `.docx` 文件。
 
 → [详细说明](docs/features/docx-export.md)
 
@@ -66,6 +66,7 @@ flowchart LR
 
     API --> LLM[大语言模型]
     API --> Docx[python-docx 生成 DOCX]
+    Docx --> LO[LibreOffice 刷新目录页码]
     FE --> Tiptap[Tiptap AI 章节编辑器]
     FE --> Office[ONLYOFFICE / 终稿编辑，可选]
 
@@ -97,6 +98,7 @@ cd frontend && npm install && npm run build && cd ..
 # 3. 配置环境变量
 cp .env.example .env
 # 编辑 .env，填写 DEEPSEEK_API_KEY、DASHSCOPE_API_KEY、SUPABASE_URL、SUPABASE_SERVICE_ROLE_KEY
+# 如需下载 DOCX 后目录页码直接准确，安装 LibreOffice 并确认 SOFFICE_BIN 路径
 
 # 4. 在 Supabase SQL Editor 执行 sql/ 目录下的脚本（详见 supabase-setup.md）
 # 已执行老库需补充执行：
@@ -136,6 +138,18 @@ DASHSCOPE_API_KEY=your_dashscope_api_key
 系统设置 - 模型配置中会展示每个业务模块当前使用的模型；解读、大纲和语义复核等 Pro 推理阶段默认允许 300 秒服务端超时，前端对应请求允许 360 秒，避免大文件解读时前端先报 `timeout of 120000ms exceeded`。招标文件正文分片数量较多或正文超过约 8 万字时，系统会自动启用“大文件分段解读”：先用 `DEEPSEEK_INTERPRETATION_SEGMENT_MODEL` 对文档分段抽取资格、评分、风险和材料要点，再用 `DEEPSEEK_INTERPRETATION_MODEL` 做最终融合去重；分段大小和最大段数由 `INTERPRETATION_SEGMENT_MAX_CHARS`、`INTERPRETATION_SEGMENT_MAX_GROUPS` 控制。用量与成本中心会按 `provider`、`model`、`stage` 记录历史调用。DeepSeek V4 Flash 成本种子脚本按客户提供的价格口径写入：输入缓存命中 0.02 元 / 百万 tokens、输入缓存未命中 1 元 / 百万 tokens、输出 2 元 / 百万 tokens；DeepSeek V4 Pro 按输入缓存命中 0.025 元 / 百万 tokens、输入缓存未命中 3 元 / 百万 tokens、输出 6 元 / 百万 tokens 写入。当前系统按缓存未命中输入价保守估算，最终仍以 DeepSeek 账单为准。
 
 分册大纲落库采用“同项目串行锁 + 预生成章节 UUID + 批量写入 + Supabase 写入重试”的可靠性策略。规则版大纲、AI 精修大纲和前端重复流式请求都必须通过 `replace_bid_sections_from_outline()` 统一替换 `bid_sections`，避免网络抖动或并发 SSE 连接造成章节目录写入一半、被二次删除或 Word 导出目录错乱。详细机制见 [章节大纲生成](docs/features/outline-generation.md)。
+
+### DOCX 目录页码刷新
+
+`python-docx` 只能写入 Word 字段，不能计算真实页码。系统导出流程已集成 LibreOffice headless：`Markdown -> python-docx DOCX -> soffice DOCX 重新保存 -> 返回 DOCX`。开启后，目录 `PAGEREF`、页脚 `PAGE/NUMPAGES` 会在服务端刷新，避免下载后目录页码全部显示为 `1`。
+
+```env
+DOCX_REFRESH_FIELDS=true
+SOFFICE_BIN=/opt/homebrew/bin/soffice
+DOCX_REFRESH_TIMEOUT_SECONDS=180
+```
+
+Mac M1/M2 使用 Homebrew 安装通常是 `/opt/homebrew/bin/soffice`；Linux 服务器通常是 `/usr/bin/soffice`。如果服务器未安装 LibreOffice 或刷新失败，导出任务不会阻断，系统会保留 `w:updateFields=true` 和 `w:dirty=true`，由用户打开 Word 时刷新字段，同时在导出任务 metadata 中记录 `field_refresh` 报告。
 
 ---
 

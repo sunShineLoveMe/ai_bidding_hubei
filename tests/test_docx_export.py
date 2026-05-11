@@ -7,7 +7,7 @@ from docx import Document
 from flask import Flask
 
 from backend.api.routes import build_project_bid_markdown, _demote_body_markdown_headings, _numbered_export_sections, _strip_duplicate_section_heading
-from backend.export.md_to_word import convert_md_to_word
+from backend.export.md_to_word import convert_md_to_word, refresh_docx_fields_with_soffice
 
 
 class DocxExportRegressionTest(unittest.TestCase):
@@ -231,6 +231,44 @@ class DocxExportRegressionTest(unittest.TestCase):
 
             self.assertTrue(document.settings.element.xpath(".//w:updateFields[@w:val='true']"))
             self.assertTrue(document._element.xpath(".//w:fldChar[@w:dirty='true']"))
+
+    def test_soffice_refresh_replaces_docx_and_reports_success(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source = Path(tmpdir) / "test.docx"
+            source.write_bytes(b"original")
+
+            def fake_run(cmd, capture_output, text, timeout, check):
+                outdir = Path(cmd[cmd.index("--outdir") + 1])
+                (outdir / source.name).write_bytes(b"refreshed")
+
+                class Result:
+                    returncode = 0
+                    stdout = "converted"
+                    stderr = ""
+
+                return Result()
+
+            with (
+                patch.dict("os.environ", {"DOCX_REFRESH_FIELDS": "true", "SOFFICE_BIN": "/usr/bin/soffice-test"}),
+                patch("backend.export.md_to_word.subprocess.run", side_effect=fake_run),
+            ):
+                refreshed_path, report = refresh_docx_fields_with_soffice(source)
+
+            self.assertEqual(source, refreshed_path)
+            self.assertEqual(b"refreshed", source.read_bytes())
+            self.assertEqual("refreshed", report["status"])
+
+    def test_soffice_refresh_can_be_disabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source = Path(tmpdir) / "test.docx"
+            source.write_bytes(b"original")
+
+            with patch.dict("os.environ", {"DOCX_REFRESH_FIELDS": "false"}):
+                refreshed_path, report = refresh_docx_fields_with_soffice(source)
+
+            self.assertEqual(source, refreshed_path)
+            self.assertEqual(b"original", source.read_bytes())
+            self.assertEqual("skipped", report["status"])
 
     def test_formal_docx_cleans_generation_notes_emoji_and_preserves_table(self):
         with tempfile.TemporaryDirectory() as tmpdir:

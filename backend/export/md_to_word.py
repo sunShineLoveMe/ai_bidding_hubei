@@ -766,6 +766,109 @@ def process_table(md_table, doc):
                     for run in paragraph.runs:
                         apply_run_font(run, east_asia='仿宋', size=10.5)
 
+
+def _bool_env(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _soffice_bin() -> str | None:
+    configured = (os.getenv("SOFFICE_BIN") or "").strip()
+    if configured:
+        return configured
+    return shutil.which("soffice") or (
+        "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+        if Path("/Applications/LibreOffice.app/Contents/MacOS/soffice").exists()
+        else None
+    )
+
+
+def refresh_docx_fields_with_soffice(docx_path: str | Path) -> tuple[Path, dict]:
+    """Refresh DOCX fields with LibreOffice headless while keeping the output as DOCX."""
+    source = Path(docx_path)
+    report = {
+        "enabled": _bool_env("DOCX_REFRESH_FIELDS", True),
+        "status": "skipped",
+        "tool": "libreoffice",
+        "soffice_bin": None,
+        "input_path": str(source),
+    }
+    if not report["enabled"]:
+        report["reason"] = "DOCX_REFRESH_FIELDS is disabled"
+        return source, report
+    if not source.exists():
+        report["status"] = "failed"
+        report["reason"] = "DOCX file does not exist"
+        return source, report
+
+    soffice_bin = _soffice_bin()
+    report["soffice_bin"] = soffice_bin
+    if not soffice_bin:
+        report["reason"] = "soffice executable not found"
+        return source, report
+
+    timeout = int(os.getenv("DOCX_REFRESH_TIMEOUT_SECONDS", "180"))
+    with tempfile.TemporaryDirectory(prefix="docx-refresh-") as tmpdir:
+        work_dir = Path(tmpdir)
+        input_dir = work_dir / "input"
+        output_dir = work_dir / "output"
+        profile_dir = work_dir / "profile"
+        input_dir.mkdir()
+        output_dir.mkdir()
+        profile_dir.mkdir()
+        temp_input = input_dir / source.name
+        shutil.copy2(source, temp_input)
+
+        cmd = [
+            soffice_bin,
+            "--headless",
+            "--nologo",
+            "--nofirststartwizard",
+            "-env:UserInstallation=" + profile_dir.as_uri(),
+            "--convert-to",
+            "docx",
+            "--outdir",
+            str(output_dir),
+            str(temp_input),
+        ]
+        try:
+            completed = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+        except Exception as exc:
+            logging.exception("LibreOffice 刷新 DOCX 字段失败: %s", source)
+            report.update({
+                "status": "failed",
+                "reason": str(exc),
+            })
+            return source, report
+
+        report.update({
+            "returncode": completed.returncode,
+            "stdout": (completed.stdout or "")[-2000:],
+            "stderr": (completed.stderr or "")[-2000:],
+        })
+        refreshed = output_dir / source.name
+        if completed.returncode != 0 or not refreshed.exists() or refreshed.stat().st_size == 0:
+            report.update({
+                "status": "failed",
+                "reason": "LibreOffice did not produce refreshed DOCX",
+            })
+            logging.warning("LibreOffice 未生成刷新后的 DOCX: %s report=%s", source, report)
+            return source, report
+
+        temp_refreshed = source.with_name(f".{source.stem}.refreshed-{uuid.uuid4().hex}.docx")
+        shutil.copy2(refreshed, temp_refreshed)
+        os.replace(str(temp_refreshed), str(source))
+        report.update({
+            "status": "refreshed",
+            "output_path": str(source),
+            "size": source.stat().st_size,
+        })
+        logging.info("LibreOffice 已刷新 DOCX 字段: %s", source)
+        return source, report
+
+
 def convert_md_to_word(md_file, return_report: bool = False):
     """将Markdown文件转换为Word文档"""
     # 读取Markdown文件

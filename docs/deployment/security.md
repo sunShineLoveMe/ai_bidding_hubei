@@ -41,6 +41,9 @@
 | `DOCX_TOTAL_ASSET_IMAGE_LIMIT` | 可选 | `36` | 自动从资信库/产品库插入标书的图片资产总上限 | 避免图文并茂导出图片过多导致 Word 过大或排版失控 |
 | `DOCX_TOC_MAX_LEVEL` | 可选 | `4` | Word 正式目录最多展示到第几级标题 | 只影响目录页展示层级，不改变正文标题层级 |
 | `DOCX_ALLOW_REMOTE_IMAGES` | 可选 | `false` | 是否允许 DOCX 导出下载外部 HTTP/HTTPS 图片 | 默认关闭；开启后仍会拦截 localhost、内网、回环和非公网地址 |
+| `DOCX_REFRESH_FIELDS` | 可选 | `true` | 导出 DOCX 后是否调用 LibreOffice headless 刷新目录页码、页脚页码和总页数 | 未安装 LibreOffice 时不会阻断导出，但下载后页码可能需 Word 打开时刷新 |
+| `SOFFICE_BIN` | 推荐填写 | Mac M1/M2 常见 `/opt/homebrew/bin/soffice`，Linux 常见 `/usr/bin/soffice` | LibreOffice 命令行程序路径 | 路径错误会跳过服务端页码刷新，导出任务 metadata 会记录失败原因 |
+| `DOCX_REFRESH_TIMEOUT_SECONDS` | 可选 | `180` | LibreOffice 单次刷新 DOCX 的超时时间 | 过短可能导致大文档刷新失败，过长会拉长导出等待 |
 | `ONLYOFFICE_JWT_SECRET` | 使用 OnlyOffice 时必填 | 至少 24 位随机字符串 | OnlyOffice 文档编辑鉴权密钥 | 未配置时无法生成 OnlyOffice 编辑配置 |
 | `AI_PROVIDER` | 必填 | `deepseek` | 文本生成供应商；标书写作默认使用 DeepSeek | 填错后会走错误的模型调用协议 |
 | `DEEPSEEK_API_KEY` | DeepSeek 写作必填 | 客户 DeepSeek API Key | 标书解读、大纲、正文和知识库问答的文本生成鉴权 | 缺失时写作模型调用直接失败 |
@@ -98,6 +101,9 @@ DASHSCOPE_MAX_RETRIES=2
 DASHSCOPE_RETRY_BASE_DELAY_SECONDS=1.5
 DASHSCOPE_RETRY_MAX_DELAY_SECONDS=12
 DASHSCOPE_RETRY_STATUS_CODES=429,500,502,503,504
+DOCX_REFRESH_FIELDS=true
+SOFFICE_BIN=/opt/homebrew/bin/soffice
+DOCX_REFRESH_TIMEOUT_SECONDS=180
 ```
 
 配置完成后的检查方法：
