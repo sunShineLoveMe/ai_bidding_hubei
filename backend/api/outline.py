@@ -55,7 +55,7 @@ def stream_interpretation_bid_outline(project_id):
         except Exception as e:
             logging.exception("流式生成标书章节大纲失败: %s", project_id)
             yield "event: error\n"
-            yield f"data: {json.dumps({'error': '流式生成标书章节大纲失败，请查看后端日志。'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'error': f'流式生成标书章节大纲失败：{str(e)}'}, ensure_ascii=False)}\n\n"
 
     return Response(
         stream_with_context(event_stream()),

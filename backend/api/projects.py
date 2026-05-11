@@ -183,7 +183,11 @@ def get_latest_interpretation():
     try:
         projects = list_recent_bid_projects(limit=20)
         for project in projects:
-            payload = get_project_interpretation(project["id"])
+            try:
+                payload = get_project_interpretation(project["id"])
+            except Exception:
+                logging.exception("跳过异常历史项目，继续查询最新招标解读: %s", project.get("id"))
+                continue
             if payload.get("analysis"):
                 return jsonify(payload)
         return jsonify({

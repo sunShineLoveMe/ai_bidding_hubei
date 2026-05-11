@@ -40,6 +40,35 @@ def _contains_keyword(item: dict[str, Any], keyword: str, fields: list[str]) -> 
     return any(keyword in _text(item.get(field)) for field in fields)
 
 
+def _dict_items(items: Any) -> list[dict[str, Any]]:
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _normalize_material_checklist(items: Any) -> list[dict[str, str]]:
+    """AI 解读可能返回字符串或 dict，规则大纲必须容忍两种结构。"""
+    if not isinstance(items, list):
+        return []
+    rows: list[dict[str, str]] = []
+    for item in items:
+        if isinstance(item, dict):
+            material = _text(
+                item.get("material")
+                or item.get("name")
+                or item.get("title")
+                or item.get("content")
+                or item.get("requirement")
+            ).strip()
+            category = _text(item.get("category") or item.get("type") or item.get("section")).strip()
+        else:
+            material = _text(item).strip()
+            category = ""
+        if material:
+            rows.append({"material": material, "category": category})
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # 企业知识库上下文抽取
 # ---------------------------------------------------------------------------
@@ -406,10 +435,10 @@ def _build_rule_outline(payload: dict[str, Any]) -> dict[str, Any]:
         },
     ]
 
-    requirements = payload.get("requirements") or []
-    scoring_items = payload.get("scoringItems") or []
-    risks = payload.get("risks") or []
-    materials = ai_report.get("material_checklist") or []
+    requirements = _dict_items(payload.get("requirements") or [])
+    scoring_items = _dict_items(payload.get("scoringItems") or [])
+    risks = _dict_items(payload.get("risks") or [])
+    materials = _normalize_material_checklist(ai_report.get("material_checklist") or [])
 
     def enrich_node(node: dict[str, Any], level: int) -> dict[str, Any]:
         title = node.get("title") or "未命名章节"

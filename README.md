@@ -135,6 +135,8 @@ DASHSCOPE_API_KEY=your_dashscope_api_key
 
 系统设置 - 模型配置中会展示每个业务模块当前使用的模型；解读、大纲和语义复核等 Pro 推理阶段默认允许 300 秒服务端超时，前端对应请求允许 360 秒，避免大文件解读时前端先报 `timeout of 120000ms exceeded`。招标文件正文分片数量较多或正文超过约 8 万字时，系统会自动启用“大文件分段解读”：先用 `DEEPSEEK_INTERPRETATION_SEGMENT_MODEL` 对文档分段抽取资格、评分、风险和材料要点，再用 `DEEPSEEK_INTERPRETATION_MODEL` 做最终融合去重；分段大小和最大段数由 `INTERPRETATION_SEGMENT_MAX_CHARS`、`INTERPRETATION_SEGMENT_MAX_GROUPS` 控制。用量与成本中心会按 `provider`、`model`、`stage` 记录历史调用。DeepSeek V4 Flash 成本种子脚本按客户提供的价格口径写入：输入缓存命中 0.02 元 / 百万 tokens、输入缓存未命中 1 元 / 百万 tokens、输出 2 元 / 百万 tokens；DeepSeek V4 Pro 按输入缓存命中 0.025 元 / 百万 tokens、输入缓存未命中 3 元 / 百万 tokens、输出 6 元 / 百万 tokens 写入。当前系统按缓存未命中输入价保守估算，最终仍以 DeepSeek 账单为准。
 
+分册大纲落库采用“同项目串行锁 + 预生成章节 UUID + 批量写入 + Supabase 写入重试”的可靠性策略。规则版大纲、AI 精修大纲和前端重复流式请求都必须通过 `replace_bid_sections_from_outline()` 统一替换 `bid_sections`，避免网络抖动或并发 SSE 连接造成章节目录写入一半、被二次删除或 Word 导出目录错乱。详细机制见 [章节大纲生成](docs/features/outline-generation.md)。
+
 ---
 
 ## 文档导航

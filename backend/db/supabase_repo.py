@@ -2,6 +2,7 @@ import hashlib
 import logging
 import mimetypes
 import os
+import threading
 import time
 import uuid
 from datetime import date, datetime, timedelta
@@ -11,6 +12,10 @@ from typing import Any
 from backend.core.bid_volumes import ensure_section_volume
 
 from backend.db.supabase_client import get_bucket_name, get_supabase_client, reset_supabase_client, upload_file_to_storage
+
+
+_BID_SECTION_REPLACE_LOCKS: dict[str, threading.RLock] = {}
+_BID_SECTION_REPLACE_LOCKS_GUARD = threading.Lock()
 
 
 def _file_sha256(file_path: str | Path) -> str:
@@ -717,6 +722,16 @@ def _with_supabase_write_retry(operation, *, label: str, attempts: int = 3, base
     raise RuntimeError(f"{label}失败，已重试 {attempts} 次: {last_error}") from last_error
 
 
+def _bid_section_replace_lock(project_id: str) -> threading.RLock:
+    """同一项目的分册大纲替换必须串行，避免并发 SSE/后台精修互相删写。"""
+    with _BID_SECTION_REPLACE_LOCKS_GUARD:
+        lock = _BID_SECTION_REPLACE_LOCKS.get(project_id)
+        if lock is None:
+            lock = threading.RLock()
+            _BID_SECTION_REPLACE_LOCKS[project_id] = lock
+        return lock
+
+
 def _section_parent_exists(client, project_id: str, parent_id: str | None) -> bool:
     if not parent_id:
         return False
@@ -835,31 +850,50 @@ def _outline_flat_sections(outline: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def replace_bid_sections_from_outline(project_id: str, outline: dict[str, Any]) -> list[dict[str, Any]]:
-    client = get_supabase_client()
-    client.table("bid_sections").delete().eq("project_id", project_id).execute()
+    raw_sections = [section for section in _outline_flat_sections(outline) if isinstance(section, dict)]
+    section_ids: list[str] = []
+    first_section_ids_by_order: dict[str, str] = {}
+    for index, section in enumerate(raw_sections):
+        section_order = str(section.get("order") or index + 1)
+        section_id = section.get("id") if _is_valid_uuid(section.get("id")) else str(uuid.uuid4())
+        section_ids.append(section_id)
+        first_section_ids_by_order.setdefault(section_order, section_id)
 
-    inserted_rows: list[dict[str, Any]] = []
-    order_to_id: dict[str, str] = {}
-    for index, section in enumerate(_outline_flat_sections(outline)):
+    payloads: list[dict[str, Any]] = []
+    for index, section in enumerate(raw_sections):
         section_order = str(section.get("order") or index + 1)
         parent_id = section.get("parent_id")
         if not parent_id and "." in section_order:
             parent_order = section_order.rsplit(".", 1)[0]
-            parent_id = order_to_id.get(parent_order)
+            parent_id = first_section_ids_by_order.get(parent_order)
 
         # 强制用 enumerate 序号作为 order_index，确保同一项目内全局唯一递增。
         # 这样即使上层传入的 order_index 出现重复或字符串（如 "1.2"），数据库里
         # 的章节顺序依然稳定，不会出现 Word 导出目录错乱的问题。
         payload = _section_payload(project_id, {**section, "parent_id": parent_id}, index)
+        payload["id"] = section_ids[index]
         payload["order_index"] = index + 1
-        response = client.table("bid_sections").insert(payload).execute()
-        if not response.data:
-            raise RuntimeError("Supabase bid_sections insert returned no data")
-        row = response.data[0]
-        inserted_rows.append(row)
-        order_to_id[section_order] = row["id"]
+        payloads.append(payload)
 
-    return inserted_rows
+    def write_all(client):
+        client.table("bid_sections").delete().eq("project_id", project_id).execute()
+        if not payloads:
+            return []
+
+        inserted_rows: list[dict[str, Any]] = []
+        batch_size = 50
+        for offset in range(0, len(payloads), batch_size):
+            batch = payloads[offset:offset + batch_size]
+            response = client.table("bid_sections").insert(batch).execute()
+            if response.data is None:
+                raise RuntimeError("Supabase bid_sections insert returned no data")
+            inserted_rows.extend(response.data or [])
+        if len(inserted_rows) != len(payloads):
+            raise RuntimeError(f"Supabase bid_sections insert count mismatch: {len(inserted_rows)}/{len(payloads)}")
+        return inserted_rows
+
+    with _bid_section_replace_lock(project_id):
+        return _with_supabase_write_retry(write_all, label=f"替换项目章节大纲 bid_sections({project_id})", attempts=4)
 
 
 def list_bid_sections(project_id: str) -> list[dict[str, Any]]:
@@ -1539,8 +1573,10 @@ def list_project_document_chunks(project_id: str, limit: int = 1000) -> list[dic
 
 
 def list_knowledge_documents() -> list[dict[str, Any]]:
-    client = get_supabase_client()
-    response = client.table("knowledge_documents").select("*").order("created_at", desc=True).execute()
+    response = _with_supabase_write_retry(
+        lambda client: client.table("knowledge_documents").select("*").order("created_at", desc=True).execute(),
+        label="查询 knowledge_documents",
+    )
     return response.data or []
 
 
