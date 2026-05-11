@@ -198,11 +198,18 @@ def _set_paragraph_right_dot_leader_tab(paragraph, *, position_twips: int) -> No
     tabs.append(tab)
 
 
+def _mark_field_dirty(fld_char) -> None:
+    """Force Word/ONLYOFFICE/LibreOffice to recalculate field results on open."""
+    fld_char.set(qn("w:dirty"), "true")
+    fld_char.set(qn("w:fldLock"), "false")
+
+
 def _add_pageref_field(paragraph, bookmark_name: str, *, placeholder: str = "1") -> None:
     """Add a Word PAGEREF field. Word/LibreOffice refreshes it into the real page number."""
     begin = paragraph.add_run()
     fld_begin = OxmlElement("w:fldChar")
     fld_begin.set(qn("w:fldCharType"), "begin")
+    _mark_field_dirty(fld_begin)
     begin._r.append(fld_begin)
 
     instr = paragraph.add_run()
@@ -693,6 +700,7 @@ def set_document_format(doc, project_name):
         run = footer_para.add_run()
         fldChar1 = OxmlElement('w:fldChar')
         fldChar1.set(qn('w:fldCharType'), 'begin')
+        _mark_field_dirty(fldChar1)
         run._r.append(fldChar1)
         instrText = OxmlElement('w:instrText')
         instrText.text = 'PAGE'
@@ -705,6 +713,7 @@ def set_document_format(doc, project_name):
         run = footer_para.add_run()
         fldChar1 = OxmlElement('w:fldChar')
         fldChar1.set(qn('w:fldCharType'), 'begin')
+        _mark_field_dirty(fldChar1)
         run._r.append(fldChar1)
         instrText = OxmlElement('w:instrText')
         instrText.text = 'NUMPAGES'

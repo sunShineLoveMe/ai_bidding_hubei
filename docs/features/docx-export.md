@@ -31,6 +31,7 @@ DOCX 导出面向正式投标文件，优先保证：
 - 目录每一行由“章节标题 + 右对齐制表符 + `PAGEREF` 页码域”组成。
 - 目录段落设置 `w:leader="dot"`，在 Word 中呈现为点线前导符。
 - 文档设置 `w:updateFields=true`，提示 Word/LibreOffice 在打开时刷新目录页码、页脚页码和总页数。
+- 目录 `PAGEREF`、页脚 `PAGE` 和 `NUMPAGES` 字段均标记 `w:dirty=true`，强制办公软件打开文档后重新计算字段结果，避免沿用导出阶段的占位页码 `1`。
 
 注意：`python-docx` 本身不能计算真实页码，真实页码必须由 Word、LibreOffice 或 ONLYOFFICE 这类版面引擎刷新。若生产环境要求“下载后打开即为准确页码”，建议在导出服务所在服务器安装 LibreOffice headless，并在导出后增加一次字段刷新/渲染校验步骤。
 

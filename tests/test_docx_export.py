@@ -216,6 +216,7 @@ class DocxExportRegressionTest(unittest.TestCase):
             self.assertGreaterEqual(len(bookmarks), 3)
             self.assertTrue(any("PAGEREF bid_heading_1" in code for code in field_codes))
             self.assertIn('w:leader="dot"', document_xml)
+            self.assertIn('w:dirty="true"', document_xml)
 
     def test_docx_requests_field_update_on_open_for_toc_page_numbers(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -229,6 +230,7 @@ class DocxExportRegressionTest(unittest.TestCase):
             document = Document(str(output_path))
 
             self.assertTrue(document.settings.element.xpath(".//w:updateFields[@w:val='true']"))
+            self.assertTrue(document._element.xpath(".//w:fldChar[@w:dirty='true']"))
 
     def test_formal_docx_cleans_generation_notes_emoji_and_preserves_table(self):
         with tempfile.TemporaryDirectory() as tmpdir:
