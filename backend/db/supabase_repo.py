@@ -593,6 +593,8 @@ def delete_bid_project(project_id: str) -> None:
     client = get_supabase_client()
     for table in [
         "ai_usage_logs",
+        "bid_export_tasks",
+        "bid_generation_tasks",
         "bid_sections",
         "bid_chapter_suggestions",
         "bid_scoring_items",
